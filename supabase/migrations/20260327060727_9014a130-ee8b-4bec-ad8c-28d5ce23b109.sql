@@ -1,0 +1,1 @@
+DELETE FROM auth.users WHERE email = 'shruti.kratik123@icloud.com';
