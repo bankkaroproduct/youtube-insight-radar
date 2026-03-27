@@ -1,27 +1,46 @@
 
 
-# Remove CRM Section & Fix Sidebar Visibility
+# Build Out Keywords, Videos, and Channels Pages
 
-## What's happening
+## Database Tables (3 new tables via migrations)
 
-1. **CRM section**: The sidebar has a "CRM" group containing Tasks and Triggers. I'll remove this entire group and its routes.
-2. **Keywords/Videos not visible**: Based on the session replay, they ARE rendering and clickable. The likely issue is the sidebar being in collapsed mode (showing only icons without labels). However, I'll verify the nav items render correctly regardless of sidebar state.
+### `keywords` table
+- `id` (uuid, PK), `user_id` (uuid, NOT NULL), `keyword` (text), `search_volume` (integer), `competition` (text: low/medium/high), `status` (text: active/paused), `created_at`, `updated_at`
+- RLS: users see own keywords, admins see all
 
-## Changes
+### `tracked_videos` table
+- `id` (uuid, PK), `user_id` (uuid, NOT NULL), `video_url` (text), `title` (text), `channel_name` (text), `views` (bigint), `likes` (bigint), `published_at` (timestamptz), `status` (text: tracking/archived), `created_at`
+- RLS: users see own videos, admins see all
 
-### 1. Remove CRM from sidebar (`src/components/AppSidebar.tsx`)
-- Remove `crmItems` array (Tasks, Triggers)
-- Remove `ListChecks`, `Zap` icon imports
-- Remove `{renderGroup("CRM", crmItems)}` from the sidebar content
+### `tracked_channels` table
+- `id` (uuid, PK), `user_id` (uuid, NOT NULL), `channel_url` (text), `channel_name` (text), `subscriber_count` (bigint), `video_count` (integer), `category` (text), `business_fit_score` (integer, 0-100), `status` (text: tracking/archived), `created_at`
+- RLS: users see own channels, admins see all
 
-### 2. Remove CRM routes (`src/App.tsx`)
-- Remove Tasks and Triggers route entries
-- Remove Tasks and Triggers page imports
+## Page UIs
 
-### 3. Ensure Keywords/Videos visibility
-- The sidebar items are present in `discoveryItems` and have no `adminOnly` filter, so they should always show. I'll inspect if there's a CSS or collapsed-state issue hiding them and fix if needed.
+### Keywords Page (`src/pages/Keywords.tsx`)
+- Header with "Add Keyword" button opening a dialog
+- Table listing keywords with columns: Keyword, Search Volume, Competition (badge), Status (badge), Date Added, Actions (edit/delete)
+- Search/filter bar
+- CRUD operations via Supabase
 
-## Files Modified
-- `src/components/AppSidebar.tsx` — remove CRM group
-- `src/App.tsx` — remove CRM routes and imports
+### Videos Page (`src/pages/Videos.tsx`)
+- Header with "Add Video" button (paste YouTube URL)
+- Card/table view showing: thumbnail placeholder, title, channel, views, likes, published date, status
+- Search/filter bar
+- CRUD operations
+
+### Channels Page (`src/pages/Channels.tsx`)
+- Header with "Add Channel" button (paste channel URL)
+- Table/card view: channel name, subscribers, video count, category, business fit score (progress bar), status
+- Search/filter bar
+- CRUD operations
+
+## Files Modified/Created
+- **Migration SQL** — create 3 tables with RLS policies
+- `src/pages/Keywords.tsx` — full CRUD UI
+- `src/pages/Videos.tsx` — full CRUD UI
+- `src/pages/Channels.tsx` — full CRUD UI
+
+All pages will use consistent design with the existing dashboard styling (Poppins font, shadcn/ui components, colored badges, hover effects).
 
