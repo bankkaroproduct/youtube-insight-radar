@@ -11,8 +11,6 @@ import Keywords from "@/pages/Keywords";
 import Videos from "@/pages/Videos";
 import Channels from "@/pages/Channels";
 import Links from "@/pages/Links";
-import Tasks from "@/pages/Tasks";
-import Triggers from "@/pages/Triggers";
 import UserManagement from "@/pages/settings/UserManagement";
 import ApiKeys from "@/pages/settings/ApiKeys";
 import IpWhitelist from "@/pages/settings/IpWhitelist";
