@@ -104,7 +104,7 @@ export function AppSidebar() {
             <Youtube className="h-5 w-5 text-primary-foreground" />
           </div>
           {!collapsed && (
-            <span className="font-display font-bold text-lg text-sidebar-foreground">
+            <span className="font-bold text-lg text-sidebar-foreground tracking-tight">
               YT Intel
             </span>
           )}
