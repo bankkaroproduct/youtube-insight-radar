@@ -67,9 +67,8 @@ export function AppSidebar() {
   const renderGroup = (
     label: string,
     items: typeof discoveryItems,
-    defaultOpen = true
   ) => (
-    <SidebarGroup defaultOpen={defaultOpen}>
+    <SidebarGroup>
       <SidebarGroupLabel className="text-sidebar-foreground/50 uppercase text-xs tracking-wider">
         {label}
       </SidebarGroupLabel>
