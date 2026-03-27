@@ -8,6 +8,7 @@ import { AppLayout } from "@/components/AppLayout";
 import Auth from "@/pages/Auth";
 import Index from "@/pages/Index";
 import Keywords from "@/pages/Keywords";
+import KeywordTable from "@/pages/KeywordTable";
 import Videos from "@/pages/Videos";
 import Channels from "@/pages/Channels";
 import Links from "@/pages/Links";
