@@ -108,7 +108,7 @@ export function AppSidebar() {
       <SidebarContent>
         {renderGroup("Discovery", discoveryItems)}
         {renderGroup("Intelligence", intelligenceItems)}
-        {renderGroup("CRM", crmItems)}
+        
         {renderGroup("Settings", settingsItems)}
       </SidebarContent>
 
