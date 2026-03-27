@@ -7,8 +7,6 @@ import {
   BarChart3,
   Settings,
   LogOut,
-  ListChecks,
-  Zap,
   KeyRound,
   Shield,
   UserCog,
