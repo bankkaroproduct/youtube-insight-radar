@@ -41,10 +41,6 @@ const intelligenceItems = [
   { title: "Links", url: "/links", icon: Link },
 ];
 
-const crmItems = [
-  { title: "Tasks", url: "/tasks", icon: ListChecks },
-  { title: "Triggers", url: "/triggers", icon: Zap },
-];
 
 const settingsItems = [
   { title: "User Management", url: "/settings/users", icon: UserCog, adminOnly: true },
