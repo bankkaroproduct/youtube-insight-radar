@@ -1,27 +1,126 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Search } from "lucide-react";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { RefreshCw, Download } from "lucide-react";
+import { useKeywords } from "@/hooks/useKeywords";
+import { useFetchJobs } from "@/hooks/useFetchJobs";
+import { useAuth } from "@/hooks/useAuth";
+import { AddKeywordDialog } from "@/components/keywords/AddKeywordDialog";
+import { ExcelUploadCard } from "@/components/keywords/ExcelUploadCard";
+import { KeywordFilters } from "@/components/keywords/KeywordFilters";
+import { FetchSettingsCard, type FetchSettings } from "@/components/keywords/FetchSettingsCard";
+import { BulkActionBar } from "@/components/keywords/BulkActionBar";
+import { KeywordsTable } from "@/components/keywords/KeywordsTable";
+import { FetchQueueCard } from "@/components/keywords/FetchQueueCard";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import { format } from "date-fns";
+import * as XLSX from "xlsx";
 
 export default function Keywords() {
+  const { isAdmin } = useAuth();
+  const {
+    keywords, categories, filters, setFilters, clearFilters,
+    isLoading, addKeyword, addKeywordsBulk, deleteKeyword,
+    refresh, userProfiles, sourceFiles,
+  } = useKeywords();
+  const { jobs, killAll, clearFinished } = useFetchJobs();
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [fetchSettings, setFetchSettings] = useState<FetchSettings>({ orderBy: "relevance", publishedAfter: undefined });
+  const [fetchLoading, setFetchLoading] = useState(false);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (keywords.every((k) => selectedIds.has(k.id))) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(keywords.map((k) => k.id)));
+    }
+  };
+
+  const queueFetch = async (keywordIds: string[]) => {
+    const selected = keywords.filter((k) => keywordIds.includes(k.id));
+    if (selected.length === 0) return;
+    setFetchLoading(true);
+    const jobPayload = selected.map((k) => ({
+      keyword: k.keyword,
+      keyword_id: k.id,
+      category: k.category,
+      businessAim: k.business_aim,
+      orderBy: fetchSettings.orderBy,
+      publishedAfter: fetchSettings.publishedAfter ? format(fetchSettings.publishedAfter, "yyyy-MM-dd") : undefined,
+    }));
+    const { error } = await supabase.functions.invoke("queue-fetch-jobs", { body: { jobs: jobPayload } });
+    if (error) toast.error("Failed to queue fetch jobs");
+    else {
+      toast.success(`Queued ${selected.length} fetch job(s)`);
+      setSelectedIds(new Set());
+    }
+    setFetchLoading(false);
+  };
+
+  const exportExcel = () => {
+    const data = keywords.map((k) => ({
+      Keyword: k.keyword, Category: k.category, "Business Aim": k.business_aim,
+      Status: k.status, Priority: k.priority || "", Source: k.source,
+      "Run Date": k.run_date,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Keywords");
+    XLSX.writeFile(wb, `keywords_export_${format(new Date(), "yyyyMMdd")}.xlsx`);
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-display font-bold">Keywords</h1>
-          <p className="text-muted-foreground mt-1">Manage and track your keyword portfolio.</p>
+          <h1 className="text-3xl font-bold">Keywords</h1>
+          <p className="text-muted-foreground mt-1">Manage search keywords and trigger video discovery.</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={refresh}><RefreshCw className="mr-2 h-4 w-4" /> Refresh</Button>
+          <Button variant="outline" size="sm" onClick={exportExcel}><Download className="mr-2 h-4 w-4" /> Export</Button>
+          {isAdmin && <AddKeywordDialog categories={categories} onAdd={addKeyword} />}
         </div>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle className="font-display flex items-center gap-2">
-            <Search className="h-5 w-5" /> Keyword Management
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-64 flex items-center justify-center text-muted-foreground">
-            Keyword management coming in Phase 3.
-          </div>
-        </CardContent>
-      </Card>
+
+      {/* Fetch Queue */}
+      <FetchQueueCard jobs={jobs} onKillAll={killAll} onClearFinished={clearFinished} />
+
+      {/* Excel Upload */}
+      {isAdmin && <ExcelUploadCard onUpload={addKeywordsBulk} />}
+
+      {/* Filters + Fetch Settings side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <KeywordFilters filters={filters} onChange={setFilters} onClear={clearFilters} categories={categories} sourceFiles={sourceFiles} userProfiles={userProfiles} />
+        </div>
+        <FetchSettingsCard settings={fetchSettings} onChange={setFetchSettings} />
+      </div>
+
+      {/* Bulk Actions */}
+      <BulkActionBar selectedCount={selectedIds.size} settings={fetchSettings} onFetch={() => queueFetch([...selectedIds])} loading={fetchLoading} />
+
+      {/* Table */}
+      <KeywordsTable
+        keywords={keywords}
+        selectedIds={selectedIds}
+        onToggleSelect={toggleSelect}
+        onSelectAll={selectAll}
+        onFetchSingle={(k) => queueFetch([k.id])}
+        onDelete={deleteKeyword}
+        jobs={jobs}
+        isAdmin={isAdmin}
+      />
     </div>
   );
 }
