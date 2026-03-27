@@ -1,17 +1,27 @@
 
 
-# Enable Auto-Confirm for Email Signups
+# Remove CRM Section & Fix Sidebar Visibility
 
-The sign-in is failing because email confirmation is required. Since this is the admin account, I'll enable auto-confirm so users can sign in immediately without needing to verify their email.
+## What's happening
 
-## Steps
+1. **CRM section**: The sidebar has a "CRM" group containing Tasks and Triggers. I'll remove this entire group and its routes.
+2. **Keywords/Videos not visible**: Based on the session replay, they ARE rendering and clickable. The likely issue is the sidebar being in collapsed mode (showing only icons without labels). However, I'll verify the nav items render correctly regardless of sidebar state.
 
-1. **Enable auto-confirm** using the `configure_auth` tool to skip email verification for signups
-2. **Delete the existing unconfirmed account** for `shruti.kratik123@icloud.com` (since it's stuck in unconfirmed state)
-3. User can then **re-register** and sign in immediately
+## Changes
 
-## Technical Details
+### 1. Remove CRM from sidebar (`src/components/AppSidebar.tsx`)
+- Remove `crmItems` array (Tasks, Triggers)
+- Remove `ListChecks`, `Zap` icon imports
+- Remove `{renderGroup("CRM", crmItems)}` from the sidebar content
 
-- Use `cloud--configure_auth` to set `enable_signup: true` and `double_confirm_email_changes: false` with auto-confirm enabled
-- Run a migration to delete the existing unconfirmed user record so a fresh signup works cleanly
+### 2. Remove CRM routes (`src/App.tsx`)
+- Remove Tasks and Triggers route entries
+- Remove Tasks and Triggers page imports
+
+### 3. Ensure Keywords/Videos visibility
+- The sidebar items are present in `discoveryItems` and have no `adminOnly` filter, so they should always show. I'll inspect if there's a CSS or collapsed-state issue hiding them and fix if needed.
+
+## Files Modified
+- `src/components/AppSidebar.tsx` — remove CRM group
+- `src/App.tsx` — remove CRM routes and imports
 
