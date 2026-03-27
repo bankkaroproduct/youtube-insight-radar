@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button";
 const discoveryItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Keywords", url: "/keywords", icon: Search },
+  { title: "Keyword Table", url: "/keyword-table", icon: BarChart3 },
   { title: "Videos", url: "/videos", icon: Video },
 ];
 

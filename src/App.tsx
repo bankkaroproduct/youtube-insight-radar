@@ -33,6 +33,7 @@ function AppRoutes() {
       <Route path="/auth" element={<Auth />} />
       <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
       <Route path="/keywords" element={<ProtectedRoute><Keywords /></ProtectedRoute>} />
+      <Route path="/keyword-table" element={<ProtectedRoute><KeywordTable /></ProtectedRoute>} />
       <Route path="/videos" element={<ProtectedRoute><Videos /></ProtectedRoute>} />
       <Route path="/channels" element={<ProtectedRoute><Channels /></ProtectedRoute>} />
       <Route path="/links" element={<ProtectedRoute><Links /></ProtectedRoute>} />
