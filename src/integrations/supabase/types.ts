@@ -98,6 +98,117 @@ export type Database = {
         }
         Relationships: []
       }
+      keywords: {
+        Row: {
+          competition: string | null
+          created_at: string
+          id: string
+          keyword: string
+          search_volume: number | null
+          status: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          competition?: string | null
+          created_at?: string
+          id?: string
+          keyword: string
+          search_volume?: number | null
+          status?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          competition?: string | null
+          created_at?: string
+          id?: string
+          keyword?: string
+          search_volume?: number | null
+          status?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      tracked_channels: {
+        Row: {
+          business_fit_score: number | null
+          category: string | null
+          channel_name: string
+          channel_url: string
+          created_at: string
+          id: string
+          status: string | null
+          subscriber_count: number | null
+          user_id: string
+          video_count: number | null
+        }
+        Insert: {
+          business_fit_score?: number | null
+          category?: string | null
+          channel_name: string
+          channel_url: string
+          created_at?: string
+          id?: string
+          status?: string | null
+          subscriber_count?: number | null
+          user_id: string
+          video_count?: number | null
+        }
+        Update: {
+          business_fit_score?: number | null
+          category?: string | null
+          channel_name?: string
+          channel_url?: string
+          created_at?: string
+          id?: string
+          status?: string | null
+          subscriber_count?: number | null
+          user_id?: string
+          video_count?: number | null
+        }
+        Relationships: []
+      }
+      tracked_videos: {
+        Row: {
+          channel_name: string | null
+          created_at: string
+          id: string
+          likes: number | null
+          published_at: string | null
+          status: string | null
+          title: string | null
+          user_id: string
+          video_url: string
+          views: number | null
+        }
+        Insert: {
+          channel_name?: string | null
+          created_at?: string
+          id?: string
+          likes?: number | null
+          published_at?: string | null
+          status?: string | null
+          title?: string | null
+          user_id: string
+          video_url: string
+          views?: number | null
+        }
+        Update: {
+          channel_name?: string | null
+          created_at?: string
+          id?: string
+          likes?: number | null
+          published_at?: string | null
+          status?: string | null
+          title?: string | null
+          user_id?: string
+          video_url?: string
+          views?: number | null
+        }
+        Relationships: []
+      }
       user_profiles: {
         Row: {
           avatar_url: string | null
