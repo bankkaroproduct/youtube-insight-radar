@@ -8,6 +8,7 @@ import { AppLayout } from "@/components/AppLayout";
 import Auth from "@/pages/Auth";
 import Index from "@/pages/Index";
 import Keywords from "@/pages/Keywords";
+import KeywordTable from "@/pages/KeywordTable";
 import Videos from "@/pages/Videos";
 import Channels from "@/pages/Channels";
 import Links from "@/pages/Links";
@@ -32,6 +33,7 @@ function AppRoutes() {
       <Route path="/auth" element={<Auth />} />
       <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
       <Route path="/keywords" element={<ProtectedRoute><Keywords /></ProtectedRoute>} />
+      <Route path="/keyword-table" element={<ProtectedRoute><KeywordTable /></ProtectedRoute>} />
       <Route path="/videos" element={<ProtectedRoute><Videos /></ProtectedRoute>} />
       <Route path="/channels" element={<ProtectedRoute><Channels /></ProtectedRoute>} />
       <Route path="/links" element={<ProtectedRoute><Links /></ProtectedRoute>} />
