@@ -7,8 +7,6 @@ import {
   BarChart3,
   Settings,
   LogOut,
-  ListChecks,
-  Zap,
   KeyRound,
   Shield,
   UserCog,
@@ -43,10 +41,6 @@ const intelligenceItems = [
   { title: "Links", url: "/links", icon: Link },
 ];
 
-const crmItems = [
-  { title: "Tasks", url: "/tasks", icon: ListChecks },
-  { title: "Triggers", url: "/triggers", icon: Zap },
-];
 
 const settingsItems = [
   { title: "User Management", url: "/settings/users", icon: UserCog, adminOnly: true },
@@ -114,7 +108,7 @@ export function AppSidebar() {
       <SidebarContent>
         {renderGroup("Discovery", discoveryItems)}
         {renderGroup("Intelligence", intelligenceItems)}
-        {renderGroup("CRM", crmItems)}
+        
         {renderGroup("Settings", settingsItems)}
       </SidebarContent>
 

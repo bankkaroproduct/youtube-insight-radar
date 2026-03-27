@@ -11,8 +11,6 @@ import Keywords from "@/pages/Keywords";
 import Videos from "@/pages/Videos";
 import Channels from "@/pages/Channels";
 import Links from "@/pages/Links";
-import Tasks from "@/pages/Tasks";
-import Triggers from "@/pages/Triggers";
 import UserManagement from "@/pages/settings/UserManagement";
 import ApiKeys from "@/pages/settings/ApiKeys";
 import IpWhitelist from "@/pages/settings/IpWhitelist";
@@ -37,8 +35,6 @@ function AppRoutes() {
       <Route path="/videos" element={<ProtectedRoute><Videos /></ProtectedRoute>} />
       <Route path="/channels" element={<ProtectedRoute><Channels /></ProtectedRoute>} />
       <Route path="/links" element={<ProtectedRoute><Links /></ProtectedRoute>} />
-      <Route path="/tasks" element={<ProtectedRoute><Tasks /></ProtectedRoute>} />
-      <Route path="/triggers" element={<ProtectedRoute><Triggers /></ProtectedRoute>} />
       <Route path="/settings/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
       <Route path="/settings/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
       <Route path="/settings/ip-whitelist" element={<ProtectedRoute><IpWhitelist /></ProtectedRoute>} />
