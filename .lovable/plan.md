@@ -1,25 +1,92 @@
 
 
-# Fix: Add Keyword Button and Excel Upload Not Visible
+# API Key Management for YouTube Data API
 
-## Problem
+## Overview
 
-The "Add Keyword" button and the Excel Upload card are **hidden behind an admin check**. In `Keywords.tsx`:
-- Line 92: `{isAdmin && <AddKeywordDialog ... />}` 
-- Line 100: `{isAdmin && <ExcelUploadCard ... />}`
+Build a full API key management system to store, rotate, and monitor 170 YouTube Data API keys. Each key gets quota tracking (YouTube allows 10,000 units/day per key) and a health-check test button.
 
-Your account does not have the `admin` or `super_admin` role in the `user_roles` table, so `isAdmin` is `false` and these components are not rendered.
+## Database
 
-## Solution Options
+### New table: `youtube_api_keys`
 
-**Option A (recommended):** Assign your user the `admin` role in the database so admin-gated features become visible.
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid PK | auto |
+| api_key | text, NOT NULL | the YouTube API key (encrypted at rest by DB) |
+| label | text | optional friendly name, e.g. "Key #42" |
+| is_active | boolean | default true; set false when exhausted/revoked |
+| daily_quota_limit | integer | default 10000 |
+| quota_used_today | integer | default 0 |
+| last_tested_at | timestamptz | when last health check ran |
+| last_test_status | text | 'valid', 'invalid', 'quota_exceeded' |
+| last_used_at | timestamptz | when last used for a fetch job |
+| created_at | timestamptz | auto |
 
-**Option B:** Remove the `isAdmin` guard so all authenticated users can add keywords and upload Excel files.
+- RLS: admin-only for all operations (read/insert/update/delete)
+- Index on `is_active` for quick key selection during fetch jobs
 
-## Plan
+### Migration also adds:
+- A daily cron-reset mechanism (or an RPC `reset_daily_quotas` that sets `quota_used_today = 0` for all keys)
 
-1. **Check your user ID** in the database and insert an `admin` role into `user_roles` for your account.
-2. **Keep the admin guard** on destructive actions (delete) but **remove the admin guard** from Add Keyword and Excel Upload so all users can contribute keywords — or keep them admin-only if that's your intent.
+## Edge Functions
 
-I'll go with **Option A** — assign your account the admin role, so all admin features work. If you also want to remove the admin restriction from these buttons for all users, let me know.
+### `test-api-key` (new)
+- Accepts `{ key_id }` or `{ key_ids: [] }` for bulk testing
+- For each key: calls YouTube Data API `search.list` with `maxResults=1` (costs 100 quota units) to verify the key works
+- Updates `last_tested_at`, `last_test_status` in `youtube_api_keys`
+- Returns results per key: valid / invalid / quota_exceeded
+
+### Update `process-fetch-queue`
+- Instead of a hardcoded API key, query `youtube_api_keys` for the next available active key with remaining quota
+- After each API call, increment `quota_used_today` and update `last_used_at`
+- If a key returns quota exceeded, mark it and rotate to the next key
+
+## UI: `src/pages/settings/ApiKeys.tsx`
+
+### Summary Cards (top row)
+- **Total Keys**: count of all keys
+- **Active Keys**: count where `is_active = true`
+- **Exhausted Today**: count where `quota_used_today >= daily_quota_limit`
+- **Total Quota Remaining**: sum of `(daily_quota_limit - quota_used_today)` across active keys
+
+### Actions Bar
+- **Add Key(s)** button: dialog with a textarea to paste one key per line (supports bulk paste of 170 keys)
+- **Test All Keys** button: triggers `test-api-key` for all keys, shows progress
+- **Export** button: download keys + status as Excel
+
+### Keys Table
+| Column | Details |
+|--------|---------|
+| Label | editable inline |
+| API Key | masked (`AIza...xxxx`), copy button |
+| Status | badge: Active (green) / Inactive (gray) / Invalid (red) |
+| Quota Used | progress bar showing `quota_used_today / daily_quota_limit` |
+| Last Tested | relative time + status badge (valid/invalid/exceeded) |
+| Last Used | relative time |
+| Actions | Test (single key), Toggle Active, Delete |
+
+- Sortable by quota used, status, last tested
+- Bulk select + bulk test / bulk delete / bulk toggle
+
+### Hook: `src/hooks/useApiKeys.ts`
+- CRUD operations on `youtube_api_keys`
+- `testKeys(ids)` — invokes `test-api-key` edge function
+- Real-time subscription for quota updates
+
+## Files Created/Modified
+
+1. **Migration SQL** — create `youtube_api_keys` table + RLS policies
+2. **`supabase/functions/test-api-key/index.ts`** — new edge function
+3. **`supabase/functions/process-fetch-queue/index.ts`** — update to use key rotation
+4. **`src/pages/settings/ApiKeys.tsx`** — full rewrite with management UI
+5. **`src/hooks/useApiKeys.ts`** — new hook for API key data + operations
+6. **`src/components/api-keys/AddKeysDialog.tsx`** — bulk key entry dialog
+7. **`src/components/api-keys/ApiKeyStatsCards.tsx`** — summary cards
+8. **`src/components/api-keys/ApiKeysTable.tsx`** — table with quota bars
+
+## Security
+- API keys are never exposed to non-admin users (RLS admin-only)
+- Keys are masked in the UI (only first 4 + last 4 chars shown)
+- Test function validates admin role before proceeding
 
