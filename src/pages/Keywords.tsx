@@ -122,6 +122,7 @@ export default function Keywords() {
         onDelete={deleteKeyword}
         jobs={jobs}
         isAdmin={isAdmin}
+        keywordStats={keywordStats}
       />
     </div>
   );
