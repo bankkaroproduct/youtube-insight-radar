@@ -60,6 +60,20 @@ serve(async (req) => {
     const { error: insertError } = await supabase.from("fetch_jobs").insert(inserts);
     if (insertError) throw insertError;
 
+    // Trigger processing of queued jobs
+    try {
+      await fetch(`${supabaseUrl}/functions/v1/process-fetch-queue`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${serviceKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+    } catch (_) {
+      // Non-critical: jobs will be picked up on next invocation
+    }
+
     return new Response(JSON.stringify({ success: true, queued: inserts.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

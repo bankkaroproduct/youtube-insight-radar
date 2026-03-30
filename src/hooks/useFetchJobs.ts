@@ -19,7 +19,6 @@ export interface FetchJob {
 
 export function useFetchJobs() {
   const [jobs, setJobs] = useState<FetchJob[]>([]);
-  const [clearedIds, setClearedIds] = useState<Set<string>>(new Set());
   const shownToasts = useRef<Set<string>>(new Set());
 
   const fetchJobs = useCallback(async () => {
@@ -63,11 +62,15 @@ export function useFetchJobs() {
     return () => { supabase.removeChannel(channel); };
   }, [fetchJobs]);
 
-  const visibleJobs = jobs.filter((j) => !clearedIds.has(j.id));
-
-  const clearFinished = () => {
+  const clearFinished = async () => {
     const finishedIds = jobs.filter((j) => j.status === "completed" || j.status === "failed").map((j) => j.id);
-    setClearedIds((prev) => new Set([...prev, ...finishedIds]));
+    if (finishedIds.length === 0) return;
+    const { error } = await supabase.from("fetch_jobs").delete().in("id", finishedIds);
+    if (error) {
+      toast.error("Failed to clear finished jobs");
+    } else {
+      setJobs((prev) => prev.filter((j) => !finishedIds.includes(j.id)));
+    }
   };
 
   const killAll = async () => {
@@ -81,5 +84,5 @@ export function useFetchJobs() {
     }
   };
 
-  return { jobs: visibleJobs, fetchJobs, clearFinished, killAll };
+  return { jobs, fetchJobs, clearFinished, killAll };
 }
