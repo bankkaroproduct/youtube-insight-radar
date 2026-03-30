@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Download, Hash, CheckCircle2, Clock, Video, Link as LinkIcon } from "lucide-react";
 import { useKeywords } from "@/hooks/useKeywords";
@@ -11,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { useNavigate } from "react-router-dom";
+import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 
 const priorityColors: Record<string, string> = {
   P1: "bg-destructive/15 text-destructive border-destructive/30",
@@ -31,10 +33,10 @@ export default function KeywordTable() {
   const { allKeywords, isLoading } = useKeywords();
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
-  const [tableFilters, setTableFilters] = useState({ keyword: "", category: "", source: "", priority: "", status: "" });
+  const [tableFilters, setTableFilters] = useState({ keyword: "", category: "", source: "", priority: "", status: "", businessAim: "" });
   const [keywordStats, setKeywordStats] = useState<Map<string, { video_count: number; link_count: number }>>(new Map());
+  const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
-  // Fetch real stats from the DB function
   useEffect(() => {
     async function fetchStats() {
       const { data, error } = await supabase.rpc("get_keyword_stats");
@@ -53,12 +55,30 @@ export default function KeywordTable() {
     return allKeywords.filter((k) => {
       if (tableFilters.keyword && !k.keyword.toLowerCase().includes(tableFilters.keyword.toLowerCase())) return false;
       if (tableFilters.category && !k.category.toLowerCase().includes(tableFilters.category.toLowerCase())) return false;
+      if (tableFilters.businessAim && !k.business_aim.toLowerCase().includes(tableFilters.businessAim.toLowerCase())) return false;
       if (tableFilters.source && k.source !== tableFilters.source && k.source_name !== tableFilters.source) return false;
       if (tableFilters.priority && k.priority !== tableFilters.priority) return false;
       if (tableFilters.status && k.status !== tableFilters.status) return false;
       return true;
     });
   }, [allKeywords, tableFilters]);
+
+  const sortedData = useMemo(() => {
+    return sortFn(filtered, (item: any, key: string) => {
+      switch (key) {
+        case "keyword": return item.keyword;
+        case "category": return item.category;
+        case "businessAim": return item.business_aim;
+        case "source": return item.source;
+        case "priority": return item.priority || "";
+        case "videos": return keywordStats.get(item.id)?.video_count ?? 0;
+        case "links": return keywordStats.get(item.id)?.link_count ?? 0;
+        case "lastRun": return item.run_date;
+        case "status": return item.status;
+        default: return null;
+      }
+    });
+  }, [filtered, sortFn, keywordStats]);
 
   const stats = useMemo(() => {
     let totalVideos = 0;
@@ -112,7 +132,6 @@ export default function KeywordTable() {
         )}
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {statCards.map((s) => (
           <Card key={s.label}>
@@ -129,38 +148,68 @@ export default function KeywordTable() {
         ))}
       </div>
 
-      {/* Table */}
       <div className="rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Keyword</TableHead>
-              <TableHead>Category</TableHead>
-              <TableHead>Business Aim</TableHead>
-              <TableHead>Source</TableHead>
-              <TableHead>Priority</TableHead>
-              <TableHead>Videos</TableHead>
-              <TableHead>Links</TableHead>
-              <TableHead>Last Run</TableHead>
-              <TableHead>Status</TableHead>
+              <SortableHeader label="Keyword" sortKey="keyword" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Business Aim" sortKey="businessAim" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Source" sortKey="source" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Priority" sortKey="priority" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Videos" sortKey="videos" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Links" sortKey="links" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Last Run" sortKey="lastRun" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
             </TableRow>
             {/* Filter row */}
             <TableRow className="bg-muted/30">
               <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={tableFilters.keyword} onChange={(e) => setTableFilters((f) => ({ ...f, keyword: e.target.value }))} /></TableHead>
               <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={tableFilters.category} onChange={(e) => setTableFilters((f) => ({ ...f, category: e.target.value }))} /></TableHead>
+              <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={tableFilters.businessAim} onChange={(e) => setTableFilters((f) => ({ ...f, businessAim: e.target.value }))} /></TableHead>
+              <TableHead>
+                <Select value={tableFilters.source} onValueChange={(v) => setTableFilters(f => ({ ...f, source: v === "all" ? "" : v }))}>
+                  <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="excel">Excel</SelectItem>
+                  </SelectContent>
+                </Select>
+              </TableHead>
+              <TableHead>
+                <Select value={tableFilters.priority} onValueChange={(v) => setTableFilters(f => ({ ...f, priority: v === "all" ? "" : v }))}>
+                  <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="P1">P1</SelectItem>
+                    <SelectItem value="P2">P2</SelectItem>
+                    <SelectItem value="P3">P3</SelectItem>
+                    <SelectItem value="P4">P4</SelectItem>
+                    <SelectItem value="P5">P5</SelectItem>
+                  </SelectContent>
+                </Select>
+              </TableHead>
               <TableHead />
-              <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={tableFilters.source} onChange={(e) => setTableFilters((f) => ({ ...f, source: e.target.value }))} /></TableHead>
-              <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={tableFilters.priority} onChange={(e) => setTableFilters((f) => ({ ...f, priority: e.target.value }))} /></TableHead>
               <TableHead />
               <TableHead />
-              <TableHead />
-              <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={tableFilters.status} onChange={(e) => setTableFilters((f) => ({ ...f, status: e.target.value }))} /></TableHead>
+              <TableHead>
+                <Select value={tableFilters.status} onValueChange={(v) => setTableFilters(f => ({ ...f, status: v === "all" ? "" : v }))}>
+                  <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="failed">Failed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 ? (
+            {sortedData.length === 0 ? (
               <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">No keywords found.</TableCell></TableRow>
-            ) : filtered.map((k) => {
+            ) : sortedData.map((k: any) => {
               const kStats = keywordStats.get(k.id);
               return (
                 <TableRow key={k.id}>

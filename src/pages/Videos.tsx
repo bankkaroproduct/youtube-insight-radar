@@ -4,9 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag, Users, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
+import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
+import { ExpandableText } from "@/components/ui/ExpandableText";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -39,7 +43,7 @@ function getUniqueAffiliates(video: Video): AffiliateInfo[] {
 function VideoDetailRow({ video }: { video: Video }) {
   return (
     <TableRow className="bg-muted/30">
-      <TableCell colSpan={11} className="p-4">
+      <TableCell colSpan={12} className="p-4">
         <div className="space-y-3">
           {video.description && (
             <div>
@@ -88,6 +92,8 @@ function VideoDetailRow({ video }: { video: Video }) {
 export default function Videos() {
   const { videos, isLoading, refresh } = useVideos();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState({ title: "", channel: "", keyword: "", classification: "" });
+  const { sortKey, sortDirection, handleSort, sortFn } = useSort<Video>();
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -96,6 +102,32 @@ export default function Videos() {
       return next;
     });
   };
+
+  const filteredAndSorted = useMemo(() => {
+    let result = videos.filter((v) => {
+      if (filters.title && !v.title.toLowerCase().includes(filters.title.toLowerCase())) return false;
+      if (filters.channel && !v.channel_name.toLowerCase().includes(filters.channel.toLowerCase())) return false;
+      if (filters.keyword && !v.keywords.some(k => k.keyword.toLowerCase().includes(filters.keyword.toLowerCase()))) return false;
+      if (filters.classification) {
+        const affiliates = getUniqueAffiliates(v);
+        if (!affiliates.some(a => a.classification === filters.classification)) return false;
+      }
+      return true;
+    });
+
+    return sortFn(result, (item, key) => {
+      switch (key) {
+        case "title": return item.title;
+        case "channel": return item.channel_name;
+        case "views": return item.view_count;
+        case "likes": return item.like_count;
+        case "rank": return item.best_rank;
+        case "published": return item.published_at;
+        case "links": return item.links.length;
+        default: return null;
+      }
+    });
+  }, [videos, filters, sortFn]);
 
   const stats = useMemo(() => {
     const allLinks = videos.flatMap((v) => v.links);
@@ -106,7 +138,6 @@ export default function Videos() {
       uniqueChannels: uniqueChannels.size,
       ownLinks: allLinks.filter((l) => l.classification === "OWN").length,
       competitorLinks: allLinks.filter((l) => l.classification === "COMPETITOR").length,
-      neutralLinks: allLinks.filter((l) => !l.classification || l.classification === "NEUTRAL").length,
     };
   }, [videos]);
 
@@ -132,7 +163,6 @@ export default function Videos() {
         </Button>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {statCards.map((s) => (
           <Card key={s.label}>
@@ -171,21 +201,47 @@ export default function Videos() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                     <TableHead className="w-[30px]"></TableHead>
-                     <TableHead className="w-[50px]">Thumb</TableHead>
-                     <TableHead>Title</TableHead>
-                     <TableHead>Channel</TableHead>
-                     <TableHead>Keywords</TableHead>
-                     <TableHead className="text-right">Views</TableHead>
-                     <TableHead className="text-right">Likes</TableHead>
-                     <TableHead>Links</TableHead>
-                     <TableHead>Affiliates</TableHead>
-                     <TableHead>Published</TableHead>
-                     <TableHead className="w-[40px]"></TableHead>
+                    <TableHead className="w-[30px]"></TableHead>
+                    <TableHead className="w-[50px]">Thumb</TableHead>
+                    <SortableHeader label="Title" sortKey="title" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <SortableHeader label="Channel" sortKey="channel" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <TableHead>Keywords</TableHead>
+                    <SortableHeader label="Rank" sortKey="rank" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                    <SortableHeader label="Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                    <SortableHeader label="Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                    <SortableHeader label="Links" sortKey="links" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <TableHead>Affiliates</TableHead>
+                    <SortableHeader label="Published" sortKey="published" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <TableHead className="w-[40px]"></TableHead>
+                  </TableRow>
+                  {/* Filter row */}
+                  <TableRow className="bg-muted/30">
+                    <TableHead />
+                    <TableHead />
+                    <TableHead><Input placeholder="Filter title..." className="h-7 text-xs" value={filters.title} onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))} /></TableHead>
+                    <TableHead><Input placeholder="Filter channel..." className="h-7 text-xs" value={filters.channel} onChange={(e) => setFilters(f => ({ ...f, channel: e.target.value }))} /></TableHead>
+                    <TableHead><Input placeholder="Filter keyword..." className="h-7 text-xs" value={filters.keyword} onChange={(e) => setFilters(f => ({ ...f, keyword: e.target.value }))} /></TableHead>
+                    <TableHead />
+                    <TableHead />
+                    <TableHead />
+                    <TableHead />
+                    <TableHead>
+                      <Select value={filters.classification} onValueChange={(v) => setFilters(f => ({ ...f, classification: v === "all" ? "" : v }))}>
+                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="OWN">Own</SelectItem>
+                          <SelectItem value="COMPETITOR">Competitor</SelectItem>
+                          <SelectItem value="NEUTRAL">Neutral</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableHead>
+                    <TableHead />
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {videos.map((v) => {
+                  {filteredAndSorted.map((v) => {
                     const affiliates = getUniqueAffiliates(v);
                     return (
                       <>
@@ -205,10 +261,7 @@ export default function Videos() {
                             )}
                           </TableCell>
                           <TableCell className="max-w-[300px]">
-                            <div className="font-medium">{v.title}</div>
-                            {v.description && (
-                              <p className="text-xs text-muted-foreground truncate mt-0.5">{v.description.slice(0, 100)}</p>
-                            )}
+                            <ExpandableText text={v.title} maxLength={80} className="font-medium text-sm" />
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">
                             {v.channel_name}
@@ -223,6 +276,9 @@ export default function Videos() {
                                 ))}
                               </div>
                             ) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">
+                            {v.best_rank != null ? `#${v.best_rank}` : "—"}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {formatNumber(v.view_count)}

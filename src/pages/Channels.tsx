@@ -1,12 +1,15 @@
-import { useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useChannels } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
+import { ExpandableText } from "@/components/ui/ExpandableText";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -23,6 +26,30 @@ const statusColors: Record<string, string> = {
 
 export default function Channels() {
   const { channels, isLoading, refresh, recomputeStats } = useChannels();
+  const [filters, setFilters] = useState({ name: "", status: "", category: "" });
+  const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
+
+  const filteredAndSorted = useMemo(() => {
+    let result = channels.filter((ch: any) => {
+      if (filters.name && !ch.channel_name.toLowerCase().includes(filters.name.toLowerCase())) return false;
+      if (filters.status && (ch.affiliate_status || "NEUTRAL") !== filters.status) return false;
+      if (filters.category && !(ch.youtube_category || "").toLowerCase().includes(filters.category.toLowerCase())) return false;
+      return true;
+    });
+
+    return sortFn(result, (item: any, key: string) => {
+      switch (key) {
+        case "name": return item.channel_name;
+        case "subscribers": return item.subscriber_count || 0;
+        case "videos": return item.total_videos_fetched || 0;
+        case "views": return item.median_views || 0;
+        case "likes": return item.median_likes || 0;
+        case "status": return item.affiliate_status || "NEUTRAL";
+        case "category": return item.youtube_category || "";
+        default: return null;
+      }
+    });
+  }, [channels, filters, sortFn]);
 
   const stats = useMemo(() => ({
     total: channels.length,
@@ -59,7 +86,6 @@ export default function Channels() {
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {statCards.map((s) => (
           <Card key={s.label}>
@@ -98,19 +124,44 @@ export default function Channels() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Channel</TableHead>
-                    <TableHead className="text-right">Subscribers</TableHead>
-                    <TableHead className="text-right">Videos</TableHead>
-                    <TableHead className="text-right">Median Views</TableHead>
-                    <TableHead className="text-right">Median Likes</TableHead>
-                    <TableHead>Status</TableHead>
+                    <SortableHeader label="Channel" sortKey="name" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <SortableHeader label="Subscribers" sortKey="subscribers" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                    <SortableHeader label="Videos" sortKey="videos" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                    <SortableHeader label="Median Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                    <SortableHeader label="Median Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                    <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <TableHead>Affiliates</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
+                  {/* Filter row */}
+                  <TableRow className="bg-muted/30">
+                    <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.name} onChange={(e) => setFilters(f => ({ ...f, name: e.target.value }))} /></TableHead>
+                    <TableHead />
+                    <TableHead />
+                    <TableHead />
+                    <TableHead />
+                    <TableHead>
+                      <Select value={filters.status} onValueChange={(v) => setFilters(f => ({ ...f, status: v === "all" ? "" : v }))}>
+                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="WITH_US">With Us</SelectItem>
+                          <SelectItem value="COMPETITOR">Competitor</SelectItem>
+                          <SelectItem value="MIXED">Mixed</SelectItem>
+                          <SelectItem value="NEUTRAL">Neutral</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableHead>
+                    <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
+                    <TableHead />
+                    <TableHead />
+                    <TableHead />
+                  </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {channels.map((ch: any) => (
+                  {filteredAndSorted.map((ch: any) => (
                     <TableRow key={ch.id}>
                       <TableCell className="font-medium">
                         <a
@@ -144,6 +195,9 @@ export default function Channels() {
                            ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
                         </Badge>
                       </TableCell>
+                      <TableCell className="text-sm text-muted-foreground max-w-[180px]">
+                        <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
+                      </TableCell>
                       <TableCell>
                         {ch.affiliate_names?.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
@@ -157,27 +211,13 @@ export default function Channels() {
                       </TableCell>
                       <TableCell>
                         {ch.contact_email ? (
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1">
-                                <Mail className="h-3 w-3" /> Email
-                              </a>
-                            </TooltipTrigger>
-                            <TooltipContent>{ch.contact_email}</TooltipContent>
-                          </Tooltip>
+                          <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1 text-sm">
+                            <Mail className="h-3 w-3" /> Email
+                          </a>
                         ) : "—"}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[250px]">
-                        {ch.description ? (
-                          <Tooltip>
-                            <TooltipTrigger className="truncate block max-w-[250px]">
-                              {ch.description.substring(0, 60)}…
-                            </TooltipTrigger>
-                            <TooltipContent className="max-w-sm whitespace-pre-wrap">
-                              {ch.description}
-                            </TooltipContent>
-                          </Tooltip>
-                        ) : "—"}
+                        <ExpandableText text={ch.description || ""} maxLength={60} />
                       </TableCell>
                     </TableRow>
                   ))}
