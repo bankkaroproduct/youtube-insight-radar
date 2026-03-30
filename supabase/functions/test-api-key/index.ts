@@ -68,10 +68,14 @@ serve(async (req) => {
         status = "invalid";
       }
 
-      await supabase.from("youtube_api_keys").update({
+      const updatePayload: Record<string, unknown> = {
         last_tested_at: new Date().toISOString(),
         last_test_status: status,
-      }).eq("id", key.id);
+      };
+      if (status === "invalid") {
+        updatePayload.is_active = false;
+      }
+      await supabase.from("youtube_api_keys").update(updatePayload).eq("id", key.id);
 
       results.push({ id: key.id, status });
     }

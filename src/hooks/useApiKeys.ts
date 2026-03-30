@@ -94,7 +94,8 @@ export function useApiKeys() {
 
   const stats = {
     total: keys.length,
-    active: keys.filter((k) => k.is_active).length,
+    healthy: keys.filter((k) => k.is_active && k.last_test_status !== "invalid" && k.last_test_status !== "quota_exceeded").length,
+    invalid: keys.filter((k) => k.last_test_status === "invalid").length,
     exhausted: keys.filter((k) => k.quota_used_today >= k.daily_quota_limit).length,
     quotaRemaining: keys
       .filter((k) => k.is_active)
