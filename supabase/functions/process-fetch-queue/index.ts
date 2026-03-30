@@ -203,13 +203,22 @@ serve(async (req) => {
             }, { onConflict: "video_id" }).select("id").single();
 
             if (insertedVideo) {
+              // Track keyword association (many-to-many)
+              if (job.keyword_id) {
+                await supabase.from("video_keywords").upsert({
+                  video_id: insertedVideo.id,
+                  keyword_id: job.keyword_id,
+                }, { onConflict: "video_id,keyword_id" });
+              }
+
               const urls = extractUrls(snippet.description || "");
               if (urls.length > 0) {
-                const linkInserts = urls.map((url: string) => ({
-                  video_id: insertedVideo.id,
-                  original_url: url,
-                }));
-                await supabase.from("video_links").insert(linkInserts);
+                for (const url of urls) {
+                  await supabase.from("video_links").upsert({
+                    video_id: insertedVideo.id,
+                    original_url: url,
+                  }, { onConflict: "video_id,original_url" });
+                }
               }
             }
 

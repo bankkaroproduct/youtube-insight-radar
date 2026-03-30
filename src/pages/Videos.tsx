@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2 } from "lucide-react";
+import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 
@@ -125,16 +125,17 @@ export default function Videos() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[30px]"></TableHead>
-                    <TableHead className="w-[50px]">Thumb</TableHead>
-                    <TableHead>Title</TableHead>
-                    <TableHead>Channel</TableHead>
-                    <TableHead className="text-right">Views</TableHead>
-                    <TableHead className="text-right">Likes</TableHead>
-                    <TableHead className="text-right">Links</TableHead>
-                    <TableHead>Affiliates</TableHead>
-                    <TableHead>Published</TableHead>
-                    <TableHead className="w-[40px]"></TableHead>
+                     <TableHead className="w-[30px]"></TableHead>
+                     <TableHead className="w-[50px]">Thumb</TableHead>
+                     <TableHead>Title</TableHead>
+                     <TableHead>Channel</TableHead>
+                     <TableHead>Keywords</TableHead>
+                     <TableHead className="text-right">Views</TableHead>
+                     <TableHead className="text-right">Likes</TableHead>
+                     <TableHead>Links</TableHead>
+                     <TableHead>Affiliates</TableHead>
+                     <TableHead>Published</TableHead>
+                     <TableHead className="w-[40px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -166,15 +167,35 @@ export default function Videos() {
                           <TableCell className="text-muted-foreground text-sm">
                             {v.channel_name}
                           </TableCell>
+                          <TableCell>
+                            {v.keywords.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {v.keywords.map((kw) => (
+                                  <Badge key={kw.id} variant="secondary" className="text-xs">
+                                    {kw.keyword}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : "—"}
+                          </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {formatNumber(v.view_count)}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {formatNumber(v.like_count)}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">
+                          <TableCell>
                             {v.links.length > 0 ? (
-                              <Badge variant="secondary">{v.links.length}</Badge>
+                              <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                {v.links.slice(0, 3).map((link) => (
+                                  <Badge key={link.id} variant="outline" className="text-xs truncate max-w-[150px]">
+                                    {link.domain || new URL(link.original_url).hostname}
+                                  </Badge>
+                                ))}
+                                {v.links.length > 3 && (
+                                  <Badge variant="secondary" className="text-xs">+{v.links.length - 3}</Badge>
+                                )}
+                              </div>
                             ) : "—"}
                           </TableCell>
                           <TableCell>

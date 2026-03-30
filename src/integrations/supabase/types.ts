@@ -412,6 +412,42 @@ export type Database = {
         }
         Relationships: []
       }
+      video_keywords: {
+        Row: {
+          created_at: string
+          id: string
+          keyword_id: string
+          video_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          keyword_id: string
+          video_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          keyword_id?: string
+          video_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "video_keywords_keyword_id_fkey"
+            columns: ["keyword_id"]
+            isOneToOne: false
+            referencedRelation: "keywords_search_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "video_keywords_video_id_fkey"
+            columns: ["video_id"]
+            isOneToOne: false
+            referencedRelation: "videos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       video_links: {
         Row: {
           classification: string | null
