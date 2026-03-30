@@ -62,6 +62,8 @@ export default function Keywords() {
     else {
       toast.success(`Queued ${selected.length} fetch job(s)`);
       setSelectedIds(new Set());
+      // Trigger processing of the queued jobs
+      supabase.functions.invoke("process-fetch-queue").catch(() => {});
     }
     setFetchLoading(false);
   };
