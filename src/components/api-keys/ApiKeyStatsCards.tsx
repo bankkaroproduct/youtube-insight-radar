@@ -1,23 +1,25 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { KeyRound, CheckCircle, AlertTriangle, Gauge } from "lucide-react";
+import { KeyRound, CheckCircle, XCircle, AlertTriangle, Gauge } from "lucide-react";
 
 interface Props {
   total: number;
-  active: number;
+  healthy: number;
+  invalid: number;
   exhausted: number;
   quotaRemaining: number;
 }
 
-export function ApiKeyStatsCards({ total, active, exhausted, quotaRemaining }: Props) {
+export function ApiKeyStatsCards({ total, healthy, invalid, exhausted, quotaRemaining }: Props) {
   const cards = [
     { label: "Total Keys", value: total, icon: KeyRound, color: "text-primary" },
-    { label: "Active Keys", value: active, icon: CheckCircle, color: "text-green-500" },
-    { label: "Exhausted Today", value: exhausted, icon: AlertTriangle, color: "text-destructive" },
+    { label: "Healthy Keys", value: healthy, icon: CheckCircle, color: "text-green-500" },
+    { label: "Invalid Keys", value: invalid, icon: XCircle, color: "text-destructive" },
+    { label: "Exhausted Today", value: exhausted, icon: AlertTriangle, color: "text-amber-500" },
     { label: "Quota Remaining", value: quotaRemaining.toLocaleString(), icon: Gauge, color: "text-blue-500" },
   ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
       {cards.map((c) => (
         <Card key={c.label}>
           <CardContent className="pt-6">
