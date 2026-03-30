@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useVideos, Video } from "@/hooks/useVideos";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag } from "lucide-react";
+import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag, Users, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 
@@ -31,7 +31,7 @@ function getUniqueAffiliates(video: Video): string[] {
 function VideoDetailRow({ video }: { video: Video }) {
   return (
     <TableRow className="bg-muted/30">
-      <TableCell colSpan={10} className="p-4">
+      <TableCell colSpan={11} className="p-4">
         <div className="space-y-3">
           {video.description && (
             <div>
@@ -89,6 +89,27 @@ export default function Videos() {
     });
   };
 
+  const stats = useMemo(() => {
+    const allLinks = videos.flatMap((v) => v.links);
+    const uniqueChannels = new Set(videos.map((v) => v.channel_id));
+    return {
+      totalVideos: videos.length,
+      totalLinks: allLinks.length,
+      uniqueChannels: uniqueChannels.size,
+      ownLinks: allLinks.filter((l) => l.classification === "OWN").length,
+      competitorLinks: allLinks.filter((l) => l.classification === "COMPETITOR").length,
+      neutralLinks: allLinks.filter((l) => !l.classification || l.classification === "NEUTRAL").length,
+    };
+  }, [videos]);
+
+  const statCards = [
+    { label: "Total Videos", value: stats.totalVideos, icon: VideoIcon, color: "text-primary" },
+    { label: "Total Links", value: stats.totalLinks, icon: Link2, color: "text-purple-500" },
+    { label: "Unique Channels", value: stats.uniqueChannels, icon: Users, color: "text-blue-500" },
+    { label: "Own Links", value: stats.ownLinks, icon: Tag, color: "text-green-500" },
+    { label: "Competitor Links", value: stats.competitorLinks, icon: AlertTriangle, color: "text-red-500" },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -101,6 +122,23 @@ export default function Videos() {
         <Button variant="outline" size="sm" onClick={refresh}>
           <RefreshCw className="h-4 w-4 mr-2" /> Refresh
         </Button>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {statCards.map((s) => (
+          <Card key={s.label}>
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-center gap-3">
+                <s.icon className={`h-8 w-8 ${s.color}`} />
+                <div>
+                  <p className="text-2xl font-bold">{s.value}</p>
+                  <p className="text-xs text-muted-foreground">{s.label}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <Card>

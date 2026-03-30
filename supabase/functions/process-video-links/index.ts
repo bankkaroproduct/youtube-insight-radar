@@ -12,6 +12,15 @@ const KNOWN_SHORTENERS = [
   "shorturl.at", "link.ck.page", "clk.ink",
 ];
 
+// Domains to skip auto-discovery (social, generic, etc.)
+const SKIP_DOMAINS = new Set([
+  "youtube.com", "youtu.be", "google.com", "facebook.com", "twitter.com",
+  "instagram.com", "tiktok.com", "reddit.com", "linkedin.com", "pinterest.com",
+  "wikipedia.org", "github.com", "discord.gg", "discord.com", "t.me",
+  "telegram.org", "wa.me", "whatsapp.com", "apple.com", "play.google.com",
+  "apps.apple.com", "medium.com", "blogspot.com", "wordpress.com",
+]);
+
 async function unshortenUrl(url: string): Promise<string> {
   try {
     const resp = await fetch(url, {
@@ -64,13 +73,12 @@ serve(async (req) => {
       });
     }
 
-    // Get all affiliate patterns
+    // Get ALL affiliate patterns (confirmed AND unconfirmed)
     const { data: patterns } = await supabase
       .from("affiliate_patterns")
-      .select("id, pattern, classification, is_confirmed")
-      .eq("is_confirmed", true);
+      .select("id, pattern, classification, is_confirmed");
 
-    const confirmedPatterns = patterns || [];
+    const allPatterns = patterns || [];
 
     let processed = 0;
     const affectedChannels = new Set<string>();
@@ -86,35 +94,44 @@ serve(async (req) => {
 
       const domain = extractDomain(finalUrl);
 
-      // Match against patterns
+      // Match against ALL patterns (confirmed get their classification, unconfirmed stay NEUTRAL)
       let classification = "NEUTRAL";
       let matchedPatternId = null;
 
-      for (const p of confirmedPatterns) {
+      for (const p of allPatterns) {
         if (domain.includes(p.pattern) || finalUrl.includes(p.pattern)) {
-          classification = p.classification;
+          // Only use classification from confirmed patterns
+          classification = p.is_confirmed ? p.classification : "NEUTRAL";
           matchedPatternId = p.id;
           break;
         }
       }
 
-      // If no match and looks like an affiliate, auto-discover
-      if (!matchedPatternId && domain && classification === "NEUTRAL") {
-        const hasTrackingParams = finalUrl.includes("utm_") || finalUrl.includes("ref=") || finalUrl.includes("aff=") || finalUrl.includes("tag=");
-        if (hasTrackingParams || isShortened) {
-          // Check if pattern already exists
-          const { data: existing } = await supabase
-            .from("affiliate_patterns")
-            .select("id")
-            .eq("pattern", domain)
-            .limit(1);
+      // Auto-discover ANY new domain (not just tracking params)
+      if (!matchedPatternId && domain && !SKIP_DOMAINS.has(domain)) {
+        // Check if pattern already exists for this domain
+        const { data: existing } = await supabase
+          .from("affiliate_patterns")
+          .select("id")
+          .eq("pattern", domain)
+          .limit(1);
 
-          if (!existing || existing.length === 0) {
-            await supabase.from("affiliate_patterns").insert({
+        if (!existing || existing.length === 0) {
+          const { data: inserted } = await supabase.from("affiliate_patterns").insert({
+            pattern: domain,
+            name: domain,
+            classification: "NEUTRAL",
+            is_auto_discovered: true,
+            is_confirmed: false,
+          }).select("id").single();
+
+          if (inserted) {
+            matchedPatternId = inserted.id;
+            // Add to local cache so subsequent links in this batch match
+            allPatterns.push({
+              id: inserted.id,
               pattern: domain,
-              name: domain,
               classification: "NEUTRAL",
-              is_auto_discovered: true,
               is_confirmed: false,
             });
           }
