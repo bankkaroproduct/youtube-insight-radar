@@ -29,7 +29,6 @@ async function markKeyExhausted(supabase: any, keyId: string) {
 }
 
 async function incrementQuota(supabase: any, keyId: string, units: number) {
-  // Read current, then update
   const { data } = await supabase.from("youtube_api_keys").select("quota_used_today").eq("id", keyId).single();
   if (data) {
     await supabase.from("youtube_api_keys").update({
@@ -37,6 +36,12 @@ async function incrementQuota(supabase: any, keyId: string, units: number) {
       last_used_at: new Date().toISOString(),
     }).eq("id", keyId);
   }
+}
+
+function extractUrls(text: string): string[] {
+  if (!text) return [];
+  const urlRegex = /https?:\/\/[^\s<>"')\]]+/gi;
+  return [...new Set(text.match(urlRegex) || [])];
 }
 
 serve(async (req) => {
@@ -78,6 +83,7 @@ serve(async (req) => {
           continue;
         }
 
+        // Step 1: YouTube search
         const params = new URLSearchParams({
           part: "snippet",
           q: job.keyword,
@@ -89,17 +95,13 @@ serve(async (req) => {
         if (job.published_after) params.set("publishedAfter", job.published_after);
 
         const resp = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
-        
+
         if (!resp.ok) {
           const body = await resp.json();
           const reason = body?.error?.errors?.[0]?.reason;
           if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
             await markKeyExhausted(supabase, apiKey.id);
-            // Retry with next key by re-queuing
-            await supabase.from("fetch_jobs").update({
-              status: "pending",
-              started_at: null,
-            }).eq("id", job.id);
+            await supabase.from("fetch_jobs").update({ status: "pending", started_at: null }).eq("id", job.id);
             continue;
           }
           throw new Error(body?.error?.message || `YouTube API error: ${resp.status}`);
@@ -108,12 +110,79 @@ serve(async (req) => {
         // search.list costs 100 units
         await incrementQuota(supabase, apiKey.id, 100);
 
-        const data = await resp.json();
-        const videosFound = data.items?.length || 0;
+        const searchData = await resp.json();
+        const videoIds = (searchData.items || [])
+          .filter((item: any) => item.id?.videoId)
+          .map((item: any) => item.id.videoId);
+
+        if (videoIds.length === 0) {
+          await supabase.from("fetch_jobs").update({
+            status: "completed",
+            videos_found: 0,
+            completed_at: new Date().toISOString(),
+          }).eq("id", job.id);
+          continue;
+        }
+
+        // Step 2: Get video details (statistics + full snippet)
+        // videos.list costs 1 unit per request (not per video)
+        const detailKey = await getNextApiKey(supabase);
+        const activeKey = detailKey || apiKey;
+
+        const detailParams = new URLSearchParams({
+          part: "snippet,statistics",
+          id: videoIds.join(","),
+          key: activeKey.api_key,
+        });
+
+        const detailResp = await fetch(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`);
+        if (detailResp.ok) {
+          await incrementQuota(supabase, activeKey.id, 1);
+          const detailData = await detailResp.json();
+
+          for (const video of (detailData.items || [])) {
+            const snippet = video.snippet || {};
+            const stats = video.statistics || {};
+
+            // Upsert video
+            const { data: insertedVideo } = await supabase.from("videos").upsert({
+              video_id: video.id,
+              keyword_id: job.keyword_id || null,
+              channel_id: snippet.channelId || "",
+              channel_name: snippet.channelTitle || "",
+              title: snippet.title || "",
+              description: snippet.description || "",
+              thumbnail_url: snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || "",
+              published_at: snippet.publishedAt || null,
+              view_count: parseInt(stats.viewCount || "0"),
+              like_count: parseInt(stats.likeCount || "0"),
+              comment_count: parseInt(stats.commentCount || "0"),
+            }, { onConflict: "video_id" }).select("id").single();
+
+            // Extract links from description
+            if (insertedVideo) {
+              const urls = extractUrls(snippet.description || "");
+              if (urls.length > 0) {
+                const linkInserts = urls.map((url: string) => ({
+                  video_id: insertedVideo.id,
+                  original_url: url,
+                }));
+                await supabase.from("video_links").insert(linkInserts);
+              }
+            }
+
+            // Upsert channel
+            await supabase.from("channels").upsert({
+              channel_id: snippet.channelId || "",
+              channel_name: snippet.channelTitle || "",
+              channel_url: `https://www.youtube.com/channel/${snippet.channelId}`,
+            }, { onConflict: "channel_id" });
+          }
+        }
 
         await supabase.from("fetch_jobs").update({
           status: "completed",
-          videos_found: videosFound,
+          videos_found: videoIds.length,
           completed_at: new Date().toISOString(),
         }).eq("id", job.id);
 
