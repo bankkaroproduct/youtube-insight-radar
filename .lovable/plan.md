@@ -1,41 +1,38 @@
 
 
-# Fix Missing Data Across Videos, Keywords, and Channels Pages
+# Fix Link Classification & Show Affiliate Names in Videos Table
 
-## Issues Identified
+## Root Causes
 
-1. **Videos page**: Title truncated, description not shown, no affiliate names, no extracted links displayed
-2. **Keywords table**: Video count and link count come from `fetch_jobs` (temporary) instead of actual `videos`/`video_links` tables. The `get_keyword_stats()` RPC already exists but is unused.
-3. **Channels page**: Missing channel description and contact info columns. The `channels` table itself lacks `description` and `contact_info` columns.
+1. **Links show as NEUTRAL**: The `process-video-links` edge function (which classifies links against affiliate patterns) is never called automatically after videos are fetched. It only runs when manually triggered from the Affiliates page. So all links stay unclassified.
+
+2. **No affiliate name shown**: The Videos UI doesn't fetch or display the affiliate pattern name — it only shows the classification badge (OWN/COMPETITOR/NEUTRAL) without the pattern's `name` field (e.g., "Wishlink").
+
+3. **Missing columns in the video table row**: The main table row doesn't show description or affiliate names inline.
 
 ## Plan
 
-### 1. Videos page — show full details (`src/pages/Videos.tsx`, `src/hooks/useVideos.ts`)
-- Add an expandable row or detail panel showing: full title, description, extracted links (from `video_links` table), affiliate classification per link
-- Join `video_links` data: fetch video_links with classification and matched pattern name
-- Show affiliate badge (OWN/COMPETITOR/NEUTRAL) next to each link
-- Remove `truncate` from title so it wraps properly
+### 1. Auto-trigger `process-video-links` after fetch completes
+**File: `supabase/functions/process-fetch-queue/index.ts`**
+- After all jobs are processed and channel details fetched, invoke `process-video-links` to classify the newly extracted links against affiliate patterns
 
-### 2. Keywords table — show real video & link counts (`src/hooks/useKeywords.ts`, `src/components/keywords/KeywordsTable.tsx`)
-- Call the existing `get_keyword_stats()` RPC to get per-keyword video_count and link_count
-- Display these counts in the Keywords table instead of relying on fetch_jobs data
-- Remove "Business Aim" column (since we removed the field from the add dialog)
+### 2. Fetch affiliate pattern names with video links
+**File: `src/hooks/useVideos.ts`**
+- When fetching `video_links`, also fetch the matched `affiliate_patterns` name via a second query or by joining
+- Add `affiliate_name` field to the `VideoLink` interface
 
-### 3. Channels page — add description & contact info (`src/pages/Channels.tsx`)
-- **DB migration**: Add `description` and `contact_email` columns to `channels` table
-- Update `process-fetch-queue` edge function to fetch channel details from YouTube Channels API (`part=snippet,statistics,brandingSettings`) and store description + contact email
-- Display these new columns in the Channels table
+### 3. Show affiliate name next to classification badge
+**File: `src/pages/Videos.tsx`**
+- In the expanded detail row, show the affiliate/pattern name next to the classification badge (e.g., "COMPETITOR — Wishlink")
+- In the main table row, add a column showing unique affiliate names found across that video's links (comma-separated or as badges)
+- Ensure the table columns are: Thumb, Title, Channel, Views, Likes, Links count, Affiliates (names), Published, YouTube link
 
-### 4. Update process-fetch-queue to fetch channel details (`supabase/functions/process-fetch-queue/index.ts`)
-- After upserting channels, batch-fetch channel details using YouTube Channels API
-- Store `subscriber_count`, `description`, `contact_email` from the channel response
+### 4. Show description snippet in main row
+**File: `src/pages/Videos.tsx`**
+- Add a truncated description preview below the title in the main table row (or as a subtitle)
 
 ## Files to modify
-1. `src/pages/Videos.tsx` — expandable rows with description, links, affiliates
-2. `src/hooks/useVideos.ts` — join video_links data
-3. `src/hooks/useKeywords.ts` — call `get_keyword_stats()` RPC
-4. `src/components/keywords/KeywordsTable.tsx` — show real counts, remove Business Aim column
-5. `src/pages/Channels.tsx` — add description and contact columns
-6. **DB migration** — add `description text`, `contact_email text` to `channels` table
-7. `supabase/functions/process-fetch-queue/index.ts` — fetch channel details from YouTube API
+1. `supabase/functions/process-fetch-queue/index.ts` — call `process-video-links` after processing
+2. `src/hooks/useVideos.ts` — fetch affiliate pattern names alongside video_links
+3. `src/pages/Videos.tsx` — add affiliate name display, description snippet, improved columns
 
