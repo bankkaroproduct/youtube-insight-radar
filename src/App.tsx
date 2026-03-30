@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -5,6 +6,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { AppLayout } from "@/components/AppLayout";
+import { checkIpAccess } from "@/hooks/useIpWhitelist";
+import { Shield } from "lucide-react";
 import Auth from "@/pages/Auth";
 import Index from "@/pages/Index";
 import Keywords from "@/pages/Keywords";
@@ -20,10 +23,41 @@ import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
 
+function IpBlockedScreen({ ip }: { ip: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="text-center space-y-4 max-w-md p-8">
+        <Shield className="h-16 w-16 text-destructive mx-auto" />
+        <h1 className="text-2xl font-bold">Access Denied</h1>
+        <p className="text-muted-foreground">
+          Your IP address <span className="font-mono font-semibold">{ip}</span> is not authorized to access this application.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Please contact your administrator to whitelist your IP address.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { session, isLoading } = useAuth();
+  const [ipCheck, setIpCheck] = useState<{ checked: boolean; allowed: boolean; ip: string }>({
+    checked: false, allowed: true, ip: "",
+  });
+
+  useEffect(() => {
+    if (session) {
+      checkIpAccess().then((res) => {
+        setIpCheck({ checked: true, allowed: res.allowed, ip: res.ip });
+      });
+    }
+  }, [session]);
+
   if (isLoading) return null;
   if (!session) return <Navigate to="/auth" replace />;
+  if (!ipCheck.checked) return null;
+  if (!ipCheck.allowed) return <IpBlockedScreen ip={ipCheck.ip} />;
   return <AppLayout>{children}</AppLayout>;
 }
 
