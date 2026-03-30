@@ -310,6 +310,45 @@ export type Database = {
         }
         Relationships: []
       }
+      youtube_api_keys: {
+        Row: {
+          api_key: string
+          created_at: string
+          daily_quota_limit: number
+          id: string
+          is_active: boolean
+          label: string | null
+          last_test_status: string | null
+          last_tested_at: string | null
+          last_used_at: string | null
+          quota_used_today: number
+        }
+        Insert: {
+          api_key: string
+          created_at?: string
+          daily_quota_limit?: number
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          last_test_status?: string | null
+          last_tested_at?: string | null
+          last_used_at?: string | null
+          quota_used_today?: number
+        }
+        Update: {
+          api_key?: string
+          created_at?: string
+          daily_quota_limit?: number
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          last_test_status?: string | null
+          last_tested_at?: string | null
+          last_used_at?: string | null
+          quota_used_today?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -330,6 +369,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      reset_daily_quotas: { Args: never; Returns: undefined }
     }
     Enums: {
       app_role: "super_admin" | "admin" | "manager" | "analyst" | "viewer"
