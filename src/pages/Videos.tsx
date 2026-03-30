@@ -20,12 +20,20 @@ const classificationColors: Record<string, string> = {
   NEUTRAL: "bg-muted text-muted-foreground border-border",
 };
 
-function getUniqueAffiliates(video: Video): string[] {
-  const names = new Set<string>();
+interface AffiliateInfo {
+  name: string;
+  classification: string;
+}
+
+function getUniqueAffiliates(video: Video): AffiliateInfo[] {
+  const map = new Map<string, string>();
   for (const link of video.links) {
-    if (link.affiliate_name) names.add(link.affiliate_name);
+    const name = link.affiliate_name || link.domain;
+    if (name && !map.has(name)) {
+      map.set(name, link.classification || "NEUTRAL");
+    }
   }
-  return [...names];
+  return [...map.entries()].map(([name, classification]) => ({ name, classification }));
 }
 
 function VideoDetailRow({ video }: { video: Video }) {
@@ -239,9 +247,9 @@ export default function Videos() {
                           <TableCell>
                             {affiliates.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {affiliates.map((name) => (
-                                  <Badge key={name} variant="outline" className="bg-red-500/15 text-red-700 border-red-500/30 text-xs">
-                                    {name}
+                                {affiliates.map((a) => (
+                                  <Badge key={a.name} variant="outline" className={`text-xs ${classificationColors[a.classification] || classificationColors.NEUTRAL}`}>
+                                    {a.name}
                                   </Badge>
                                 ))}
                               </div>

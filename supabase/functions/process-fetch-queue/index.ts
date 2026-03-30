@@ -131,7 +131,7 @@ serve(async (req) => {
         const params = new URLSearchParams({
           part: "snippet",
           q: job.keyword,
-          maxResults: "30",
+          maxResults: "50",
           order: job.order_by || "relevance",
           type: "video",
           key: apiKey.api_key,
@@ -279,6 +279,21 @@ serve(async (req) => {
       });
     } catch (e) {
       console.error("Failed to trigger process-video-links:", e);
+    }
+
+    // Auto-trigger compute-channel-stats for all discovered channels
+    try {
+      const fnUrl = `${supabaseUrl}/functions/v1/compute-channel-stats`;
+      await fetch(fnUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${serviceKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ channel_ids: [...allChannelIds] }),
+      });
+    } catch (e) {
+      console.error("Failed to trigger compute-channel-stats:", e);
     }
 
     return new Response(JSON.stringify({ success: true, processed: pendingJobs.length }), {

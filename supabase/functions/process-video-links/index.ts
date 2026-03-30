@@ -12,7 +12,6 @@ const KNOWN_SHORTENERS = [
   "shorturl.at", "link.ck.page", "clk.ink",
 ];
 
-// Domains to skip auto-discovery (social, generic, etc.)
 const SKIP_DOMAINS = new Set([
   "youtube.com", "youtu.be", "google.com", "facebook.com", "twitter.com",
   "instagram.com", "tiktok.com", "reddit.com", "linkedin.com", "pinterest.com",
@@ -59,106 +58,121 @@ serve(async (req) => {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Get unprocessed links
-    const { data: links, error } = await supabase
-      .from("video_links")
-      .select("id, original_url, video_id")
-      .is("unshortened_url", null)
-      .limit(50);
-
-    if (error) throw error;
-    if (!links || links.length === 0) {
-      return new Response(JSON.stringify({ message: "No unprocessed links" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Get ALL affiliate patterns (confirmed AND unconfirmed)
+    // Get ALL affiliate patterns once (confirmed AND unconfirmed)
     const { data: patterns } = await supabase
       .from("affiliate_patterns")
       .select("id, pattern, classification, is_confirmed");
 
     const allPatterns = patterns || [];
-
-    let processed = 0;
     const affectedChannels = new Set<string>();
+    let totalProcessed = 0;
+    const MAX_TOTAL = 500;
+    const BATCH_SIZE = 50;
 
-    for (const link of links) {
-      const originalDomain = extractDomain(link.original_url);
-      const isShortened = KNOWN_SHORTENERS.some(s => originalDomain.includes(s));
+    // Loop through batches until no more unprocessed links or we hit the cap
+    while (totalProcessed < MAX_TOTAL) {
+      const { data: links, error } = await supabase
+        .from("video_links")
+        .select("id, original_url, video_id")
+        .is("unshortened_url", null)
+        .limit(BATCH_SIZE);
 
-      let finalUrl = link.original_url;
-      if (isShortened) {
-        finalUrl = await unshortenUrl(link.original_url);
-      }
+      if (error) throw error;
+      if (!links || links.length === 0) break;
 
-      const domain = extractDomain(finalUrl);
+      for (const link of links) {
+        const originalDomain = extractDomain(link.original_url);
+        const isShortened = KNOWN_SHORTENERS.some(s => originalDomain.includes(s));
 
-      // Match against ALL patterns (confirmed get their classification, unconfirmed stay NEUTRAL)
-      let classification = "NEUTRAL";
-      let matchedPatternId = null;
-
-      for (const p of allPatterns) {
-        if (domain.includes(p.pattern) || finalUrl.includes(p.pattern)) {
-          // Only use classification from confirmed patterns
-          classification = p.is_confirmed ? p.classification : "NEUTRAL";
-          matchedPatternId = p.id;
-          break;
+        let finalUrl = link.original_url;
+        if (isShortened) {
+          finalUrl = await unshortenUrl(link.original_url);
         }
-      }
 
-      // Auto-discover ANY new domain (not just tracking params)
-      if (!matchedPatternId && domain && !SKIP_DOMAINS.has(domain)) {
-        // Check if pattern already exists for this domain
-        const { data: existing } = await supabase
-          .from("affiliate_patterns")
-          .select("id")
-          .eq("pattern", domain)
-          .limit(1);
+        const domain = extractDomain(finalUrl);
 
-        if (!existing || existing.length === 0) {
-          const { data: inserted } = await supabase.from("affiliate_patterns").insert({
-            pattern: domain,
-            name: domain,
-            classification: "NEUTRAL",
-            is_auto_discovered: true,
-            is_confirmed: false,
-          }).select("id").single();
+        // Match against ALL patterns (confirmed get their classification, unconfirmed stay NEUTRAL)
+        let classification = "NEUTRAL";
+        let matchedPatternId = null;
 
-          if (inserted) {
-            matchedPatternId = inserted.id;
-            // Add to local cache so subsequent links in this batch match
-            allPatterns.push({
-              id: inserted.id,
-              pattern: domain,
-              classification: "NEUTRAL",
-              is_confirmed: false,
-            });
+        for (const p of allPatterns) {
+          if (domain.includes(p.pattern) || finalUrl.includes(p.pattern)) {
+            classification = p.is_confirmed ? p.classification : "NEUTRAL";
+            matchedPatternId = p.id;
+            break;
           }
         }
+
+        // Auto-discover ANY new domain (not just tracking params)
+        if (!matchedPatternId && domain && !SKIP_DOMAINS.has(domain)) {
+          const { data: existing } = await supabase
+            .from("affiliate_patterns")
+            .select("id")
+            .eq("pattern", domain)
+            .limit(1);
+
+          if (!existing || existing.length === 0) {
+            const { data: inserted } = await supabase.from("affiliate_patterns").insert({
+              pattern: domain,
+              name: domain,
+              classification: "NEUTRAL",
+              is_auto_discovered: true,
+              is_confirmed: false,
+            }).select("id").single();
+
+            if (inserted) {
+              matchedPatternId = inserted.id;
+              allPatterns.push({
+                id: inserted.id,
+                pattern: domain,
+                classification: "NEUTRAL",
+                is_confirmed: false,
+              });
+            }
+          } else {
+            matchedPatternId = existing[0].id;
+          }
+        }
+
+        await supabase.from("video_links").update({
+          unshortened_url: finalUrl,
+          domain,
+          classification,
+          matched_pattern_id: matchedPatternId,
+        }).eq("id", link.id);
+
+        // Track channel for stats recomputation
+        const { data: videoData } = await supabase
+          .from("videos")
+          .select("channel_id")
+          .eq("id", link.video_id)
+          .single();
+        if (videoData) affectedChannels.add(videoData.channel_id);
+
+        totalProcessed++;
       }
+    }
 
-      await supabase.from("video_links").update({
-        unshortened_url: finalUrl,
-        domain,
-        classification,
-        matched_pattern_id: matchedPatternId,
-      }).eq("id", link.id);
-
-      // Track channel for stats recomputation
-      const { data: videoData } = await supabase
-        .from("videos")
-        .select("channel_id")
-        .eq("id", link.video_id)
-        .single();
-      if (videoData) affectedChannels.add(videoData.channel_id);
-
-      processed++;
+    // Auto-trigger compute-channel-stats for affected channels
+    if (affectedChannels.size > 0) {
+      try {
+        const fnUrl = `${supabaseUrl}/functions/v1/compute-channel-stats`;
+        await fetch(fnUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ channel_ids: [...affectedChannels] }),
+        });
+      } catch (e) {
+        console.error("Failed to trigger compute-channel-stats:", e);
+      }
     }
 
     return new Response(JSON.stringify({
       success: true,
-      processed,
+      processed: totalProcessed,
       affected_channels: [...affectedChannels],
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
