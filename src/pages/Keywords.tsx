@@ -89,7 +89,7 @@ export default function Keywords() {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={refresh}><RefreshCw className="mr-2 h-4 w-4" /> Refresh</Button>
           <Button variant="outline" size="sm" onClick={exportExcel}><Download className="mr-2 h-4 w-4" /> Export</Button>
-          {isAdmin && <AddKeywordDialog categories={categories} onAdd={addKeyword} />}
+          {isAdmin && <AddKeywordDialog onAdd={addKeyword} />}
         </div>
       </div>
 
