@@ -112,6 +112,7 @@ export type Database = {
           median_views: number | null
           subscriber_count: number | null
           total_videos_fetched: number | null
+          youtube_category: string | null
         }
         Insert: {
           affiliate_names?: string[] | null
@@ -129,6 +130,7 @@ export type Database = {
           median_views?: number | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
+          youtube_category?: string | null
         }
         Update: {
           affiliate_names?: string[] | null
@@ -146,6 +148,7 @@ export type Database = {
           median_views?: number | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
+          youtube_category?: string | null
         }
         Relationships: []
       }
@@ -417,18 +420,21 @@ export type Database = {
           created_at: string
           id: string
           keyword_id: string
+          search_rank: number | null
           video_id: string
         }
         Insert: {
           created_at?: string
           id?: string
           keyword_id: string
+          search_rank?: number | null
           video_id: string
         }
         Update: {
           created_at?: string
           id?: string
           keyword_id?: string
+          search_rank?: number | null
           video_id?: string
         }
         Relationships: [
