@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAffiliatePatterns } from "@/hooks/useAffiliatePatterns";
+import { useCompetitorNames } from "@/hooks/useCompetitorNames";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
 import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,11 +20,136 @@ const classColors: Record<string, string> = {
   NEUTRAL: "bg-muted text-muted-foreground",
 };
 
+function NameDropdown({
+  names,
+  value,
+  onChange,
+  onAddNew,
+}: {
+  names: string[];
+  value: string;
+  onChange: (v: string) => void;
+  onAddNew: (name: string) => Promise<void>;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  if (adding) {
+    return (
+      <div className="flex gap-1">
+        <Input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="New name..."
+          className="h-8 text-sm"
+          autoFocus
+          onKeyDown={async (e) => {
+            if (e.key === "Enter" && newName.trim()) {
+              await onAddNew(newName.trim());
+              onChange(newName.trim());
+              setNewName("");
+              setAdding(false);
+            }
+            if (e.key === "Escape") {
+              setAdding(false);
+              setNewName("");
+            }
+          }}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8"
+          onClick={async () => {
+            if (newName.trim()) {
+              await onAddNew(newName.trim());
+              onChange(newName.trim());
+              setNewName("");
+              setAdding(false);
+            }
+          }}
+        >
+          Add
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Select value={value} onValueChange={(v) => {
+      if (v === "__add_new__") {
+        setAdding(true);
+      } else {
+        onChange(v);
+      }
+    }}>
+      <SelectTrigger><SelectValue placeholder="Select name..." /></SelectTrigger>
+      <SelectContent>
+        {names.map((n) => (
+          <SelectItem key={n} value={n}>{n}</SelectItem>
+        ))}
+        <SelectItem value="__add_new__" className="text-primary font-medium">
+          + Add new...
+        </SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+function DiscoveredNamePicker({
+  names,
+  onAddNew,
+  onConfirm,
+  classification,
+  label,
+  className,
+}: {
+  names: string[];
+  onAddNew: (name: string) => Promise<void>;
+  onConfirm: (name: string) => void;
+  classification: string;
+  label: string;
+  className?: string;
+}) {
+  const [selectedName, setSelectedName] = useState("");
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className={className}>
+          <Check className="h-3 w-3 mr-1" /> {label}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 space-y-3">
+        <Label className="text-sm font-medium">Select competitor name</Label>
+        <NameDropdown
+          names={names}
+          value={selectedName}
+          onChange={setSelectedName}
+          onAddNew={onAddNew}
+        />
+        <Button
+          size="sm"
+          className="w-full"
+          disabled={!selectedName}
+          onClick={() => {
+            onConfirm(selectedName);
+            setSelectedName("");
+          }}
+        >
+          Confirm as {classification}
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function Links() {
   const {
     confirmedPatterns, discoveredPatterns, isLoading,
     addPattern, confirmPattern, deletePattern, processLinks,
   } = useAffiliatePatterns();
+  const { names, addName } = useCompetitorNames();
 
   const [open, setOpen] = useState(false);
   const [newPattern, setNewPattern] = useState("");
@@ -90,10 +217,11 @@ export default function Links() {
                     </div>
                     <div>
                       <Label>Display Name</Label>
-                      <Input
+                      <NameDropdown
+                        names={names}
                         value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        placeholder="e.g. CashKaro"
+                        onChange={setNewName}
+                        onAddNew={addName}
                       />
                     </div>
                     <div>
@@ -107,7 +235,9 @@ export default function Links() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <Button onClick={handleAdd} className="w-full">Add Pattern</Button>
+                    <Button onClick={handleAdd} className="w-full" disabled={!newPattern || !newName}>
+                      Add Pattern
+                    </Button>
                   </div>
                 </DialogContent>
               </Dialog>
@@ -193,22 +323,22 @@ export default function Links() {
                         <TableCell className="font-mono text-sm">{p.pattern}</TableCell>
                         <TableCell>{p.name}</TableCell>
                         <TableCell className="flex gap-1">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => confirmPattern(p.id, "OWN")}
+                          <DiscoveredNamePicker
+                            names={names}
+                            onAddNew={addName}
+                            classification="OWN"
+                            label="Ours"
                             className="text-green-700"
-                          >
-                            <Check className="h-3 w-3 mr-1" /> Ours
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => confirmPattern(p.id, "COMPETITOR")}
+                            onConfirm={(name) => confirmPattern(p.id, "OWN", name)}
+                          />
+                          <DiscoveredNamePicker
+                            names={names}
+                            onAddNew={addName}
+                            classification="COMPETITOR"
+                            label="Competitor"
                             className="text-red-700"
-                          >
-                            <Check className="h-3 w-3 mr-1" /> Competitor
-                          </Button>
+                            onConfirm={(name) => confirmPattern(p.id, "COMPETITOR", name)}
+                          />
                           <Button
                             variant="outline"
                             size="sm"
