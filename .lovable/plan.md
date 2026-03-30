@@ -1,23 +1,29 @@
 
 
-# Remove Business Aim & Add All YouTube Categories
+# Fix Cleared Jobs Reappearing & Videos Not Fetching
 
-## Changes
+## Problem 1: Cleared finished jobs reappear on tab switch
+The "Clear Finished" button only stores cleared IDs in React state (`useState`). When you navigate away and come back, the component remounts, the state resets to empty, and `fetchJobs` re-fetches all recent jobs from the database -- including the ones you cleared.
 
-### 1. `src/components/keywords/AddKeywordDialog.tsx`
-- Remove the "Business Aim" field entirely (the input + label + state)
-- Remove `businessAim` from state and submission logic
-- Hardcode a static list of all YouTube video categories in the dropdown instead of pulling from `channel_categories` table
-- YouTube categories: Film & Animation, Autos & Vehicles, Music, Pets & Animals, Sports, Short Movies, Travel & Events, Gaming, Videoblogging, People & Blogs, Comedy, Entertainment, News & Politics, Howto & Style, Education, Science & Technology, Nonprofits & Activism
+**Fix**: Change `clearFinished` to actually delete the completed/failed jobs from the database instead of just hiding them in memory.
 
-### 2. `src/hooks/useKeywords.ts`
-- Update `addKeyword` to use a default business_aim value ("General") since UI no longer collects it
-- Update `onAdd` signature if needed
+### File: `src/hooks/useFetchJobs.ts`
+- Remove `clearedIds` state entirely
+- Update `clearFinished` to delete completed/failed jobs from the `fetch_jobs` table, then re-fetch
 
-### 3. `src/components/keywords/ExcelUploadCard.tsx` (if it references business aim)
-- Check if bulk upload also needs the same treatment — will keep as-is if business_aim comes from Excel columns
+## Problem 2: Videos are not being fetched
+The `queue-fetch-jobs` edge function only **inserts** rows into the `fetch_jobs` table with status "pending". But nothing ever **calls** `process-fetch-queue` to actually process those jobs. The job just sits there as "pending" forever.
 
-## Files
-1. **`src/components/keywords/AddKeywordDialog.tsx`** — remove business aim field, replace category dropdown with hardcoded YouTube categories
-2. **`src/hooks/useKeywords.ts`** — simplify `addKeyword` signature
+**Fix**: After queuing jobs, automatically invoke `process-fetch-queue` to start processing them.
+
+### File: `src/pages/Keywords.tsx`
+- After successfully calling `queue-fetch-jobs`, immediately invoke `process-fetch-queue` to trigger actual YouTube API fetching
+
+### File: `supabase/functions/queue-fetch-jobs/index.ts` (alternative/belt-and-suspenders)
+- After inserting jobs, call `process-fetch-queue` from within the edge function itself so processing is guaranteed to start
+
+## Summary of changes
+1. **`src/hooks/useFetchJobs.ts`** -- delete finished jobs from DB in `clearFinished`
+2. **`src/pages/Keywords.tsx`** -- invoke `process-fetch-queue` after queuing jobs
+3. **`supabase/functions/queue-fetch-jobs/index.ts`** -- also trigger `process-fetch-queue` after inserting jobs as a backup
 
