@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Play, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import type { KeywordSearchRun } from "@/hooks/useKeywords";
+import type { KeywordSearchRun, KeywordStats } from "@/hooks/useKeywords";
 import type { FetchJob } from "@/hooks/useFetchJobs";
 
 interface Props {
@@ -17,6 +17,7 @@ interface Props {
   onDelete: (id: string) => void;
   jobs: FetchJob[];
   isAdmin: boolean;
+  keywordStats: Map<string, KeywordStats>;
 }
 
 const priorityColors: Record<string, string> = {
@@ -34,7 +35,7 @@ const statusColors: Record<string, string> = {
   no_results: "bg-muted text-muted-foreground border-border",
 };
 
-export function KeywordsTable({ keywords, selectedIds, onToggleSelect, onSelectAll, onFetchSingle, onDelete, jobs, isAdmin }: Props) {
+export function KeywordsTable({ keywords, selectedIds, onToggleSelect, onSelectAll, onFetchSingle, onDelete, jobs, isAdmin, keywordStats }: Props) {
   const allSelected = keywords.length > 0 && keywords.every((k) => selectedIds.has(k.id));
 
   const getActiveJob = (keywordId: string) =>
@@ -54,10 +55,10 @@ export function KeywordsTable({ keywords, selectedIds, onToggleSelect, onSelectA
             <TableHead>Keyword</TableHead>
             <TableHead>Priority</TableHead>
             <TableHead>Category</TableHead>
-            <TableHead>Business Aim</TableHead>
             <TableHead>Last Fetched</TableHead>
             <TableHead>Variations</TableHead>
-            <TableHead>Videos</TableHead>
+            <TableHead className="text-right">Videos</TableHead>
+            <TableHead className="text-right">Links</TableHead>
             <TableHead>Source</TableHead>
             <TableHead>Status</TableHead>
             {isAdmin && <TableHead>Actions</TableHead>}
@@ -74,6 +75,7 @@ export function KeywordsTable({ keywords, selectedIds, onToggleSelect, onSelectA
             keywords.map((k) => {
               const activeJob = getActiveJob(k.id);
               const lastJob = getLastJob(k.id);
+              const stats = keywordStats.get(k.id);
               return (
                 <TableRow key={k.id}>
                   <TableCell>
@@ -95,7 +97,6 @@ export function KeywordsTable({ keywords, selectedIds, onToggleSelect, onSelectA
                     )}
                   </TableCell>
                   <TableCell>{k.category}</TableCell>
-                  <TableCell>{k.business_aim}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {lastJob?.completed_at ? (
                       <Tooltip>
@@ -116,14 +117,17 @@ export function KeywordsTable({ keywords, selectedIds, onToggleSelect, onSelectA
                       </Tooltip>
                     ) : "—"}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="text-right tabular-nums">
                     {activeJob ? (
                       <Badge variant="outline" className="bg-warning/15 text-warning-foreground animate-pulse">
                         {activeJob.status === "processing" ? "Processing" : "Pending"}
                       </Badge>
-                    ) : lastJob?.videos_found != null ? (
-                      lastJob.videos_found
+                    ) : stats ? (
+                      stats.video_count
                     ) : "—"}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {stats ? stats.link_count : "—"}
                   </TableCell>
                   <TableCell>
                     {k.source === "excel" ? (

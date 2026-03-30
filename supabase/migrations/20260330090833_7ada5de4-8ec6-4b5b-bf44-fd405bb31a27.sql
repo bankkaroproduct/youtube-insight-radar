@@ -1,0 +1,1 @@
+ALTER TABLE public.channels ADD COLUMN IF NOT EXISTS description text, ADD COLUMN IF NOT EXISTS contact_email text;

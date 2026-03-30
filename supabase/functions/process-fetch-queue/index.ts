@@ -44,6 +44,48 @@ function extractUrls(text: string): string[] {
   return [...new Set(text.match(urlRegex) || [])];
 }
 
+async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyData: any) {
+  if (channelIds.length === 0) return;
+  
+  try {
+    const params = new URLSearchParams({
+      part: "snippet,statistics,brandingSettings",
+      id: channelIds.join(","),
+      key: apiKeyData.api_key,
+    });
+
+    const resp = await fetch(`https://www.googleapis.com/youtube/v3/channels?${params}`);
+    if (!resp.ok) return;
+
+    // channels.list costs 1 unit
+    await incrementQuota(supabase, apiKeyData.id, 1);
+
+    const data = await resp.json();
+    for (const ch of (data.items || [])) {
+      const snippet = ch.snippet || {};
+      const stats = ch.statistics || {};
+      const branding = ch.brandingSettings || {};
+      const channelDetail = branding.channel || {};
+
+      const updateData: any = {
+        subscriber_count: parseInt(stats.subscriberCount || "0"),
+        description: snippet.description || null,
+      };
+
+      // Try to extract contact email from description or branding
+      const emailRegex = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+      const descEmails = (snippet.description || "").match(emailRegex);
+      if (descEmails && descEmails.length > 0) {
+        updateData.contact_email = descEmails[0];
+      }
+
+      await supabase.from("channels").update(updateData).eq("channel_id", ch.id);
+    }
+  } catch (e) {
+    console.error("Failed to fetch channel details:", e);
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -65,6 +107,8 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const allChannelIds = new Set<string>();
 
     for (const job of pendingJobs) {
       await supabase.from("fetch_jobs").update({
@@ -107,7 +151,6 @@ serve(async (req) => {
           throw new Error(body?.error?.message || `YouTube API error: ${resp.status}`);
         }
 
-        // search.list costs 100 units
         await incrementQuota(supabase, apiKey.id, 100);
 
         const searchData = await resp.json();
@@ -124,8 +167,7 @@ serve(async (req) => {
           continue;
         }
 
-        // Step 2: Get video details (statistics + full snippet)
-        // videos.list costs 1 unit per request (not per video)
+        // Step 2: Get video details
         const detailKey = await getNextApiKey(supabase);
         const activeKey = detailKey || apiKey;
 
@@ -144,7 +186,8 @@ serve(async (req) => {
             const snippet = video.snippet || {};
             const stats = video.statistics || {};
 
-            // Upsert video
+            if (snippet.channelId) allChannelIds.add(snippet.channelId);
+
             const { data: insertedVideo } = await supabase.from("videos").upsert({
               video_id: video.id,
               keyword_id: job.keyword_id || null,
@@ -159,7 +202,6 @@ serve(async (req) => {
               comment_count: parseInt(stats.commentCount || "0"),
             }, { onConflict: "video_id" }).select("id").single();
 
-            // Extract links from description
             if (insertedVideo) {
               const urls = extractUrls(snippet.description || "");
               if (urls.length > 0) {
@@ -171,7 +213,6 @@ serve(async (req) => {
               }
             }
 
-            // Upsert channel
             await supabase.from("channels").upsert({
               channel_id: snippet.channelId || "",
               channel_name: snippet.channelTitle || "",
@@ -201,6 +242,18 @@ serve(async (req) => {
 
         if (job.keyword_id) {
           await supabase.from("keywords_search_runs").update({ status: "failed" }).eq("id", job.keyword_id);
+        }
+      }
+    }
+
+    // After all jobs, fetch channel details for newly discovered channels
+    if (allChannelIds.size > 0) {
+      const channelKey = await getNextApiKey(supabase);
+      if (channelKey) {
+        const ids = [...allChannelIds];
+        // YouTube allows max 50 channel IDs per request
+        for (let i = 0; i < ids.length; i += 50) {
+          await fetchChannelDetails(supabase, ids.slice(i, i + 50), channelKey);
         }
       }
     }

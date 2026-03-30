@@ -102,7 +102,9 @@ export type Database = {
           channel_id: string
           channel_name: string
           channel_url: string | null
+          contact_email: string | null
           created_at: string
+          description: string | null
           id: string
           last_analyzed_at: string | null
           median_comments: number | null
@@ -117,7 +119,9 @@ export type Database = {
           channel_id: string
           channel_name: string
           channel_url?: string | null
+          contact_email?: string | null
           created_at?: string
+          description?: string | null
           id?: string
           last_analyzed_at?: string | null
           median_comments?: number | null
@@ -132,7 +136,9 @@ export type Database = {
           channel_id?: string
           channel_name?: string
           channel_url?: string | null
+          contact_email?: string | null
           created_at?: string
+          description?: string | null
           id?: string
           last_analyzed_at?: string | null
           median_comments?: number | null
