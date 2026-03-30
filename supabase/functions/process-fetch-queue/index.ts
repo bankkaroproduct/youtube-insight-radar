@@ -258,6 +258,20 @@ serve(async (req) => {
       }
     }
 
+    // Auto-trigger process-video-links to classify newly extracted links
+    try {
+      const fnUrl = `${supabaseUrl}/functions/v1/process-video-links`;
+      await fetch(fnUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${serviceKey}`,
+          "Content-Type": "application/json",
+        },
+      });
+    } catch (e) {
+      console.error("Failed to trigger process-video-links:", e);
+    }
+
     return new Response(JSON.stringify({ success: true, processed: pendingJobs.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

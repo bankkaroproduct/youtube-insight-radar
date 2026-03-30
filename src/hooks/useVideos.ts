@@ -9,6 +9,7 @@ export interface VideoLink {
   domain: string | null;
   classification: string | null;
   matched_pattern_id: string | null;
+  affiliate_name: string | null;
 }
 
 export interface Video {
@@ -62,10 +63,35 @@ export function useVideos() {
       .select("*")
       .in("video_id", videoIds);
 
+    // Fetch affiliate pattern names for matched links
+    const patternIds = [
+      ...new Set(
+        ((linksData ?? []) as any[])
+          .map((l) => l.matched_pattern_id)
+          .filter(Boolean)
+      ),
+    ];
+
+    let patternsMap = new Map<string, string>();
+    if (patternIds.length > 0) {
+      const { data: patternsData } = await supabase
+        .from("affiliate_patterns")
+        .select("id, name")
+        .in("id", patternIds);
+      for (const p of (patternsData ?? []) as any[]) {
+        patternsMap.set(p.id, p.name);
+      }
+    }
+
     const linksByVideo = new Map<string, VideoLink[]>();
     for (const link of (linksData ?? []) as any[]) {
       const list = linksByVideo.get(link.video_id) || [];
-      list.push(link);
+      list.push({
+        ...link,
+        affiliate_name: link.matched_pattern_id
+          ? patternsMap.get(link.matched_pattern_id) || null
+          : null,
+      });
       linksByVideo.set(link.video_id, list);
     }
 
