@@ -125,16 +125,17 @@ export default function Videos() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[30px]"></TableHead>
-                    <TableHead className="w-[50px]">Thumb</TableHead>
-                    <TableHead>Title</TableHead>
-                    <TableHead>Channel</TableHead>
-                    <TableHead className="text-right">Views</TableHead>
-                    <TableHead className="text-right">Likes</TableHead>
-                    <TableHead className="text-right">Links</TableHead>
-                    <TableHead>Affiliates</TableHead>
-                    <TableHead>Published</TableHead>
-                    <TableHead className="w-[40px]"></TableHead>
+                     <TableHead className="w-[30px]"></TableHead>
+                     <TableHead className="w-[50px]">Thumb</TableHead>
+                     <TableHead>Title</TableHead>
+                     <TableHead>Channel</TableHead>
+                     <TableHead>Keywords</TableHead>
+                     <TableHead className="text-right">Views</TableHead>
+                     <TableHead className="text-right">Likes</TableHead>
+                     <TableHead>Links</TableHead>
+                     <TableHead>Affiliates</TableHead>
+                     <TableHead>Published</TableHead>
+                     <TableHead className="w-[40px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
