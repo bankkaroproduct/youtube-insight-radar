@@ -84,12 +84,12 @@ export function useKeywords() {
     fetchUserProfiles();
   }, [fetchCategories, fetchKeywords, fetchUserProfiles]);
 
-  const addKeyword = async (keyword: string, category: string, businessAim: string) => {
+  const addKeyword = async (keyword: string, category: string) => {
     if (!user) return;
     const { error } = await supabase.from("keywords_search_runs").insert({
       keyword,
       category,
-      business_aim: businessAim,
+      business_aim: "General",
       source: "manual",
       user_id: user.id,
     });

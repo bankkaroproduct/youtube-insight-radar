@@ -5,36 +5,44 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus } from "lucide-react";
-import type { ChannelCategory } from "@/hooks/useKeywords";
+
+const YOUTUBE_CATEGORIES = [
+  "Film & Animation",
+  "Autos & Vehicles",
+  "Music",
+  "Pets & Animals",
+  "Sports",
+  "Short Movies",
+  "Travel & Events",
+  "Gaming",
+  "Videoblogging",
+  "People & Blogs",
+  "Comedy",
+  "Entertainment",
+  "News & Politics",
+  "Howto & Style",
+  "Education",
+  "Science & Technology",
+  "Nonprofits & Activism",
+];
 
 interface Props {
-  categories: ChannelCategory[];
-  onAdd: (keyword: string, category: string, businessAim: string) => Promise<void>;
+  onAdd: (keyword: string, category: string) => Promise<void>;
 }
 
-export function AddKeywordDialog({ categories, onAdd }: Props) {
+export function AddKeywordDialog({ onAdd }: Props) {
   const [open, setOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [category, setCategory] = useState("");
-  const [businessAim, setBusinessAim] = useState("General");
   const [loading, setLoading] = useState(false);
-
-  const selectedCategory = categories.find((c) => c.name === category);
-
-  const handleCategoryChange = (val: string) => {
-    setCategory(val);
-    const cat = categories.find((c) => c.name === val);
-    if (cat) setBusinessAim(cat.business_aim);
-  };
 
   const handleSubmit = async () => {
     if (!keyword.trim() || !category) return;
     setLoading(true);
-    await onAdd(keyword.trim(), category, businessAim);
+    await onAdd(keyword.trim(), category);
     setLoading(false);
     setKeyword("");
     setCategory("");
-    setBusinessAim("General");
     setOpen(false);
   };
 
@@ -52,18 +60,14 @@ export function AddKeywordDialog({ categories, onAdd }: Props) {
           </div>
           <div>
             <Label>Category</Label>
-            <Select value={category} onValueChange={handleCategoryChange}>
+            <Select value={category} onValueChange={setCategory}>
               <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
               <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
+                {YOUTUBE_CATEGORIES.map((c) => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
-          <div>
-            <Label>Business Aim</Label>
-            <Input value={businessAim} onChange={(e) => setBusinessAim(e.target.value)} />
           </div>
           <Button onClick={handleSubmit} disabled={loading || !keyword.trim() || !category} className="w-full">
             {loading ? "Adding..." : "Add Keyword"}
