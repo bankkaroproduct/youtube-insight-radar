@@ -139,13 +139,21 @@ export default function Channels() {
                           variant="outline"
                           className={statusColors[ch.affiliate_status] || statusColors.NEUTRAL}
                         >
-                          {ch.affiliate_status}
+                          {ch.affiliate_status === "WITH_US" ? "With Us" :
+                           ch.affiliate_status === "COMPETITOR" ? "Competitor" :
+                           ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">
-                        {ch.affiliate_names?.length > 0
-                          ? ch.affiliate_names.join(", ")
-                          : "—"}
+                      <TableCell>
+                        {ch.affiliate_names?.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {ch.affiliate_names.map((name: string) => (
+                              <Badge key={name} variant="outline" className="text-xs">
+                                {name}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : "—"}
                       </TableCell>
                       <TableCell>
                         {ch.contact_email ? (

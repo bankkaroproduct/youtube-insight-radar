@@ -74,19 +74,19 @@ serve(async (req) => {
       else if (hasOwn) affiliateStatus = "WITH_US";
       else if (hasCompetitor) affiliateStatus = "COMPETITOR";
 
-      // Get competitor names
-      const competitorPatternIds = [...new Set(
+      // Get ALL affiliate names (OWN + COMPETITOR)
+      const allPatternIds = [...new Set(
         (links || [])
-          .filter(l => l.classification === "COMPETITOR" && l.matched_pattern_id)
+          .filter(l => l.matched_pattern_id && l.classification !== "NEUTRAL")
           .map(l => l.matched_pattern_id)
       )];
 
       let affiliateNames: string[] = [];
-      if (competitorPatternIds.length > 0) {
+      if (allPatternIds.length > 0) {
         const { data: patternData } = await supabase
           .from("affiliate_patterns")
           .select("name")
-          .in("id", competitorPatternIds);
+          .in("id", allPatternIds);
         affiliateNames = (patternData || []).map(p => p.name);
       }
 

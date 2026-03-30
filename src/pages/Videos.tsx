@@ -247,9 +247,9 @@ export default function Videos() {
                           <TableCell>
                             {affiliates.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {affiliates.map((name) => (
-                                  <Badge key={name} variant="outline" className="bg-red-500/15 text-red-700 border-red-500/30 text-xs">
-                                    {name}
+                                {affiliates.map((a) => (
+                                  <Badge key={a.name} variant="outline" className={`text-xs ${classificationColors[a.classification] || classificationColors.NEUTRAL}`}>
+                                    {a.name}
                                   </Badge>
                                 ))}
                               </div>

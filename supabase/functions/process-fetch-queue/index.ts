@@ -281,6 +281,21 @@ serve(async (req) => {
       console.error("Failed to trigger process-video-links:", e);
     }
 
+    // Auto-trigger compute-channel-stats for all discovered channels
+    try {
+      const fnUrl = `${supabaseUrl}/functions/v1/compute-channel-stats`;
+      await fetch(fnUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${serviceKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ channel_ids: [...allChannelIds] }),
+      });
+    } catch (e) {
+      console.error("Failed to trigger compute-channel-stats:", e);
+    }
+
     return new Response(JSON.stringify({ success: true, processed: pendingJobs.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
