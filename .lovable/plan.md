@@ -1,46 +1,28 @@
 
 
-# Fix Link Processing, Channel Stats & Affiliate Display
+# Fix: Wishlink Not Showing Red Tag
 
-## Root Causes Identified
+## Root Cause
 
-1. **Wishlink links not tracked**: `process-video-links` processes only **50 links per call** and is triggered only once. If a video has many links, some remain unprocessed. Need to loop until all are done.
+When `process-video-links` runs, it processes links with `unshortened_url IS NULL`. Once processed, links get `classification: "NEUTRAL"` because `wishlink.com` was auto-discovered as unconfirmed. **Even after you confirm Wishlink as COMPETITOR in the Affiliates tab, the existing `video_links` rows are never re-classified** — they keep their stale `NEUTRAL` classification.
 
-2. **Only 17 videos**: YouTube Search API can return fewer than `maxResults` depending on query relevance. Increasing `maxResults` to 50 (the API max) will help. Also, the `videos.list` detail call may return fewer items if some videoIds are invalid.
+## Fix
 
-3. **Channel Videos column = 0**: `compute-channel-stats` is never auto-triggered. The fetch pipeline calls `process-video-links` but nobody calls `compute-channel-stats` afterward. Need to chain it.
+### 1. Add re-classification step to `process-video-links`
+**File: `supabase/functions/process-video-links/index.ts`**
 
-4. **Affiliate tags missing on channels**: Same cause -- `compute-channel-stats` (which sets `affiliate_status` and `affiliate_names`) is never triggered automatically.
+After processing new links, add a second pass that re-classifies ALL already-processed links whose `matched_pattern_id` points to a now-confirmed pattern but whose `classification` doesn't match:
 
-5. **Affiliate names in Videos**: Currently only shows names for links with a `matched_pattern_id`. Should show the affiliate/domain name for ALL classified links (OWN, COMPETITOR, and NEUTRAL with matched patterns).
+```sql
+-- Pseudocode: For each confirmed pattern, update video_links 
+-- where matched_pattern_id = pattern.id AND classification != pattern.classification
+```
 
-## Plan
+This ensures that when you confirm "wishlink.com" as COMPETITOR, the next time `process-video-links` runs, all Wishlink links get reclassified to COMPETITOR (red tag).
 
-### 1. Fix `process-fetch-queue` edge function
-- Increase `maxResults` from `"30"` to `"50"` (YouTube API max)
-- After calling `process-video-links`, also auto-trigger `compute-channel-stats` so channel video counts, median stats, and affiliate status are populated immediately
-
-### 2. Fix `process-video-links` edge function
-- Add a loop: keep processing batches of 50 until no more unprocessed links remain (with a safety cap of 500 total)
-- After all links processed, auto-trigger `compute-channel-stats` for affected channels
-- This ensures ALL links (including wishlink.com) get unshortened and classified
-
-### 3. Update `compute-channel-stats` edge function
-- Include ALL affiliate names (OWN + COMPETITOR) in `affiliate_names`, not just competitors
-- This way channels show which affiliates they work with regardless of classification
-
-### 4. Update Videos page affiliate display
-- Show affiliate name tags with color-coded badges: green for OWN, red for COMPETITOR, gray for NEUTRAL
-- Currently hardcodes red for all affiliates
-
-### 5. Update Channels page
-- Show affiliate status as human-readable tags: "With Us", "Competitor", "Mixed", "Neutral" instead of raw enum values
-- Show affiliate_names as individual colored tags
+### 2. Also re-trigger `compute-channel-stats` after reclassification
+So channel affiliate statuses update too.
 
 ## Files to modify
-1. `supabase/functions/process-fetch-queue/index.ts` -- maxResults=50, auto-trigger compute-channel-stats
-2. `supabase/functions/process-video-links/index.ts` -- loop processing, trigger compute-channel-stats
-3. `supabase/functions/compute-channel-stats/index.ts` -- include all affiliate names
-4. `src/pages/Videos.tsx` -- color-coded affiliate tags
-5. `src/pages/Channels.tsx` -- human-readable status labels
+1. `supabase/functions/process-video-links/index.ts` — add bulk reclassification of already-processed links based on confirmed patterns
 
