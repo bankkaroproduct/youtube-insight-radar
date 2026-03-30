@@ -39,7 +39,7 @@ const discoveryItems = [
 
 const intelligenceItems = [
   { title: "Channels", url: "/channels", icon: Users },
-  { title: "Links", url: "/links", icon: Link },
+  { title: "Affiliates", url: "/links", icon: Link },
 ];
 
 

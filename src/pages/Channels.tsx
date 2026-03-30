@@ -1,13 +1,46 @@
+import { useChannels } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Users, RefreshCw, BarChart3 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return n.toString();
+}
+
+const statusColors: Record<string, string> = {
+  WITH_US: "bg-green-500/15 text-green-700 border-green-500/30",
+  COMPETITOR: "bg-red-500/15 text-red-700 border-red-500/30",
+  MIXED: "bg-orange-500/15 text-orange-700 border-orange-500/30",
+  NEUTRAL: "bg-muted text-muted-foreground",
+};
 
 export default function Channels() {
+  const { channels, isLoading, refresh, recomputeStats } = useChannels();
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-display font-bold">Channels</h1>
-        <p className="text-muted-foreground mt-1">Channel intelligence and analysis.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-display font-bold">Channels</h1>
+          <p className="text-muted-foreground mt-1">
+            {channels.length} channels discovered. Median stats skip top/bottom 5 videos.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
+            <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
+          </Button>
+          <Button variant="outline" size="sm" onClick={refresh}>
+            <RefreshCw className="h-4 w-4 mr-2" /> Refresh
+          </Button>
+        </div>
       </div>
+
       <Card>
         <CardHeader>
           <CardTitle className="font-display flex items-center gap-2">
@@ -15,9 +48,74 @@ export default function Channels() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="h-64 flex items-center justify-center text-muted-foreground">
-            Channel intelligence coming in Phase 5.
-          </div>
+          {isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : channels.length === 0 ? (
+            <div className="h-48 flex items-center justify-center text-muted-foreground">
+              No channels yet. Channels are auto-discovered when videos are fetched.
+            </div>
+          ) : (
+            <div className="overflow-auto max-h-[600px]">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Channel</TableHead>
+                    <TableHead className="text-right">Videos</TableHead>
+                    <TableHead className="text-right">Median Views</TableHead>
+                    <TableHead className="text-right">Median Likes</TableHead>
+                    <TableHead className="text-right">Median Comments</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Affiliates</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {channels.map((ch) => (
+                    <TableRow key={ch.id}>
+                      <TableCell className="font-medium">
+                        <a
+                          href={ch.channel_url || "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:underline"
+                        >
+                          {ch.channel_name}
+                        </a>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {ch.total_videos_fetched}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatNumber(ch.median_views)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatNumber(ch.median_likes)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatNumber(ch.median_comments)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={statusColors[ch.affiliate_status] || statusColors.NEUTRAL}
+                        >
+                          {ch.affiliate_status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">
+                        {ch.affiliate_names?.length > 0
+                          ? ch.affiliate_names.join(", ")
+                          : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
