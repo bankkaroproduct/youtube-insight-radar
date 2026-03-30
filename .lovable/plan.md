@@ -1,44 +1,59 @@
 
 
-# Add Competitor Name Dropdown to Affiliate Patterns
+# Fix RLS Error on User Roles + Build IP Whitelist
 
-## Problem
-Currently the "Display Name" field is free-text, leading to duplicates like "CashKaro" vs "Cashkaro" vs "cashkaro". Different domains belonging to the same competitor should share one canonical name.
+## Issue 1: RLS Error on `user_roles`
 
-## Solution
-Create a `competitor_names` database table to store canonical competitor names. Use a dropdown (with "Add new" option) instead of free-text input for the name field — both when adding new patterns and when confirming discovered patterns.
+The error "new row violates row-level security policy for table user_roles" occurs because the current user has "viewer" role (assigned by default on signup) and is trying to change roles. The RLS policies require `admin` or `super_admin` to insert/delete roles — but no one has admin yet.
 
-## Database
+### Fix
+1. **Migration**: Grant the current user (`shruti.kratik123@icloud.com`) the `super_admin` role so they can manage other users. Look up their `user_id` from `user_profiles` and insert into `user_roles`.
+2. **Also add an UPDATE policy** on `user_roles` for admins, since the current delete-then-insert pattern could fail mid-way. Better to have it covered.
 
-### New table: `competitor_names`
+## Issue 2: IP Whitelist Feature
+
+Build a real IP-based access control system so only whitelisted IPs can use the app.
+
+### Database: `ip_whitelist` table
 | Column | Type | Notes |
 |--------|------|-------|
 | id | uuid PK | auto |
-| name | text UNIQUE, NOT NULL | e.g. "CashKaro", "Wishlink" |
+| ip_address | text NOT NULL | e.g. "203.0.113.5" |
+| label | text | optional description |
+| is_active | boolean | default true |
+| created_by | uuid FK → auth.users | who added it |
 | created_at | timestamptz | auto |
 
-RLS: authenticated can read, admin can manage.
+- UNIQUE on `ip_address`
+- RLS: admin-only for all operations
 
-## Changes
+### Edge Function: `check-ip`
+- Called on app load to verify the user's IP is whitelisted
+- Gets client IP from request headers (`x-forwarded-for`)
+- Checks against `ip_whitelist` table
+- Returns `{ allowed: true/false, ip: "x.x.x.x" }`
 
-### 1. Migration
-- Create `competitor_names` table with RLS policies.
+### UI: `src/pages/settings/IpWhitelist.tsx`
+- Table of whitelisted IPs with label, status, added-by, date
+- **Add IP** button with dialog (IP address + optional label)
+- **"Add My Current IP"** quick button that auto-detects and adds the user's IP
+- Toggle active/inactive per IP
+- Delete IP button
+- Show current user's IP at the top for reference
 
-### 2. New hook: `src/hooks/useCompetitorNames.ts`
-- Fetch all names from `competitor_names`
-- `addName(name)` — insert new competitor name
-- Used by the Links page for dropdowns
+### Hook: `src/hooks/useIpWhitelist.ts`
+- CRUD operations on `ip_whitelist` table
+- `checkCurrentIp()` — calls the edge function
 
-### 3. Update `src/pages/Links.tsx`
-- **Add Pattern dialog**: Replace the "Display Name" `<Input>` with a `<Select>` dropdown populated from `competitor_names`. Show when classification is COMPETITOR or OWN. Include an "Add new..." option that shows an inline input to create a new name on the fly.
-- **Discovered Patterns tab**: When clicking "Competitor", show a small popover/select to pick the competitor name before confirming.
+### App Integration
+- On login, call `check-ip` edge function
+- If IP not whitelisted and whitelist has entries, show a blocked screen
+- If whitelist is empty, allow all (so the feature is opt-in)
 
-### 4. Update `src/hooks/useAffiliatePatterns.ts`
-- `confirmPattern` already accepts a classification + updates name — will also accept the selected competitor name.
-
-## Files
-1. **Migration SQL** — `competitor_names` table + RLS
-2. **`src/hooks/useCompetitorNames.ts`** — new hook
-3. **`src/pages/Links.tsx`** — dropdown for name selection in both tabs
-4. **`src/hooks/useAffiliatePatterns.ts`** — minor update to pass name on confirm
+## Files to Create/Modify
+1. **Migration SQL** — grant super_admin to current user, add UPDATE policy on user_roles, create `ip_whitelist` table + RLS
+2. **`supabase/functions/check-ip/index.ts`** — new edge function
+3. **`src/hooks/useIpWhitelist.ts`** — new hook
+4. **`src/pages/settings/IpWhitelist.tsx`** — full rewrite with management UI
+5. **`src/App.tsx`** — add IP check on auth
 
