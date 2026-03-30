@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useState, useMemo, useEffect } from "react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Download, Hash, CheckCircle2, Clock, Video, Link as LinkIcon } from "lucide-react";
 import { useKeywords } from "@/hooks/useKeywords";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { useNavigate } from "react-router-dom";
@@ -31,6 +32,22 @@ export default function KeywordTable() {
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const [tableFilters, setTableFilters] = useState({ keyword: "", category: "", source: "", priority: "", status: "" });
+  const [keywordStats, setKeywordStats] = useState<Map<string, { video_count: number; link_count: number }>>(new Map());
+
+  // Fetch real stats from the DB function
+  useEffect(() => {
+    async function fetchStats() {
+      const { data, error } = await supabase.rpc("get_keyword_stats");
+      if (!error && data) {
+        const map = new Map<string, { video_count: number; link_count: number }>();
+        for (const row of data as any[]) {
+          map.set(row.keyword_id, { video_count: Number(row.video_count), link_count: Number(row.link_count) });
+        }
+        setKeywordStats(map);
+      }
+    }
+    fetchStats();
+  }, [allKeywords]);
 
   const filtered = useMemo(() => {
     return allKeywords.filter((k) => {
@@ -43,18 +60,28 @@ export default function KeywordTable() {
     });
   }, [allKeywords, tableFilters]);
 
-  const stats = useMemo(() => ({
-    total: allKeywords.length,
-    completed: allKeywords.filter((k) => k.status === "completed").length,
-    pending: allKeywords.filter((k) => k.status === "pending").length,
-    videos: 0, // placeholder until video table integration
-    links: 0,
-  }), [allKeywords]);
+  const stats = useMemo(() => {
+    let totalVideos = 0;
+    let totalLinks = 0;
+    for (const s of keywordStats.values()) {
+      totalVideos += s.video_count;
+      totalLinks += s.link_count;
+    }
+    return {
+      total: allKeywords.length,
+      completed: allKeywords.filter((k) => k.status === "completed").length,
+      pending: allKeywords.filter((k) => k.status === "pending").length,
+      videos: totalVideos,
+      links: totalLinks,
+    };
+  }, [allKeywords, keywordStats]);
 
   const exportFiltered = () => {
     const data = filtered.map((k) => ({
       Keyword: k.keyword, Category: k.category, "Business Aim": k.business_aim,
       Source: k.source, Priority: k.priority || "", Status: k.status,
+      Videos: keywordStats.get(k.id)?.video_count ?? 0,
+      Links: keywordStats.get(k.id)?.link_count ?? 0,
       "Last Run": k.run_date,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -133,33 +160,36 @@ export default function KeywordTable() {
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">No keywords found.</TableCell></TableRow>
-            ) : filtered.map((k) => (
-              <TableRow key={k.id}>
-                <TableCell className="font-medium">{k.keyword}</TableCell>
-                <TableCell>{k.category}</TableCell>
-                <TableCell>{k.business_aim}</TableCell>
-                <TableCell>
-                  {k.source === "excel" ? <Badge variant="secondary">Excel</Badge> : <Badge variant="outline">Manual</Badge>}
-                </TableCell>
-                <TableCell>
-                  {k.priority ? (
-                    <Badge variant="outline" className={priorityColors[k.priority] || ""}>{k.priority}</Badge>
-                  ) : (
-                    <Badge variant="outline" className="bg-muted text-muted-foreground">—</Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Button variant="link" size="sm" className="p-0 h-auto" onClick={() => navigate(`/videos?keyword=${encodeURIComponent(k.keyword)}`)}>
-                    0
-                  </Button>
-                </TableCell>
-                <TableCell>0</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{k.run_date}</TableCell>
-                <TableCell>
-                  <Badge variant="outline" className={statusColors[k.status] || ""}>{k.status}</Badge>
-                </TableCell>
-              </TableRow>
-            ))}
+            ) : filtered.map((k) => {
+              const kStats = keywordStats.get(k.id);
+              return (
+                <TableRow key={k.id}>
+                  <TableCell className="font-medium">{k.keyword}</TableCell>
+                  <TableCell>{k.category}</TableCell>
+                  <TableCell>{k.business_aim}</TableCell>
+                  <TableCell>
+                    {k.source === "excel" ? <Badge variant="secondary">Excel</Badge> : <Badge variant="outline">Manual</Badge>}
+                  </TableCell>
+                  <TableCell>
+                    {k.priority ? (
+                      <Badge variant="outline" className={priorityColors[k.priority] || ""}>{k.priority}</Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-muted text-muted-foreground">—</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Button variant="link" size="sm" className="p-0 h-auto" onClick={() => navigate(`/videos?keyword=${encodeURIComponent(k.keyword)}`)}>
+                      {kStats?.video_count ?? 0}
+                    </Button>
+                  </TableCell>
+                  <TableCell>{kStats?.link_count ?? 0}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{k.run_date}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={statusColors[k.status] || ""}>{k.status}</Badge>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>

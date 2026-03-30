@@ -1,10 +1,11 @@
+import { useMemo } from "react";
 import { useChannels } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Users, RefreshCw, BarChart3, Mail } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function formatNumber(n: number): string {
@@ -23,6 +24,22 @@ const statusColors: Record<string, string> = {
 export default function Channels() {
   const { channels, isLoading, refresh, recomputeStats } = useChannels();
 
+  const stats = useMemo(() => ({
+    total: channels.length,
+    withUs: channels.filter((c: any) => c.affiliate_status === "WITH_US").length,
+    competitor: channels.filter((c: any) => c.affiliate_status === "COMPETITOR").length,
+    mixed: channels.filter((c: any) => c.affiliate_status === "MIXED").length,
+    neutral: channels.filter((c: any) => !c.affiliate_status || c.affiliate_status === "NEUTRAL").length,
+  }), [channels]);
+
+  const statCards = [
+    { label: "Total Channels", value: stats.total, icon: Users, color: "text-primary" },
+    { label: "With Us", value: stats.withUs, icon: CheckCircle2, color: "text-green-500" },
+    { label: "Competitor", value: stats.competitor, icon: AlertTriangle, color: "text-red-500" },
+    { label: "Mixed", value: stats.mixed, icon: Shuffle, color: "text-orange-500" },
+    { label: "Neutral", value: stats.neutral, icon: HelpCircle, color: "text-muted-foreground" },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -40,6 +57,23 @@ export default function Channels() {
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>
         </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {statCards.map((s) => (
+          <Card key={s.label}>
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-center gap-3">
+                <s.icon className={`h-8 w-8 ${s.color}`} />
+                <div>
+                  <p className="text-2xl font-bold">{s.value}</p>
+                  <p className="text-xs text-muted-foreground">{s.label}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       <Card>
