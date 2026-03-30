@@ -44,6 +44,36 @@ export type Database = {
         }
         Relationships: []
       }
+      affiliate_patterns: {
+        Row: {
+          classification: string
+          created_at: string
+          id: string
+          is_auto_discovered: boolean
+          is_confirmed: boolean
+          name: string
+          pattern: string
+        }
+        Insert: {
+          classification?: string
+          created_at?: string
+          id?: string
+          is_auto_discovered?: boolean
+          is_confirmed?: boolean
+          name: string
+          pattern: string
+        }
+        Update: {
+          classification?: string
+          created_at?: string
+          id?: string
+          is_auto_discovered?: boolean
+          is_confirmed?: boolean
+          name?: string
+          pattern?: string
+        }
+        Relationships: []
+      }
       channel_categories: {
         Row: {
           business_aim: string
@@ -62,6 +92,54 @@ export type Database = {
           description?: string | null
           id?: string
           name?: string
+        }
+        Relationships: []
+      }
+      channels: {
+        Row: {
+          affiliate_names: string[] | null
+          affiliate_status: string | null
+          channel_id: string
+          channel_name: string
+          channel_url: string | null
+          created_at: string
+          id: string
+          last_analyzed_at: string | null
+          median_comments: number | null
+          median_likes: number | null
+          median_views: number | null
+          subscriber_count: number | null
+          total_videos_fetched: number | null
+        }
+        Insert: {
+          affiliate_names?: string[] | null
+          affiliate_status?: string | null
+          channel_id: string
+          channel_name: string
+          channel_url?: string | null
+          created_at?: string
+          id?: string
+          last_analyzed_at?: string | null
+          median_comments?: number | null
+          median_likes?: number | null
+          median_views?: number | null
+          subscriber_count?: number | null
+          total_videos_fetched?: number | null
+        }
+        Update: {
+          affiliate_names?: string[] | null
+          affiliate_status?: string | null
+          channel_id?: string
+          channel_name?: string
+          channel_url?: string | null
+          created_at?: string
+          id?: string
+          last_analyzed_at?: string | null
+          median_comments?: number | null
+          median_likes?: number | null
+          median_views?: number | null
+          subscriber_count?: number | null
+          total_videos_fetched?: number | null
         }
         Relationships: []
       }
@@ -309,6 +387,110 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      video_links: {
+        Row: {
+          classification: string | null
+          created_at: string
+          domain: string | null
+          id: string
+          matched_pattern_id: string | null
+          original_url: string
+          unshortened_url: string | null
+          video_id: string
+        }
+        Insert: {
+          classification?: string | null
+          created_at?: string
+          domain?: string | null
+          id?: string
+          matched_pattern_id?: string | null
+          original_url: string
+          unshortened_url?: string | null
+          video_id: string
+        }
+        Update: {
+          classification?: string | null
+          created_at?: string
+          domain?: string | null
+          id?: string
+          matched_pattern_id?: string | null
+          original_url?: string
+          unshortened_url?: string | null
+          video_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "video_links_matched_pattern_id_fkey"
+            columns: ["matched_pattern_id"]
+            isOneToOne: false
+            referencedRelation: "affiliate_patterns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "video_links_video_id_fkey"
+            columns: ["video_id"]
+            isOneToOne: false
+            referencedRelation: "videos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      videos: {
+        Row: {
+          channel_id: string
+          channel_name: string
+          comment_count: number | null
+          created_at: string
+          description: string | null
+          id: string
+          keyword_id: string | null
+          like_count: number | null
+          published_at: string | null
+          thumbnail_url: string | null
+          title: string
+          video_id: string
+          view_count: number | null
+        }
+        Insert: {
+          channel_id: string
+          channel_name: string
+          comment_count?: number | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          keyword_id?: string | null
+          like_count?: number | null
+          published_at?: string | null
+          thumbnail_url?: string | null
+          title: string
+          video_id: string
+          view_count?: number | null
+        }
+        Update: {
+          channel_id?: string
+          channel_name?: string
+          comment_count?: number | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          keyword_id?: string | null
+          like_count?: number | null
+          published_at?: string | null
+          thumbnail_url?: string | null
+          title?: string
+          video_id?: string
+          view_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "videos_keyword_id_fkey"
+            columns: ["keyword_id"]
+            isOneToOne: false
+            referencedRelation: "keywords_search_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       youtube_api_keys: {
         Row: {
