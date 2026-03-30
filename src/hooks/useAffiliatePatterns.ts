@@ -47,10 +47,12 @@ export function useAffiliatePatterns() {
     }
   };
 
-  const confirmPattern = async (id: string, classification: string) => {
+  const confirmPattern = async (id: string, classification: string, name?: string) => {
+    const updates: Record<string, any> = { is_confirmed: true, classification };
+    if (name) updates.name = name;
     const { error } = await supabase
       .from("affiliate_patterns")
-      .update({ is_confirmed: true, classification })
+      .update(updates)
       .eq("id", id);
     if (error) {
       toast.error("Failed to confirm pattern");
