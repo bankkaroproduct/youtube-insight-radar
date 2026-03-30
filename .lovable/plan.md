@@ -1,29 +1,41 @@
 
 
-# Fix Cleared Jobs Reappearing & Videos Not Fetching
+# Fix Missing Data Across Videos, Keywords, and Channels Pages
 
-## Problem 1: Cleared finished jobs reappear on tab switch
-The "Clear Finished" button only stores cleared IDs in React state (`useState`). When you navigate away and come back, the component remounts, the state resets to empty, and `fetchJobs` re-fetches all recent jobs from the database -- including the ones you cleared.
+## Issues Identified
 
-**Fix**: Change `clearFinished` to actually delete the completed/failed jobs from the database instead of just hiding them in memory.
+1. **Videos page**: Title truncated, description not shown, no affiliate names, no extracted links displayed
+2. **Keywords table**: Video count and link count come from `fetch_jobs` (temporary) instead of actual `videos`/`video_links` tables. The `get_keyword_stats()` RPC already exists but is unused.
+3. **Channels page**: Missing channel description and contact info columns. The `channels` table itself lacks `description` and `contact_info` columns.
 
-### File: `src/hooks/useFetchJobs.ts`
-- Remove `clearedIds` state entirely
-- Update `clearFinished` to delete completed/failed jobs from the `fetch_jobs` table, then re-fetch
+## Plan
 
-## Problem 2: Videos are not being fetched
-The `queue-fetch-jobs` edge function only **inserts** rows into the `fetch_jobs` table with status "pending". But nothing ever **calls** `process-fetch-queue` to actually process those jobs. The job just sits there as "pending" forever.
+### 1. Videos page — show full details (`src/pages/Videos.tsx`, `src/hooks/useVideos.ts`)
+- Add an expandable row or detail panel showing: full title, description, extracted links (from `video_links` table), affiliate classification per link
+- Join `video_links` data: fetch video_links with classification and matched pattern name
+- Show affiliate badge (OWN/COMPETITOR/NEUTRAL) next to each link
+- Remove `truncate` from title so it wraps properly
 
-**Fix**: After queuing jobs, automatically invoke `process-fetch-queue` to start processing them.
+### 2. Keywords table — show real video & link counts (`src/hooks/useKeywords.ts`, `src/components/keywords/KeywordsTable.tsx`)
+- Call the existing `get_keyword_stats()` RPC to get per-keyword video_count and link_count
+- Display these counts in the Keywords table instead of relying on fetch_jobs data
+- Remove "Business Aim" column (since we removed the field from the add dialog)
 
-### File: `src/pages/Keywords.tsx`
-- After successfully calling `queue-fetch-jobs`, immediately invoke `process-fetch-queue` to trigger actual YouTube API fetching
+### 3. Channels page — add description & contact info (`src/pages/Channels.tsx`)
+- **DB migration**: Add `description` and `contact_email` columns to `channels` table
+- Update `process-fetch-queue` edge function to fetch channel details from YouTube Channels API (`part=snippet,statistics,brandingSettings`) and store description + contact email
+- Display these new columns in the Channels table
 
-### File: `supabase/functions/queue-fetch-jobs/index.ts` (alternative/belt-and-suspenders)
-- After inserting jobs, call `process-fetch-queue` from within the edge function itself so processing is guaranteed to start
+### 4. Update process-fetch-queue to fetch channel details (`supabase/functions/process-fetch-queue/index.ts`)
+- After upserting channels, batch-fetch channel details using YouTube Channels API
+- Store `subscriber_count`, `description`, `contact_email` from the channel response
 
-## Summary of changes
-1. **`src/hooks/useFetchJobs.ts`** -- delete finished jobs from DB in `clearFinished`
-2. **`src/pages/Keywords.tsx`** -- invoke `process-fetch-queue` after queuing jobs
-3. **`supabase/functions/queue-fetch-jobs/index.ts`** -- also trigger `process-fetch-queue` after inserting jobs as a backup
+## Files to modify
+1. `src/pages/Videos.tsx` — expandable rows with description, links, affiliates
+2. `src/hooks/useVideos.ts` — join video_links data
+3. `src/hooks/useKeywords.ts` — call `get_keyword_stats()` RPC
+4. `src/components/keywords/KeywordsTable.tsx` — show real counts, remove Business Aim column
+5. `src/pages/Channels.tsx` — add description and contact columns
+6. **DB migration** — add `description text`, `contact_email text` to `channels` table
+7. `supabase/functions/process-fetch-queue/index.ts` — fetch channel details from YouTube API
 
