@@ -21,7 +21,7 @@ export default function Keywords() {
   const {
     keywords, categories, filters, setFilters, clearFilters,
     isLoading, addKeyword, addKeywordsBulk, deleteKeyword,
-    refresh, userProfiles, sourceFiles,
+    refresh, userProfiles, sourceFiles, keywordStats,
   } = useKeywords();
   const { jobs, killAll, clearFinished } = useFetchJobs();
 
