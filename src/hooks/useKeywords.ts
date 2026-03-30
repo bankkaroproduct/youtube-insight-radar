@@ -19,6 +19,12 @@ export interface KeywordSearchRun {
   created_at: string;
 }
 
+export interface KeywordStats {
+  keyword_id: string;
+  video_count: number;
+  link_count: number;
+}
+
 export interface ChannelCategory {
   id: string;
   name: string;
@@ -53,6 +59,7 @@ export function useKeywords() {
   const [filters, setFilters] = useState<KeywordFilters>(defaultFilters);
   const [isLoading, setIsLoading] = useState(true);
   const [userProfiles, setUserProfiles] = useState<{ user_id: string; full_name: string | null }[]>([]);
+  const [keywordStats, setKeywordStats] = useState<Map<string, KeywordStats>>(new Map());
 
   const fetchCategories = useCallback(async () => {
     const { data } = await supabase.from("channel_categories").select("*").order("name");
@@ -78,20 +85,28 @@ export function useKeywords() {
     if (data) setUserProfiles(data);
   }, []);
 
+  const fetchKeywordStats = useCallback(async () => {
+    const { data, error } = await supabase.rpc("get_keyword_stats");
+    if (!error && data) {
+      const map = new Map<string, KeywordStats>();
+      for (const row of data) {
+        map.set(row.keyword_id, { keyword_id: row.keyword_id, video_count: Number(row.video_count), link_count: Number(row.link_count) });
+      }
+      setKeywordStats(map);
+    }
+  }, []);
+
   useEffect(() => {
     fetchCategories();
     fetchKeywords();
     fetchUserProfiles();
-  }, [fetchCategories, fetchKeywords, fetchUserProfiles]);
+    fetchKeywordStats();
+  }, [fetchCategories, fetchKeywords, fetchUserProfiles, fetchKeywordStats]);
 
   const addKeyword = async (keyword: string, category: string) => {
     if (!user) return;
     const { error } = await supabase.from("keywords_search_runs").insert({
-      keyword,
-      category,
-      business_aim: "General",
-      source: "manual",
-      user_id: user.id,
+      keyword, category, business_aim: "General", source: "manual", user_id: user.id,
     });
     if (error) {
       toast.error("Failed to add keyword: " + error.message);
@@ -104,12 +119,8 @@ export function useKeywords() {
   const addKeywordsBulk = async (rows: { keyword: string; category: string; business_aim: string }[], sourceName: string) => {
     if (!user) return;
     const inserts = rows.map((r) => ({
-      keyword: r.keyword,
-      category: r.category,
-      business_aim: r.business_aim || "General",
-      source: "excel",
-      source_name: sourceName,
-      user_id: user.id,
+      keyword: r.keyword, category: r.category, business_aim: r.business_aim || "General",
+      source: "excel", source_name: sourceName, user_id: user.id,
     }));
     const { error } = await supabase.from("keywords_search_runs").insert(inserts);
     if (error) {
@@ -162,8 +173,9 @@ export function useKeywords() {
     addKeyword,
     addKeywordsBulk,
     deleteKeyword,
-    refresh: fetchKeywords,
+    refresh: () => { fetchKeywords(); fetchKeywordStats(); },
     userProfiles,
     sourceFiles,
+    keywordStats,
   };
 }

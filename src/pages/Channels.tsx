@@ -3,7 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Users, RefreshCw, BarChart3 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Users, RefreshCw, BarChart3, Mail } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function formatNumber(n: number): string {
@@ -64,16 +65,18 @@ export default function Channels() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Channel</TableHead>
+                    <TableHead className="text-right">Subscribers</TableHead>
                     <TableHead className="text-right">Videos</TableHead>
                     <TableHead className="text-right">Median Views</TableHead>
                     <TableHead className="text-right">Median Likes</TableHead>
-                    <TableHead className="text-right">Median Comments</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Affiliates</TableHead>
+                    <TableHead>Contact</TableHead>
+                    <TableHead>Description</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {channels.map((ch) => (
+                  {channels.map((ch: any) => (
                     <TableRow key={ch.id}>
                       <TableCell className="font-medium">
                         <a
@@ -86,6 +89,9 @@ export default function Channels() {
                         </a>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
+                        {ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
                         {ch.total_videos_fetched}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -93,9 +99,6 @@ export default function Channels() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {formatNumber(ch.median_likes)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatNumber(ch.median_comments)}
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -109,6 +112,30 @@ export default function Channels() {
                         {ch.affiliate_names?.length > 0
                           ? ch.affiliate_names.join(", ")
                           : "—"}
+                      </TableCell>
+                      <TableCell>
+                        {ch.contact_email ? (
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1">
+                                <Mail className="h-3 w-3" /> Email
+                              </a>
+                            </TooltipTrigger>
+                            <TooltipContent>{ch.contact_email}</TooltipContent>
+                          </Tooltip>
+                        ) : "—"}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground max-w-[250px]">
+                        {ch.description ? (
+                          <Tooltip>
+                            <TooltipTrigger className="truncate block max-w-[250px]">
+                              {ch.description.substring(0, 60)}…
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-sm whitespace-pre-wrap">
+                              {ch.description}
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : "—"}
                       </TableCell>
                     </TableRow>
                   ))}
