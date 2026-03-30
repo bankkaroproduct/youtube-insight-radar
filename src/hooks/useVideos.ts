@@ -15,6 +15,7 @@ export interface VideoLink {
 export interface VideoKeyword {
   id: string;
   keyword: string;
+  search_rank: number | null;
 }
 
 export interface Video {
@@ -33,6 +34,7 @@ export interface Video {
   created_at: string;
   links: VideoLink[];
   keywords: VideoKeyword[];
+  best_rank: number | null;
 }
 
 export function useVideos() {
@@ -64,16 +66,14 @@ export function useVideos() {
 
     const videoIds = videoRows.map((v) => v.id);
 
-    // Fetch links, video_keywords, and patterns in parallel
     const [linksResult, vkResult] = await Promise.all([
       supabase.from("video_links").select("*").in("video_id", videoIds),
-      supabase.from("video_keywords").select("video_id, keyword_id").in("video_id", videoIds),
+      supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds),
     ]);
 
     const linksData = (linksResult.data ?? []) as any[];
     const vkData = (vkResult.data ?? []) as any[];
 
-    // Fetch affiliate pattern names
     const patternIds = [...new Set(linksData.map((l) => l.matched_pattern_id).filter(Boolean))];
     let patternsMap = new Map<string, string>();
     if (patternIds.length > 0) {
@@ -86,7 +86,6 @@ export function useVideos() {
       }
     }
 
-    // Fetch keyword names for all referenced keyword_ids
     const keywordIds = [...new Set(vkData.map((vk) => vk.keyword_id).filter(Boolean))];
     let keywordsMap = new Map<string, string>();
     if (keywordIds.length > 0) {
@@ -99,7 +98,6 @@ export function useVideos() {
       }
     }
 
-    // Build links by video
     const linksByVideo = new Map<string, VideoLink[]>();
     for (const link of linksData) {
       const list = linksByVideo.get(link.video_id) || [];
@@ -112,15 +110,23 @@ export function useVideos() {
       linksByVideo.set(link.video_id, list);
     }
 
-    // Build keywords by video
     const keywordsByVideo = new Map<string, VideoKeyword[]>();
+    const bestRankByVideo = new Map<string, number>();
     for (const vk of vkData) {
       const list = keywordsByVideo.get(vk.video_id) || [];
       const kwName = keywordsMap.get(vk.keyword_id);
       if (kwName) {
-        list.push({ id: vk.keyword_id, keyword: kwName });
+        list.push({ id: vk.keyword_id, keyword: kwName, search_rank: vk.search_rank ?? null });
       }
       keywordsByVideo.set(vk.video_id, list);
+
+      // Track best (lowest) rank
+      if (vk.search_rank != null) {
+        const current = bestRankByVideo.get(vk.video_id);
+        if (current == null || vk.search_rank < current) {
+          bestRankByVideo.set(vk.video_id, vk.search_rank);
+        }
+      }
     }
 
     setVideos(
@@ -131,6 +137,7 @@ export function useVideos() {
         comment_count: v.comment_count ?? 0,
         links: linksByVideo.get(v.id) || [],
         keywords: keywordsByVideo.get(v.id) || [],
+        best_rank: bestRankByVideo.get(v.id) ?? null,
       }))
     );
     setIsLoading(false);

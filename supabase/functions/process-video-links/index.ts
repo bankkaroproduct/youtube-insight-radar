@@ -91,7 +91,6 @@ serve(async (req) => {
 
         const domain = extractDomain(finalUrl);
 
-        // Match against ALL patterns (confirmed get their classification, unconfirmed stay NEUTRAL)
         let classification = "NEUTRAL";
         let matchedPatternId = null;
 
@@ -103,7 +102,6 @@ serve(async (req) => {
           }
         }
 
-        // Auto-discover ANY new domain (not just tracking params)
         if (!matchedPatternId && domain && !SKIP_DOMAINS.has(domain)) {
           const { data: existing } = await supabase
             .from("affiliate_patterns")
@@ -141,7 +139,6 @@ serve(async (req) => {
           matched_pattern_id: matchedPatternId,
         }).eq("id", link.id);
 
-        // Track channel for stats recomputation
         const { data: videoData } = await supabase
           .from("videos")
           .select("channel_id")
@@ -153,7 +150,7 @@ serve(async (req) => {
       }
     }
 
-    // Re-classify already-processed links where pattern confirmation changed
+    // Step 2: Re-classify already-processed links where pattern confirmation changed
     const confirmedPatterns = allPatterns.filter(p => p.is_confirmed);
     for (const p of confirmedPatterns) {
       const { data: staleLinks } = await supabase
@@ -170,13 +167,60 @@ serve(async (req) => {
           .update({ classification: p.classification })
           .in("id", staleIds);
 
-        // Track affected channels for stats recomputation
         const staleVideoIds = [...new Set(staleLinks.map(l => l.video_id))];
         for (const vid of staleVideoIds) {
           const { data: vd } = await supabase
             .from("videos")
             .select("channel_id")
             .eq("id", vid)
+            .single();
+          if (vd) affectedChannels.add(vd.channel_id);
+        }
+      }
+    }
+
+    // Step 3: NEW - Match previously-unmatched links by domain against known patterns
+    // This fixes links that were processed BEFORE their pattern existed
+    const { data: unmatchedLinks } = await supabase
+      .from("video_links")
+      .select("id, domain, video_id")
+      .is("matched_pattern_id", null)
+      .not("domain", "is", null)
+      .not("unshortened_url", "is", null)
+      .limit(2000);
+
+    if (unmatchedLinks && unmatchedLinks.length > 0) {
+      // Build a domain->pattern lookup
+      const domainPatternMap = new Map<string, { id: string; classification: string; is_confirmed: boolean }>();
+      for (const p of allPatterns) {
+        domainPatternMap.set(p.pattern, p);
+      }
+
+      for (const link of unmatchedLinks) {
+        if (!link.domain || SKIP_DOMAINS.has(link.domain)) continue;
+
+        // Try exact match first, then substring
+        let matched = domainPatternMap.get(link.domain);
+        if (!matched) {
+          for (const p of allPatterns) {
+            if (link.domain.includes(p.pattern) || p.pattern.includes(link.domain)) {
+              matched = p;
+              break;
+            }
+          }
+        }
+
+        if (matched) {
+          const classification = matched.is_confirmed ? matched.classification : "NEUTRAL";
+          await supabase.from("video_links").update({
+            matched_pattern_id: matched.id,
+            classification,
+          }).eq("id", link.id);
+
+          const { data: vd } = await supabase
+            .from("videos")
+            .select("channel_id")
+            .eq("id", link.video_id)
             .single();
           if (vd) affectedChannels.add(vd.channel_id);
         }

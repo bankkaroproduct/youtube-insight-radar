@@ -16,6 +16,9 @@ export interface Channel {
   affiliate_names: string[];
   last_analyzed_at: string | null;
   created_at: string;
+  description: string | null;
+  contact_email: string | null;
+  youtube_category: string | null;
 }
 
 export function useChannels() {
