@@ -153,6 +153,36 @@ serve(async (req) => {
       }
     }
 
+    // Re-classify already-processed links where pattern confirmation changed
+    const confirmedPatterns = allPatterns.filter(p => p.is_confirmed);
+    for (const p of confirmedPatterns) {
+      const { data: staleLinks } = await supabase
+        .from("video_links")
+        .select("id, video_id")
+        .eq("matched_pattern_id", p.id)
+        .neq("classification", p.classification)
+        .limit(1000);
+
+      if (staleLinks && staleLinks.length > 0) {
+        const staleIds = staleLinks.map(l => l.id);
+        await supabase
+          .from("video_links")
+          .update({ classification: p.classification })
+          .in("id", staleIds);
+
+        // Track affected channels for stats recomputation
+        const staleVideoIds = [...new Set(staleLinks.map(l => l.video_id))];
+        for (const vid of staleVideoIds) {
+          const { data: vd } = await supabase
+            .from("videos")
+            .select("channel_id")
+            .eq("id", vid)
+            .single();
+          if (vd) affectedChannels.add(vd.channel_id);
+        }
+      }
+    }
+
     // Auto-trigger compute-channel-stats for affected channels
     if (affectedChannels.size > 0) {
       try {
