@@ -20,12 +20,20 @@ const classificationColors: Record<string, string> = {
   NEUTRAL: "bg-muted text-muted-foreground border-border",
 };
 
-function getUniqueAffiliates(video: Video): string[] {
-  const names = new Set<string>();
+interface AffiliateInfo {
+  name: string;
+  classification: string;
+}
+
+function getUniqueAffiliates(video: Video): AffiliateInfo[] {
+  const map = new Map<string, string>();
   for (const link of video.links) {
-    if (link.affiliate_name) names.add(link.affiliate_name);
+    const name = link.affiliate_name || link.domain;
+    if (name && !map.has(name)) {
+      map.set(name, link.classification || "NEUTRAL");
+    }
   }
-  return [...names];
+  return [...map.entries()].map(([name, classification]) => ({ name, classification }));
 }
 
 function VideoDetailRow({ video }: { video: Video }) {
