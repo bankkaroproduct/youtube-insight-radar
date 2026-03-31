@@ -188,24 +188,6 @@ export type Database = {
         }
         Relationships: []
       }
-      competitor_names: {
-        Row: {
-          created_at: string
-          id: string
-          name: string
-        }
-        Insert: {
-          created_at?: string
-          id?: string
-          name: string
-        }
-        Update: {
-          created_at?: string
-          id?: string
-          name?: string
-        }
-        Relationships: []
-      }
       fetch_jobs: {
         Row: {
           completed_at: string | null

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAffiliatePatterns, PatternType } from "@/hooks/useAffiliatePatterns";
-import { useCompetitorNames } from "@/hooks/useCompetitorNames";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -147,10 +147,14 @@ function PatternTable({
 
 export default function Links() {
   const {
-    platformPatterns, retailerPatterns, discoveredPatterns, isLoading,
+    platformPatterns, retailerPatterns, discoveredPatterns, uniqueNames, isLoading,
     addPattern, confirmPattern, deletePattern, processLinks,
   } = useAffiliatePatterns();
-  const { names, addName } = useCompetitorNames();
+
+  const addName = async (name: string) => {
+    // Names are derived from patterns; adding a pattern with this name will include it
+  };
+  
 
   const [open, setOpen] = useState(false);
   const [newPattern, setNewPattern] = useState("");
@@ -198,7 +202,7 @@ export default function Links() {
                 </div>
                 <div>
                   <Label>Display Name</Label>
-                  <NameDropdown names={names} value={newName} onChange={setNewName} onAddNew={addName} />
+                  <NameDropdown names={uniqueNames} value={newName} onChange={setNewName} onAddNew={addName} />
                 </div>
                 <div>
                   <Label>Classification</Label>
@@ -318,11 +322,11 @@ export default function Links() {
                           </TableCell>
                           <TableCell className="flex gap-1">
                             <DiscoveredNamePicker
-                              names={names} onAddNew={addName} classification="OWN" label="Ours" className="text-green-700"
+                              names={uniqueNames} onAddNew={addName} classification="OWN" label="Ours" className="text-green-700"
                               onConfirm={(name) => confirmPattern(p.id, "OWN", name, selectedType)}
                             />
                             <DiscoveredNamePicker
-                              names={names} onAddNew={addName} classification="COMPETITOR" label="Competitor" className="text-red-700"
+                              names={uniqueNames} onAddNew={addName} classification="COMPETITOR" label="Competitor" className="text-red-700"
                               onConfirm={(name) => confirmPattern(p.id, "COMPETITOR", name, selectedType)}
                             />
                             <Button variant="outline" size="sm" onClick={() => confirmPattern(p.id, "NEUTRAL", undefined, selectedType)}>

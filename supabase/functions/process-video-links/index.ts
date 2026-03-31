@@ -129,15 +129,32 @@ serve(async (req) => {
     const allPatterns: Pattern[] = (patterns || []) as Pattern[];
 
     // Build dynamic lookup maps from DB patterns (confirmed ones take priority)
+    const affiliatePlatformDomains = new Set<string>();
     for (const p of allPatterns) {
       if (!p.is_confirmed || !p.name) continue;
       const pType = (p.type || "").toLowerCase();
-      if (pType === "affiliate_platform" && !AFFILIATE_SHORT_DOMAINS[p.pattern]) {
-        AFFILIATE_SHORT_DOMAINS[p.pattern] = p.name;
+      if (pType === "affiliate_platform") {
+        if (!AFFILIATE_SHORT_DOMAINS[p.pattern]) {
+          AFFILIATE_SHORT_DOMAINS[p.pattern] = p.name;
+        }
+        affiliatePlatformDomains.add(p.pattern);
       }
       if (pType === "retailer" && !RETAILER_DOMAINS[p.pattern]) {
         RETAILER_DOMAINS[p.pattern] = p.name;
       }
+    }
+    // Also add hardcoded affiliate domains
+    for (const d of Object.keys(AFFILIATE_SHORT_DOMAINS)) {
+      affiliatePlatformDomains.add(d);
+    }
+
+    // A URL needs unshortening if domain is a known shortener OR a known affiliate platform
+    function needsUnshortening(domain: string): boolean {
+      if (KNOWN_SHORTENERS.some(s => domain.includes(s))) return true;
+      for (const apDomain of affiliatePlatformDomains) {
+        if (domain.includes(apDomain)) return true;
+      }
+      return false;
     }
 
     const affectedChannels = new Set<string>();
@@ -167,7 +184,7 @@ serve(async (req) => {
       const normalLinks: typeof links = [];
       for (const link of links) {
         const domain = extractDomain(link.original_url);
-        if (KNOWN_SHORTENERS.some(s => domain.includes(s))) {
+        if (needsUnshortening(domain)) {
           shortenedLinks.push(link);
         } else {
           normalLinks.push(link);
@@ -213,28 +230,28 @@ serve(async (req) => {
         const unshortenedDomain = extractDomain(link.finalUrl);
         const isShortened = originalDomain !== unshortenedDomain;
 
-        // --- New: populate text columns ---
-        const affiliatePlatformName = isShortened ? lookupAffiliatePlatform(originalDomain) : null;
-        const retailerLookup = lookupRetailer(unshortenedDomain);
-        // Also check if direct (non-shortened) URL is a retailer
-        const directRetailerLookup = !isShortened ? lookupRetailer(originalDomain) : null;
+        // Platform identified from original_url domain
+        const affiliatePlatformName = lookupAffiliatePlatform(originalDomain);
+        // Retailer identified from unshortened_url domain (resolved destination)
+        const retailerLookup = isShortened ? lookupRetailer(unshortenedDomain) : lookupRetailer(originalDomain);
 
         let linkType: string | null = null;
         let resolvedRetailer: string | null = null;
         let resolvedRetailerDomain: string | null = null;
 
-        if (isShortened && retailerLookup) {
-          // Shortened URL resolved to a known retailer
-          linkType = affiliatePlatformName ? "both" : "affiliate";
+        if (affiliatePlatformName && isShortened) {
+          // Original URL is an affiliate platform
+          linkType = "affiliate";
+          if (retailerLookup) {
+            linkType = "both";
+            resolvedRetailer = retailerLookup.name;
+            resolvedRetailerDomain = retailerLookup.domain;
+          }
+        } else if (retailerLookup) {
+          // Direct retailer link
+          linkType = "retailer";
           resolvedRetailer = retailerLookup.name;
           resolvedRetailerDomain = retailerLookup.domain;
-        } else if (isShortened && !retailerLookup) {
-          linkType = "affiliate";
-        } else if (!isShortened && directRetailerLookup) {
-          // Direct retailer link (not shortened)
-          linkType = "retailer";
-          resolvedRetailer = directRetailerLookup.name;
-          resolvedRetailerDomain = directRetailerLookup.domain;
         }
 
         // --- Pattern matching (existing logic) ---
