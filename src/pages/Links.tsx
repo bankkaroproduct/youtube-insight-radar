@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
 import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe } from "lucide-react";
+import { BulkUploadDialog } from "@/components/links/BulkUploadDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const classColors: Record<string, string> = {
@@ -214,6 +215,11 @@ export default function Links() {
               </div>
             </DialogContent>
           </Dialog>
+          <BulkUploadDialog onUpload={async (rows) => {
+            for (const r of rows) {
+              await addPattern(r.pattern, r.name, r.classification, r.type);
+            }
+          }} />
           <Button variant="outline" size="sm" onClick={processLinks}>
             <Zap className="h-4 w-4 mr-2" /> Process Links
           </Button>
