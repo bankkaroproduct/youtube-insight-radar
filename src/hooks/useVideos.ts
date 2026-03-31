@@ -87,14 +87,14 @@ export function useVideos() {
       if (l.retailer_pattern_id) allPatternIds.add(l.retailer_pattern_id);
     }
 
-    let patternsMap = new Map<string, string>();
+    let patternsMap = new Map<string, { name: string; type: string }>();
     if (allPatternIds.size > 0) {
       const { data: patternsData } = await supabase
         .from("affiliate_patterns")
-        .select("id, name")
+        .select("id, name, type")
         .in("id", [...allPatternIds]);
       for (const p of (patternsData ?? []) as any[]) {
-        patternsMap.set(p.id, p.name);
+        patternsMap.set(p.id, { name: p.name, type: (p.type || "").toLowerCase() });
       }
     }
 
