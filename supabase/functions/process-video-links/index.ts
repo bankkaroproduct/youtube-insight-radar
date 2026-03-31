@@ -124,17 +124,18 @@ serve(async (req) => {
 
     const { data: patterns } = await supabase
       .from("affiliate_patterns")
-      .select("id, pattern, classification, is_confirmed, type");
+      .select("id, pattern, name, classification, is_confirmed, type");
 
     const allPatterns: Pattern[] = (patterns || []) as Pattern[];
 
     // Build dynamic lookup maps from DB patterns (confirmed ones take priority)
     for (const p of allPatterns) {
-      if (!p.is_confirmed) continue;
-      if (p.type === "affiliate_platform" && !AFFILIATE_SHORT_DOMAINS[p.pattern]) {
+      if (!p.is_confirmed || !p.name) continue;
+      const pType = (p.type || "").toLowerCase();
+      if (pType === "affiliate_platform" && !AFFILIATE_SHORT_DOMAINS[p.pattern]) {
         AFFILIATE_SHORT_DOMAINS[p.pattern] = p.name;
       }
-      if (p.type === "retailer" && !RETAILER_DOMAINS[p.pattern]) {
+      if (pType === "retailer" && !RETAILER_DOMAINS[p.pattern]) {
         RETAILER_DOMAINS[p.pattern] = p.name;
       }
     }

@@ -107,8 +107,8 @@ export function useAffiliatePatterns() {
 
   const confirmedPatterns = patterns.filter(p => p.is_confirmed);
   const discoveredPatterns = patterns.filter(p => !p.is_confirmed);
-  const platformPatterns = confirmedPatterns.filter(p => p.type === "affiliate_platform");
-  const retailerPatterns = confirmedPatterns.filter(p => p.type === "retailer");
+  const platformPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "affiliate_platform");
+  const retailerPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "retailer");
 
   return {
     patterns,
