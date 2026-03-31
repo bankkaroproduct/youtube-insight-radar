@@ -120,9 +120,7 @@ export type Database = {
           median_views: number | null
           platform_video_counts: Json | null
           relevance_reasoning: string | null
-          retailer_direct_counts: Json | null
           retailer_names: string[] | null
-          retailer_via_affiliate_counts: Json | null
           retailer_video_counts: Json | null
           subscriber_count: number | null
           total_videos_fetched: number | null
@@ -149,9 +147,7 @@ export type Database = {
           median_views?: number | null
           platform_video_counts?: Json | null
           relevance_reasoning?: string | null
-          retailer_direct_counts?: Json | null
           retailer_names?: string[] | null
-          retailer_via_affiliate_counts?: Json | null
           retailer_video_counts?: Json | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
@@ -178,9 +174,7 @@ export type Database = {
           median_views?: number | null
           platform_video_counts?: Json | null
           relevance_reasoning?: string | null
-          retailer_direct_counts?: Json | null
           retailer_names?: string[] | null
-          retailer_via_affiliate_counts?: Json | null
           retailer_video_counts?: Json | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
@@ -492,58 +486,40 @@ export type Database = {
       }
       video_links: {
         Row: {
-          affiliate_domain: string | null
-          affiliate_platform: string | null
           affiliate_platform_id: string | null
           classification: string | null
           created_at: string
           domain: string | null
           id: string
-          is_shortened: boolean | null
-          link_type: string | null
           matched_pattern_id: string | null
           original_domain: string | null
           original_url: string
-          resolved_retailer: string | null
-          resolved_retailer_domain: string | null
           retailer_pattern_id: string | null
           unshortened_url: string | null
           video_id: string
         }
         Insert: {
-          affiliate_domain?: string | null
-          affiliate_platform?: string | null
           affiliate_platform_id?: string | null
           classification?: string | null
           created_at?: string
           domain?: string | null
           id?: string
-          is_shortened?: boolean | null
-          link_type?: string | null
           matched_pattern_id?: string | null
           original_domain?: string | null
           original_url: string
-          resolved_retailer?: string | null
-          resolved_retailer_domain?: string | null
           retailer_pattern_id?: string | null
           unshortened_url?: string | null
           video_id: string
         }
         Update: {
-          affiliate_domain?: string | null
-          affiliate_platform?: string | null
           affiliate_platform_id?: string | null
           classification?: string | null
           created_at?: string
           domain?: string | null
           id?: string
-          is_shortened?: boolean | null
-          link_type?: string | null
           matched_pattern_id?: string | null
           original_domain?: string | null
           original_url?: string
-          resolved_retailer?: string | null
-          resolved_retailer_domain?: string | null
           retailer_pattern_id?: string | null
           unshortened_url?: string | null
           video_id?: string

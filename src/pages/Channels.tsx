@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useChannels, Channel } from "@/hooks/useChannels";
+import { useChannels } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,6 @@ import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCir
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
-import * as XLSX from "xlsx";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -25,110 +24,77 @@ const statusColors: Record<string, string> = {
   NEUTRAL: "bg-muted text-muted-foreground",
 };
 
-function renderPlatformTags(counts: Record<string, number> | null, totalVideos: number) {
-  if (!counts || Object.keys(counts).length === 0) return <span className="text-muted-foreground">—</span>;
-  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  return (
-    <div className="space-y-1">
-      <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Affiliate Platforms</p>
-      <div className="flex flex-wrap gap-1">
-        {entries.map(([name, count]) => {
-          const pct = totalVideos > 0 ? Math.round((count / totalVideos) * 100) : 0;
-          return (
-            <Badge key={name} variant="outline" className="text-xs bg-amber-500/15 text-amber-700 border-amber-500/30">
-              {name}: {count} ({pct}%)
-            </Badge>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function renderRetailerTags(
+function renderCountTags(
   counts: Record<string, number> | null,
-  viaAffiliate: Record<string, number> | null,
-  direct: Record<string, number> | null,
-  totalVideos: number
+  totalVideos: number,
+  colorClass: string
 ) {
-  if (!counts || Object.keys(counts).length === 0) return <span className="text-muted-foreground">—</span>;
+  if (!counts || Object.keys(counts).length === 0) return "—";
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   return (
-    <div className="space-y-1">
-      <p className="text-[10px] font-semibold text-blue-700 uppercase tracking-wide">Retailers</p>
-      <div className="flex flex-col gap-1.5">
-        {entries.map(([name, count]) => {
-          const pct = totalVideos > 0 ? Math.round((count / totalVideos) * 100) : 0;
-          const via = viaAffiliate?.[name] || 0;
-          const dir = direct?.[name] || 0;
-          return (
-            <div key={name}>
-              <Badge variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">
-                {name}: {count} ({pct}%)
-              </Badge>
-              <div className="flex gap-2 ml-1 mt-0.5">
-                <span className="text-[10px] text-muted-foreground">via affiliate: {via}</span>
-                <span className="text-[10px] text-muted-foreground">direct: {dir}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+    <div className="flex flex-wrap gap-1">
+      {entries.map(([name, count]) => {
+        const pct = totalVideos > 0 ? Math.round((count / totalVideos) * 100) : 0;
+        return (
+          <Badge key={name} variant="outline" className={`text-xs ${colorClass}`}>
+            {name}: {count} ({pct}%)
+          </Badge>
+        );
+      })}
     </div>
   );
 }
 
-function downloadXLSX(channels: Channel[]) {
-  // Sheet 1: Affiliate Platforms
-  const platformRows: any[] = [];
+function downloadCSV(channels: any[]) {
+  // Collect all unique platform and retailer names
+  const allPlatforms = new Set<string>();
+  const allRetailers = new Set<string>();
   for (const ch of channels) {
+    for (const name of Object.keys(ch.platform_video_counts || {})) allPlatforms.add(name);
+    for (const name of Object.keys(ch.retailer_video_counts || {})) allRetailers.add(name);
+  }
+  const platformList = [...allPlatforms].sort();
+  const retailerList = [...allRetailers].sort();
+
+  const headers = [
+    "Channel Name", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
+    "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram",
+    ...platformList.map(p => `Platform: ${p}`),
+    ...retailerList.map(r => `Retailer: ${r}`),
+  ];
+
+  const rows = channels.map(ch => {
     const counts = ch.platform_video_counts || {};
-    for (const [platform, videoCount] of Object.entries(counts)) {
-      const pct = ch.total_videos_fetched > 0 ? Math.round((videoCount / ch.total_videos_fetched) * 100) : 0;
-      // Find top retailer for this platform (from retailer_via_affiliate_counts)
-      const viaRetailers = ch.retailer_via_affiliate_counts || {};
-      const topRetailer = Object.entries(viaRetailers).sort((a, b) => b[1] - a[1])[0];
-      platformRows.push({
-        "Channel Name": ch.channel_name,
-        "Subscribers": ch.subscriber_count || 0,
-        "Total Videos": ch.total_videos_fetched || 0,
-        "Platform Name": platform,
-        "Videos Using Platform": videoCount,
-        "Market Share %": pct + "%",
-        "Top Retailer This Platform Leads To": topRetailer ? topRetailer[0] : "",
-      });
-    }
-  }
+    const rCounts = ch.retailer_video_counts || {};
+    return [
+      ch.channel_name,
+      ch.subscriber_count || 0,
+      ch.total_videos_fetched || 0,
+      ch.median_views || 0,
+      ch.median_likes || 0,
+      ch.median_comments || 0,
+      ch.affiliate_status || "NEUTRAL",
+      ch.is_relevant === true ? "Yes" : ch.is_relevant === false ? "No" : "",
+      ch.youtube_category || "",
+      ch.country || "",
+      ch.contact_email || "",
+      ch.instagram_url || "",
+      ...platformList.map(p => counts[p] || 0),
+      ...retailerList.map(r => rCounts[r] || 0),
+    ];
+  });
 
-  // Sheet 2: Retailers
-  const retailerRows: any[] = [];
-  for (const ch of channels) {
-    const counts = ch.retailer_video_counts || {};
-    const via = ch.retailer_via_affiliate_counts || {};
-    const dir = ch.retailer_direct_counts || {};
-    for (const [retailer, videoCount] of Object.entries(counts)) {
-      const pct = ch.total_videos_fetched > 0 ? Math.round((videoCount / ch.total_videos_fetched) * 100) : 0;
-      retailerRows.push({
-        "Channel Name": ch.channel_name,
-        "Subscribers": ch.subscriber_count || 0,
-        "Total Videos": ch.total_videos_fetched || 0,
-        "Retailer Name": retailer,
-        "Total Videos Linking to Retailer": videoCount,
-        "Via Affiliate": via[retailer] || 0,
-        "Direct Link": dir[retailer] || 0,
-        "Market Share %": pct + "%",
-      });
-    }
-  }
+  const csvContent = [headers, ...rows]
+    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
 
-  const wb = XLSX.utils.book_new();
-  const ws1 = XLSX.utils.json_to_sheet(platformRows.length > 0 ? platformRows : [{ "No Data": "" }]);
-  const ws2 = XLSX.utils.json_to_sheet(retailerRows.length > 0 ? retailerRows : [{ "No Data": "" }]);
-  XLSX.utils.book_append_sheet(wb, ws1, "Affiliate Platforms");
-  XLSX.utils.book_append_sheet(wb, ws2, "Retailers");
-
-  const date = new Date().toISOString().split("T")[0];
-  XLSX.writeFile(wb, `channels_affiliate_retailer_bifurcation_${date}.xlsx`);
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "channels_export.csv";
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function Channels() {
@@ -137,7 +103,7 @@ export default function Channels() {
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   const filteredAndSorted = useMemo(() => {
-    let result = channels.filter((ch) => {
+    let result = channels.filter((ch: any) => {
       if (filters.name && !ch.channel_name.toLowerCase().includes(filters.name.toLowerCase())) return false;
       if (filters.status && (ch.affiliate_status || "NEUTRAL") !== filters.status) return false;
       if (filters.category && !(ch.youtube_category || "").toLowerCase().includes(filters.category.toLowerCase())) return false;
@@ -166,10 +132,10 @@ export default function Channels() {
 
   const stats = useMemo(() => ({
     total: channels.length,
-    withUs: channels.filter((c) => c.affiliate_status === "WITH_US").length,
-    competitor: channels.filter((c) => c.affiliate_status === "COMPETITOR").length,
-    mixed: channels.filter((c) => c.affiliate_status === "MIXED").length,
-    neutral: channels.filter((c) => !c.affiliate_status || c.affiliate_status === "NEUTRAL").length,
+    withUs: channels.filter((c: any) => c.affiliate_status === "WITH_US").length,
+    competitor: channels.filter((c: any) => c.affiliate_status === "COMPETITOR").length,
+    mixed: channels.filter((c: any) => c.affiliate_status === "MIXED").length,
+    neutral: channels.filter((c: any) => !c.affiliate_status || c.affiliate_status === "NEUTRAL").length,
   }), [channels]);
 
   const statCards = [
@@ -190,8 +156,8 @@ export default function Channels() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => downloadXLSX(filteredAndSorted)}>
-            <Download className="h-4 w-4 mr-2" /> Download XLSX
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted)}>
+            <Download className="h-4 w-4 mr-2" /> Download CSV
           </Button>
           <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
             <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
@@ -245,8 +211,8 @@ export default function Channels() {
                     <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Affiliate Platforms</TableHead>
-                    <TableHead>Retailers</TableHead>
+                    <TableHead>Platforms (videos / share)</TableHead>
+                    <TableHead>Retailers (videos / share)</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
@@ -288,7 +254,7 @@ export default function Channels() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredAndSorted.map((ch: Channel) => (
+                  {filteredAndSorted.map((ch: any) => (
                     <TableRow key={ch.id}>
                       <TableCell className="font-medium">
                         <a href={ch.channel_url || "#"} target="_blank" rel="noopener noreferrer" className="hover:underline">
@@ -317,16 +283,11 @@ export default function Channels() {
                         <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">{ch.country || "—"}</TableCell>
-                      <TableCell className="max-w-[250px]">
-                        {renderPlatformTags(ch.platform_video_counts, ch.total_videos_fetched || 0)}
+                      <TableCell className="max-w-[220px]">
+                        {renderCountTags(ch.platform_video_counts, ch.total_videos_fetched || 0, "bg-blue-500/15 text-blue-700 border-blue-500/30")}
                       </TableCell>
-                      <TableCell className="max-w-[280px]">
-                        {renderRetailerTags(
-                          ch.retailer_video_counts,
-                          ch.retailer_via_affiliate_counts,
-                          ch.retailer_direct_counts,
-                          ch.total_videos_fetched || 0
-                        )}
+                      <TableCell className="max-w-[220px]">
+                        {renderCountTags(ch.retailer_video_counts, ch.total_videos_fetched || 0, "bg-purple-500/15 text-purple-700 border-purple-500/30")}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">

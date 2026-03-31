@@ -1,86 +1,50 @@
-# Fix Affiliate Platform vs Retailer Classification Pipeline
 
-## Problem
 
-Shortened URLs (wsli.nk, fkrt.it, amzn.to) and direct retailer URLs (amazon.in, flipkart.com) are treated the same. They need separate handling: the shortened domain identifies the **affiliate platform**, and the unshortened destination identifies the **retailer**.
+# Channel-Level Platform & Retailer Bifurcation with Video Counts and Market Share
+
+## What You Get
+
+Each channel will show **how many videos** use each affiliate platform and each retailer, with **market share percentages** displayed as tags. Plus a CSV/Excel download with full breakdowns.
 
 ## Changes
 
-### 1. Database Migration — New columns on `video_links` and `channels`
+### 1. Update `compute-channel-stats` Edge Function
 
-**video_links** — add:
+Currently stores just name arrays (`affiliate_platform_names`, `retailer_names`). Change to store **video count per platform/retailer** as JSONB objects instead of simple arrays.
 
-- `link_type` text (affiliate / retailer / both)
-- `affiliate_platform` text — e.g. "Wishlink"
-- `affiliate_domain` text — e.g. "wsli.nk"
-- `resolved_retailer` text — e.g. "Amazon"
-- `resolved_retailer_domain` text — e.g. "amazon.in"
-- `is_shortened` boolean default false
+**New channel columns** (migration):
+- `platform_video_counts` (jsonb, default '{}') — e.g. `{"Impact.com": 12, "Awin": 5}`
+- `retailer_video_counts` (jsonb, default '{}') — e.g. `{"Amazon": 18, "Flipkart": 7}`
 
-**channels** — add:
+**Edge function logic change**: For each channel, group links by video_id, then count distinct videos per platform_id and per retailer_id. Store as `{ "PlatformName": videoCount }` objects.
 
-- `retailer_via_affiliate_counts` jsonb default '{}'
-- `retailer_direct_counts` jsonb default '{}'  
-RETAILER_DOMAINS:  
-  amazon.in / amazon.com → Amazon  
-  flipkart.com → Flipkart  
-  myntra.com → Myntra  
-  ajio.com → AJIO  
-  meesho.com → Meesho  
-  nykaa.com → Nykaa  
-  snapdeal.com → Snapdeal  
-  tatacliq.com → Tata CLiQ  
-  reliancedigital.in → Reliance Digital  
-  croma.com → Croma
+### 2. Update Channel Interface & Hook
 
-For each link:
+Add `platform_video_counts` and `retailer_video_counts` to the `Channel` interface in `useChannels.ts`.
 
-1. Extract `original_domain` from the raw URL
-2. Check if it's a known shortener → `is_shortened = true`
-3. If shortened: set `affiliate_domain = original_domain`, look up `affiliate_platform` name from map
-4. Unshorten the URL → get `resolved_retailer_domain`, look up `resolved_retailer` name
-5. If NOT shortened but domain matches a retailer: `link_type = "retailer"`, `resolved_retailer = name`, no affiliate fields
-6. If shortened and resolved to retailer: `link_type = "both"`
-7. If shortened but retailer unknown: `link_type = "affiliate"`
-8. Still keep the existing pattern matching for `classification` (OWN/COMPETITOR/NEUTRAL)
+### 3. Update Channels Page — Display as Tags with Counts & Market Share
 
-### 3. Update `compute-channel-stats` Edge Function
+Replace the current simple badge lists in "Platforms" and "Retailers" columns with tags showing:
+- Platform/Retailer name
+- Video count
+- Market share % (relative to total videos fetched for that channel)
 
-Change the select to include the new columns: `affiliate_platform`, `resolved_retailer`, `link_type`.
+Example tag: `Impact.com: 12 (48%)`
 
-For `platform_video_counts`: group by `affiliate_platform` (not null), count distinct video_ids.
+### 4. Add CSV/Excel Download Button
 
-For `retailer_video_counts`: group by `resolved_retailer` (not null), count distinct video_ids.
+Add a "Download" button on the Channels page that exports a CSV with:
+- Channel name, subscribers, total videos, median views/likes
+- **One column per retailer** with video counts
+- **One column per platform** with video counts
+- Or alternatively: two summary columns with semicolon-separated `Name:Count` pairs
 
-For `retailer_via_affiliate_counts`: count distinct video_ids where `link_type` is "both" or "affiliate" AND `resolved_retailer` is not null, grouped by retailer.
+### 5. Summary of Files Changed
 
-For `retailer_direct_counts`: count distinct video_ids where `link_type` = "retailer", grouped by `resolved_retailer`.
+| File | Change |
+|------|--------|
+| Migration | Add `platform_video_counts` jsonb and `retailer_video_counts` jsonb to `channels` |
+| `compute-channel-stats/index.ts` | Count videos per platform/retailer, store as JSONB |
+| `src/hooks/useChannels.ts` | Add new fields to Channel interface |
+| `src/pages/Channels.tsx` | Show tags with counts + %, add Download CSV button |
 
-### 4. Update `useChannels.ts`
-
-Add `retailer_via_affiliate_counts` and `retailer_direct_counts` to the Channel interface.
-
-### 5. Update `Channels.tsx`
-
-**Platform tags** (amber color): Show affiliate platform name + count + share%.
-
-**Retailer tags**: Show retailer name + total count + share%, with two gray sub-tags underneath:
-
-- "via affiliate: X"
-- "direct: Y"
-
-**Download**: Replace CSV with XLSX using two sheets:
-
-- Sheet 1 "Affiliate Platforms": Channel Name, Subscribers, Total Videos, Platform Name, Videos Using Platform, Market Share %
-- Sheet 2 "Retailers": Channel Name, Subscribers, Total Videos, Retailer Name, Total Videos, Via Affiliate, Direct, Market Share %
-
-### 6. Files Changed
-
-
-| File                             | Change                                                   |
-| -------------------------------- | -------------------------------------------------------- |
-| Migration SQL                    | Add 6 columns to `video_links`, 2 to `channels`          |
-| `process-video-links/index.ts`   | Add affiliate/retailer domain maps, populate new columns |
-| `compute-channel-stats/index.ts` | Use new columns for counts, compute via/direct split     |
-| `src/hooks/useChannels.ts`       | Add new fields to interface                              |
-| `src/pages/Channels.tsx`         | Separate tagged sections, sub-tags, XLSX download        |
