@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Globe, Store } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
@@ -23,6 +23,79 @@ const statusColors: Record<string, string> = {
   MIXED: "bg-orange-500/15 text-orange-700 border-orange-500/30",
   NEUTRAL: "bg-muted text-muted-foreground",
 };
+
+function renderCountTags(
+  counts: Record<string, number> | null,
+  totalVideos: number,
+  colorClass: string
+) {
+  if (!counts || Object.keys(counts).length === 0) return "—";
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return (
+    <div className="flex flex-wrap gap-1">
+      {entries.map(([name, count]) => {
+        const pct = totalVideos > 0 ? Math.round((count / totalVideos) * 100) : 0;
+        return (
+          <Badge key={name} variant="outline" className={`text-xs ${colorClass}`}>
+            {name}: {count} ({pct}%)
+          </Badge>
+        );
+      })}
+    </div>
+  );
+}
+
+function downloadCSV(channels: any[]) {
+  // Collect all unique platform and retailer names
+  const allPlatforms = new Set<string>();
+  const allRetailers = new Set<string>();
+  for (const ch of channels) {
+    for (const name of Object.keys(ch.platform_video_counts || {})) allPlatforms.add(name);
+    for (const name of Object.keys(ch.retailer_video_counts || {})) allRetailers.add(name);
+  }
+  const platformList = [...allPlatforms].sort();
+  const retailerList = [...allRetailers].sort();
+
+  const headers = [
+    "Channel Name", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
+    "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram",
+    ...platformList.map(p => `Platform: ${p}`),
+    ...retailerList.map(r => `Retailer: ${r}`),
+  ];
+
+  const rows = channels.map(ch => {
+    const counts = ch.platform_video_counts || {};
+    const rCounts = ch.retailer_video_counts || {};
+    return [
+      ch.channel_name,
+      ch.subscriber_count || 0,
+      ch.total_videos_fetched || 0,
+      ch.median_views || 0,
+      ch.median_likes || 0,
+      ch.median_comments || 0,
+      ch.affiliate_status || "NEUTRAL",
+      ch.is_relevant === true ? "Yes" : ch.is_relevant === false ? "No" : "",
+      ch.youtube_category || "",
+      ch.country || "",
+      ch.contact_email || "",
+      ch.instagram_url || "",
+      ...platformList.map(p => counts[p] || 0),
+      ...retailerList.map(r => rCounts[r] || 0),
+    ];
+  });
+
+  const csvContent = [headers, ...rows]
+    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "channels_export.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function Channels() {
   const { channels, isLoading, refresh, recomputeStats } = useChannels();
@@ -83,6 +156,9 @@ export default function Channels() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted)}>
+            <Download className="h-4 w-4 mr-2" /> Download CSV
+          </Button>
           <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
             <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
           </Button>
@@ -135,8 +211,8 @@ export default function Channels() {
                     <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Platforms</TableHead>
-                    <TableHead>Retailers</TableHead>
+                    <TableHead>Platforms (videos / share)</TableHead>
+                    <TableHead>Retailers (videos / share)</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
@@ -207,23 +283,11 @@ export default function Channels() {
                         <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">{ch.country || "—"}</TableCell>
-                      <TableCell>
-                        {(ch.affiliate_platform_names || []).length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {ch.affiliate_platform_names.map((name: string) => (
-                              <Badge key={name} variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">{name}</Badge>
-                            ))}
-                          </div>
-                        ) : "—"}
+                      <TableCell className="max-w-[220px]">
+                        {renderCountTags(ch.platform_video_counts, ch.total_videos_fetched || 0, "bg-blue-500/15 text-blue-700 border-blue-500/30")}
                       </TableCell>
-                      <TableCell>
-                        {(ch.retailer_names || []).length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {ch.retailer_names.map((name: string) => (
-                              <Badge key={name} variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">{name}</Badge>
-                            ))}
-                          </div>
-                        ) : "—"}
+                      <TableCell className="max-w-[220px]">
+                        {renderCountTags(ch.retailer_video_counts, ch.total_videos_fetched || 0, "bg-purple-500/15 text-purple-700 border-purple-500/30")}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">

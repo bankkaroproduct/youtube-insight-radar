@@ -118,8 +118,10 @@ export type Database = {
           median_comments: number | null
           median_likes: number | null
           median_views: number | null
+          platform_video_counts: Json | null
           relevance_reasoning: string | null
           retailer_names: string[] | null
+          retailer_video_counts: Json | null
           subscriber_count: number | null
           total_videos_fetched: number | null
           youtube_category: string | null
@@ -143,8 +145,10 @@ export type Database = {
           median_comments?: number | null
           median_likes?: number | null
           median_views?: number | null
+          platform_video_counts?: Json | null
           relevance_reasoning?: string | null
           retailer_names?: string[] | null
+          retailer_video_counts?: Json | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null
@@ -168,8 +172,10 @@ export type Database = {
           median_comments?: number | null
           median_likes?: number | null
           median_views?: number | null
+          platform_video_counts?: Json | null
           relevance_reasoning?: string | null
           retailer_names?: string[] | null
+          retailer_video_counts?: Json | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null

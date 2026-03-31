@@ -35,7 +35,7 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   const videoIds = videos.map((v: any) => v.id);
   const { data: links } = await supabase
     .from("video_links")
-    .select("classification, matched_pattern_id, affiliate_platform_id, retailer_pattern_id")
+    .select("video_id, classification, matched_pattern_id, affiliate_platform_id, retailer_pattern_id")
     .in("video_id", videoIds)
     .not("classification", "eq", "NEUTRAL");
 
@@ -79,6 +79,38 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   const affiliatePlatformNames = [...new Set(platformIds.map(id => patternsMap.get(id)?.name).filter(Boolean))] as string[];
   const retailerNames = [...new Set(retailerIds.map(id => patternsMap.get(id)?.name).filter(Boolean))] as string[];
 
+  // Count distinct videos per platform and per retailer
+  const platformVideoCounts: Record<string, number> = {};
+  const retailerVideoCounts: Record<string, number> = {};
+
+  // Group by platform: count distinct video_ids per platform_id
+  const platformVideoSets = new Map<string, Set<string>>();
+  const retailerVideoSets = new Map<string, Set<string>>();
+
+  for (const l of (links || [])) {
+    if (l.affiliate_platform_id) {
+      const name = patternsMap.get(l.affiliate_platform_id)?.name;
+      if (name) {
+        if (!platformVideoSets.has(name)) platformVideoSets.set(name, new Set());
+        platformVideoSets.get(name)!.add(l.video_id);
+      }
+    }
+    if (l.retailer_pattern_id) {
+      const name = patternsMap.get(l.retailer_pattern_id)?.name;
+      if (name) {
+        if (!retailerVideoSets.has(name)) retailerVideoSets.set(name, new Set());
+        retailerVideoSets.get(name)!.add(l.video_id);
+      }
+    }
+  }
+
+  for (const [name, videoSet] of platformVideoSets) {
+    platformVideoCounts[name] = videoSet.size;
+  }
+  for (const [name, videoSet] of retailerVideoSets) {
+    retailerVideoCounts[name] = videoSet.size;
+  }
+
   await supabase.from("channels").update({
     total_videos_fetched: videos.length,
     median_views: computeMedian(views, 5),
@@ -88,6 +120,8 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
     affiliate_names: affiliateNames,
     affiliate_platform_names: affiliatePlatformNames,
     retailer_names: retailerNames,
+    platform_video_counts: platformVideoCounts,
+    retailer_video_counts: retailerVideoCounts,
     last_analyzed_at: new Date().toISOString(),
   }).eq("channel_id", chId);
 
