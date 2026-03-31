@@ -433,7 +433,7 @@ serve(async (req) => {
       .limit(2000);
 
     if (unmatchedLinks && unmatchedLinks.length > 0) {
-      const batchUpdates: { id: string; matched_pattern_id: string; classification: string; affiliate_platform_id: string | null; retailer_pattern_id: string | null }[] = [];
+      const batchUpdates: { id: string; matched_pattern_id: string; classification: string; affiliate_platform_id: string | null; retailer_pattern_id: string | null; affiliate_platform: string | null; resolved_retailer: string | null; link_type: string | null }[] = [];
 
       for (const link of unmatchedLinks) {
         if (!link.domain || SKIP_DOMAINS.has(link.domain)) continue;
@@ -441,12 +441,28 @@ serve(async (req) => {
         const platformMatch = link.original_domain ? matchPattern(link.original_domain, "", allPatterns, "affiliate_platform") : null;
         const anyMatch = retailerMatch || platformMatch || matchPattern(link.domain, "", allPatterns);
         if (anyMatch) {
+          let linkType: string | null = null;
+          let affiliatePlatformName: string | null = null;
+          let resolvedRetailerName: string | null = null;
+
+          if (platformMatch) {
+            affiliatePlatformName = platformMatch.name;
+            linkType = "affiliate";
+          }
+          if (retailerMatch) {
+            resolvedRetailerName = retailerMatch.name;
+            linkType = platformMatch ? "both" : "retailer";
+          }
+
           batchUpdates.push({
             id: link.id,
             matched_pattern_id: anyMatch.id,
             classification: anyMatch.is_confirmed ? anyMatch.classification : "NEUTRAL",
             affiliate_platform_id: platformMatch?.id || null,
             retailer_pattern_id: retailerMatch?.id || null,
+            affiliate_platform: affiliatePlatformName,
+            resolved_retailer: resolvedRetailerName,
+            link_type: linkType,
           });
           const ch = videoChannelCache.get(link.video_id);
           if (ch) affectedChannels.add(ch);
@@ -461,6 +477,9 @@ serve(async (req) => {
               classification: u.classification,
               affiliate_platform_id: u.affiliate_platform_id,
               retailer_pattern_id: u.retailer_pattern_id,
+              affiliate_platform: u.affiliate_platform,
+              resolved_retailer: u.resolved_retailer,
+              link_type: u.link_type,
             }).eq("id", u.id)
           )
         );
