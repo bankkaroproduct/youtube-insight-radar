@@ -67,8 +67,10 @@ function downloadCSV(channels: any[]) {
   const rows = channels.map(ch => {
     const counts = ch.platform_video_counts || {};
     const rCounts = ch.retailer_video_counts || {};
+    const totalVids = ch.total_videos_fetched || 0;
     return [
       ch.channel_name,
+      ch.channel_url || "",
       ch.subscriber_count || 0,
       ch.total_videos_fetched || 0,
       ch.median_views || 0,
@@ -80,8 +82,8 @@ function downloadCSV(channels: any[]) {
       ch.country || "",
       ch.contact_email || "",
       ch.instagram_url || "",
-      ...platformList.map(p => counts[p] || 0),
-      ...retailerList.map(r => rCounts[r] || 0),
+      ...platformList.flatMap(p => { const c = counts[p] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
+      ...retailerList.flatMap(r => { const c = rCounts[r] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
     ];
   });
 
