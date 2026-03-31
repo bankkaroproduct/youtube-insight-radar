@@ -18,7 +18,7 @@ async function getNextApiKey(supabase: any) {
     .single();
 
   if (error || !data) return null;
-  if (data.quota_used_today >= data.daily_quota_limit) return null;
+  if (data.daily_quota_limit > 0 && data.quota_used_today >= data.daily_quota_limit) return null;
   return data;
 }
 
