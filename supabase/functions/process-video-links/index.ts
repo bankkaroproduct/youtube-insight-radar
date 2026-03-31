@@ -19,6 +19,62 @@ const AFFILIATE_REDIRECT_DOMAINS = [
   "earnkaro.com", "cuelinks.com", "magicpin.in",
 ];
 
+// Domains that use JS-based redirects (not HTTP 3xx) — need HTML parsing
+const JS_REDIRECT_DOMAINS = [
+  "wishlink.com", "lehlah.club", "instamojo.com", "link.springer.com",
+  "haulpack.com", "earnkaro.com", "cuelinks.com", "magicpin.in",
+];
+
+function isJsRedirectDomain(domain: string): boolean {
+  return JS_REDIRECT_DOMAINS.some(d => domain.includes(d));
+}
+
+function extractRedirectFromHtml(html: string, sourceDomain: string): string | null {
+  // Pattern 1: window.location.href = "URL" or window.location = "URL"
+  const jsMatch = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
+  if (jsMatch && jsMatch[1]?.startsWith("http")) return jsMatch[1];
+
+  // Pattern 2: <meta http-equiv="refresh" content="...url=URL">
+  const metaMatch = html.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"'\s>]+)/i);
+  if (metaMatch && metaMatch[1]?.startsWith("http")) return metaMatch[1];
+
+  // Pattern 3: <link rel="canonical" href="URL">
+  const canonicalMatch = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i);
+  if (canonicalMatch && canonicalMatch[1]?.startsWith("http")) {
+    const canonDomain = extractDomain(canonicalMatch[1]);
+    // Only use canonical if it points to a different domain
+    if (canonDomain && !canonDomain.includes(sourceDomain) && !sourceDomain.includes(canonDomain)) {
+      return canonicalMatch[1];
+    }
+  }
+
+  // Pattern 4: First external <a href> not pointing back to source domain
+  const escapedDomain = sourceDomain.replace(/\./g, "\\.");
+  const extLinkRegex = new RegExp(`<a[^>]+href=["'](https?:\\/\\/(?!(?:[^"']*${escapedDomain}))[^"']+)["']`, "i");
+  const extMatch = html.match(extLinkRegex);
+  if (extMatch && extMatch[1]?.startsWith("http")) return extMatch[1];
+
+  return null;
+}
+
+async function resolveJsRedirect(url: string): Promise<string> {
+  try {
+    const resp = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LinkBot/1.0)" },
+    });
+    const html = await resp.text();
+    const domain = extractDomain(url);
+    const extracted = extractRedirectFromHtml(html, domain);
+    if (extracted) return extracted;
+    return url;
+  } catch {
+    return url;
+  }
+}
+
 // Affiliate short domains → platform name
 const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "wsli.nk": "Wishlink",
