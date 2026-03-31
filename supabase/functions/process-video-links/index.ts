@@ -103,7 +103,7 @@ async function parallelMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concur
 }
 
 interface Pattern {
-  id: string; pattern: string; classification: string; is_confirmed: boolean; type: string;
+  id: string; pattern: string; name: string; classification: string; is_confirmed: boolean; type: string;
 }
 
 function matchPattern(domain: string, url: string, patterns: Pattern[], filterType?: string): Pattern | null {
