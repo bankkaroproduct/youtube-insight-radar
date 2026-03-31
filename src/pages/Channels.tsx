@@ -174,6 +174,7 @@ export default function Channels() {
                       </Select>
                     </TableHead>
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
+                    <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.country} onChange={(e) => setFilters(f => ({ ...f, country: e.target.value }))} /></TableHead>
                     <TableHead />
                     <TableHead />
                     <TableHead />
