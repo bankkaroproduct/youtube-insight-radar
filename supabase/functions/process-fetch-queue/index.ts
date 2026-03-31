@@ -6,7 +6,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const MAX_PAGES = 3;
+const MAX_PAGES = 1;
 
 async function getNextApiKey(supabase: any) {
   const { data, error } = await supabase
@@ -161,7 +161,7 @@ serve(async (req) => {
           const params = new URLSearchParams({
             part: "snippet",
             q: job.keyword,
-            maxResults: "50",
+            maxResults: "30",
             order: job.order_by || "relevance",
             type: "video",
             key: apiKey.api_key,
