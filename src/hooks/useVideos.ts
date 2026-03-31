@@ -86,7 +86,8 @@ export function useVideos() {
       const { data: kwData } = await supabase
         .from("keywords_search_runs")
         .select("id, keyword")
-        .in("id", keywordIds);
+        .in("id", keywordIds)
+        .limit(999999999);
       for (const k of (kwData ?? []) as any[]) {
         keywordsMap.set(k.id, k.keyword);
       }
