@@ -108,7 +108,7 @@ interface Pattern {
 
 function matchPattern(domain: string, url: string, patterns: Pattern[], filterType?: string): Pattern | null {
   for (const p of patterns) {
-    if (filterType && p.type !== filterType) continue;
+    if (filterType && p.type?.toLowerCase() !== filterType) continue;
     if (domain.includes(p.pattern) || url.includes(p.pattern)) return p;
   }
   return null;
