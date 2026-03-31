@@ -24,20 +24,42 @@ const classificationColors: Record<string, string> = {
   NEUTRAL: "bg-muted text-muted-foreground border-border",
 };
 
-function getUniquePlatforms(video: Video): string[] {
-  const set = new Set<string>();
+interface MarketShareEntry {
+  name: string;
+  count: number;
+  share: number;
+}
+
+function getPlatformShares(video: Video): MarketShareEntry[] {
+  const total = video.links.length;
+  if (total === 0) return [];
+  const counts = new Map<string, number>();
   for (const link of video.links) {
-    if (link.platform_name) set.add(link.platform_name);
+    if (link.platform_name) counts.set(link.platform_name, (counts.get(link.platform_name) || 0) + 1);
   }
-  return [...set];
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count, share: Math.round((count / total) * 100) }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function getRetailerShares(video: Video): MarketShareEntry[] {
+  const total = video.links.length;
+  if (total === 0) return [];
+  const counts = new Map<string, number>();
+  for (const link of video.links) {
+    if (link.retailer_name) counts.set(link.retailer_name, (counts.get(link.retailer_name) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count, share: Math.round((count / total) * 100) }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function getUniquePlatforms(video: Video): string[] {
+  return getPlatformShares(video).map(e => e.name);
 }
 
 function getUniqueRetailers(video: Video): string[] {
-  const set = new Set<string>();
-  for (const link of video.links) {
-    if (link.retailer_name) set.add(link.retailer_name);
-  }
-  return [...set];
+  return getRetailerShares(video).map(e => e.name);
 }
 
 function VideoDetailRow({ video }: { video: Video }) {
