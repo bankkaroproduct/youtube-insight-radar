@@ -25,8 +25,8 @@ const statusColors: Record<string, string> = {
 };
 
 export default function Channels() {
-  const { channels, isLoading, refresh, recomputeStats } = useChannels();
-  const [filters, setFilters] = useState({ name: "", status: "", category: "" });
+  const { channels, isLoading, refresh, recomputeStats, checkRelevance } = useChannels();
+  const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   const filteredAndSorted = useMemo(() => {
