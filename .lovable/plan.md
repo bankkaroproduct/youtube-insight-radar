@@ -1,54 +1,70 @@
 
 
-# Speed Up the Entire Pipeline
+# Integrate unshorten.me API for URL Resolution
 
-## Current Bottlenecks
+## What Changes
 
-The main fetch function was optimized, but 4 downstream functions still run slowly due to sequential DB calls and serial HTTP requests.
+Replace the current manual HEAD/GET redirect-following in `process-video-links` with the unshorten.me API, which is more reliable for resolving shortened affiliate URLs.
 
-### 1. `process-video-links` — Slowest (~60s+ for 200 links)
-- Unshortens URLs **one at a time** (each up to 10s timeout)
-- Updates each link individually
-- Looks up `channel_id` per link individually
+## Files to Change
 
-### 2. `compute-channel-stats` — Slow for many channels
-- Loops through each channel sequentially with 3 queries + 1 update per channel
+### 1. `supabase/functions/process-video-links/index.ts`
 
-### 3. `analyze-keyword-priority` & `analyze-channel-relevance`
-- Update DB records one-by-one after AI response
+**Replace the `unshortenUrl` function** (lines 23-43) to call the unshorten.me API instead of doing HEAD/GET redirect follows:
 
-### 4. `process-fetch-queue` — Minor remaining issues
-- `incrementQuota` does SELECT then UPDATE (2 calls) every time
-- `fetchChannelDetails` updates channels one-by-one
+```typescript
+async function unshortenUrl(url: string): Promise<string> {
+  const apiKey = Deno.env.get("UNSHORTEN_API_KEY");
+  if (!apiKey) {
+    console.warn("UNSHORTEN_API_KEY missing — falling back to redirect follow");
+    return fallbackUnshorten(url);
+  }
+  try {
+    const resp = await fetch(
+      `https://unshorten.me/api/v2/unshorten?url=${encodeURIComponent(url)}`,
+      {
+        headers: { Authorization: `Token ${apiKey}` },
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    if (resp.status === 429) {
+      console.warn("unshorten.me rate limited — falling back");
+      return fallbackUnshorten(url);
+    }
+    const data = await resp.json();
+    if (data.success && data.unshortened_url) {
+      return data.unshortened_url;
+    }
+    return fallbackUnshorten(url);
+  } catch {
+    return fallbackUnshorten(url);
+  }
+}
+```
 
----
+Keep the old HEAD/GET logic as `fallbackUnshorten()` so the system degrades gracefully if the API key is missing or rate-limited.
 
-## Fix Plan
+**Add shortener domains** from user's list that are currently missing: `fkrt.it`, `wsli.nk`, `tiny.cc`, `short.io`, `amzn.to`.
 
-### File: `supabase/functions/process-video-links/index.ts`
-- **Parallelize URL unshortening**: Use `Promise.allSettled` to unshorten up to 10 URLs concurrently instead of sequentially
-- **Batch update video_links**: Collect all updates and write in bulk instead of per-link
-- **Pre-fetch all video→channel mappings** in one query instead of per-link lookups
-- **Batch pattern lookups**: Check all unknown domains at once
+### 2. Add Secret: `UNSHORTEN_API_KEY`
 
-### File: `supabase/functions/compute-channel-stats/index.ts`
-- **Replace per-channel loop with a single RPC function** that computes stats for all channels in one SQL query (videos + links + patterns joined), returning results in one call
-- Or at minimum: parallelize channel processing with `Promise.allSettled`
+Use the `add_secret` tool to request the API key from the user. This secret will be available to the edge function at runtime via `Deno.env.get("UNSHORTEN_API_KEY")`.
 
-### File: `supabase/functions/analyze-keyword-priority/index.ts`
-- **Batch update**: Replace per-keyword `update` loop with a single batch update after AI response
+### 3. `src/utils/unshortenUrl.ts` (new file)
 
-### File: `supabase/functions/analyze-channel-relevance/index.ts`
-- **Batch update**: Replace per-channel `update` loop with parallel `Promise.all` updates
+Create a client-side utility with `unshortenUrl()`, `unshortenMany()`, and `isShortUrl()` as specified. This uses `VITE_UNSHORTEN_API_KEY` for any client-side usage (though primary processing happens in the edge function).
 
-### File: `supabase/functions/process-fetch-queue/index.ts`
-- **Cache API key**: Call `getNextApiKey` once, reuse throughout
-- **Simplify `incrementQuota`**: Use a single UPDATE with raw SQL increment instead of SELECT+UPDATE
-- **Batch `fetchChannelDetails` updates**: Collect all channel updates, write once
+## What Does NOT Change
 
-## Expected Result
-- Link processing: 60s+ → ~10s (parallel unshorten + batch writes)
-- Channel stats: 20s+ → ~2s (single query or parallel)  
-- Priority/relevance: minor speedup from batch writes
-- Overall pipeline: from 2+ minutes down to ~15-20 seconds total
+- The overall pipeline flow remains identical
+- Affiliate pattern matching, classification, and channel stats triggering are untouched
+- The `parallelMap` with concurrency 10 stays the same
+- Batch DB writes stay the same
+
+## Summary
+
+- Edge function gets the real improvement (unshorten.me API replaces unreliable redirect-following)
+- Graceful fallback if API key missing or rate limit hit
+- Client-side utility created for any future front-end usage
+- One new secret to add: `UNSHORTEN_API_KEY`
 
