@@ -156,6 +156,7 @@ export default function Links() {
   const [newName, setNewName] = useState("");
   const [newClass, setNewClass] = useState("COMPETITOR");
   const [newType, setNewType] = useState<PatternType>("affiliate_platform");
+  const [discoveredTypes, setDiscoveredTypes] = useState<Record<string, PatternType>>({});
 
   const handleAdd = async () => {
     if (!newPattern || !newName) return;
