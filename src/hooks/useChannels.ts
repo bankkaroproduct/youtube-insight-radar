@@ -14,6 +14,8 @@ export interface Channel {
   median_comments: number;
   affiliate_status: string;
   affiliate_names: string[];
+  affiliate_platform_names: string[];
+  retailer_names: string[];
   last_analyzed_at: string | null;
   created_at: string;
   description: string | null;

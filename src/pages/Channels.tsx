@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Globe, Store } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
@@ -116,11 +116,7 @@ export default function Channels() {
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
+            <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
           ) : channels.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
               No channels yet. Channels are auto-discovered when videos are fetched.
@@ -139,11 +135,11 @@ export default function Channels() {
                     <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Affiliates</TableHead>
+                    <TableHead>Platforms</TableHead>
+                    <TableHead>Retailers</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
-                  {/* Filter row */}
                   <TableRow className="bg-muted/30">
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.name} onChange={(e) => setFilters(f => ({ ...f, name: e.target.value }))} /></TableHead>
                     <TableHead />
@@ -178,41 +174,24 @@ export default function Channels() {
                     <TableHead />
                     <TableHead />
                     <TableHead />
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredAndSorted.map((ch: any) => (
                     <TableRow key={ch.id}>
                       <TableCell className="font-medium">
-                        <a
-                          href={ch.channel_url || "#"}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:underline"
-                        >
+                        <a href={ch.channel_url || "#"} target="_blank" rel="noopener noreferrer" className="hover:underline">
                           {ch.channel_name}
                         </a>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {ch.total_videos_fetched}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatNumber(ch.median_views)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatNumber(ch.median_likes)}
-                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}</TableCell>
+                      <TableCell className="text-right tabular-nums">{ch.total_videos_fetched}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatNumber(ch.median_views)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatNumber(ch.median_likes)}</TableCell>
                       <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={statusColors[ch.affiliate_status] || statusColors.NEUTRAL}
-                        >
-                          {ch.affiliate_status === "WITH_US" ? "With Us" :
-                           ch.affiliate_status === "COMPETITOR" ? "Competitor" :
-                           ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
+                        <Badge variant="outline" className={statusColors[ch.affiliate_status] || statusColors.NEUTRAL}>
+                          {ch.affiliate_status === "WITH_US" ? "With Us" : ch.affiliate_status === "COMPETITOR" ? "Competitor" : ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -227,16 +206,21 @@ export default function Channels() {
                       <TableCell className="text-sm text-muted-foreground max-w-[180px]">
                         <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {ch.country || "—"}
+                      <TableCell className="text-sm text-muted-foreground">{ch.country || "—"}</TableCell>
+                      <TableCell>
+                        {(ch.affiliate_platform_names || []).length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {ch.affiliate_platform_names.map((name: string) => (
+                              <Badge key={name} variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">{name}</Badge>
+                            ))}
+                          </div>
+                        ) : "—"}
                       </TableCell>
                       <TableCell>
-                        {ch.affiliate_names?.length > 0 ? (
+                        {(ch.retailer_names || []).length > 0 ? (
                           <div className="flex flex-wrap gap-1">
-                            {ch.affiliate_names.map((name: string) => (
-                              <Badge key={name} variant="outline" className="text-xs">
-                                {name}
-                              </Badge>
+                            {ch.retailer_names.map((name: string) => (
+                              <Badge key={name} variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">{name}</Badge>
                             ))}
                           </div>
                         ) : "—"}

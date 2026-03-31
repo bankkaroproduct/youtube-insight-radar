@@ -53,6 +53,7 @@ export type Database = {
           is_confirmed: boolean
           name: string
           pattern: string
+          type: string
         }
         Insert: {
           classification?: string
@@ -62,6 +63,7 @@ export type Database = {
           is_confirmed?: boolean
           name: string
           pattern: string
+          type?: string
         }
         Update: {
           classification?: string
@@ -71,6 +73,7 @@ export type Database = {
           is_confirmed?: boolean
           name?: string
           pattern?: string
+          type?: string
         }
         Relationships: []
       }
@@ -98,6 +101,7 @@ export type Database = {
       channels: {
         Row: {
           affiliate_names: string[] | null
+          affiliate_platform_names: string[] | null
           affiliate_status: string | null
           channel_id: string
           channel_name: string
@@ -115,12 +119,14 @@ export type Database = {
           median_likes: number | null
           median_views: number | null
           relevance_reasoning: string | null
+          retailer_names: string[] | null
           subscriber_count: number | null
           total_videos_fetched: number | null
           youtube_category: string | null
         }
         Insert: {
           affiliate_names?: string[] | null
+          affiliate_platform_names?: string[] | null
           affiliate_status?: string | null
           channel_id: string
           channel_name: string
@@ -138,12 +144,14 @@ export type Database = {
           median_likes?: number | null
           median_views?: number | null
           relevance_reasoning?: string | null
+          retailer_names?: string[] | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null
         }
         Update: {
           affiliate_names?: string[] | null
+          affiliate_platform_names?: string[] | null
           affiliate_status?: string | null
           channel_id?: string
           channel_name?: string
@@ -161,6 +169,7 @@ export type Database = {
           median_likes?: number | null
           median_views?: number | null
           relevance_reasoning?: string | null
+          retailer_names?: string[] | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null
@@ -471,32 +480,41 @@ export type Database = {
       }
       video_links: {
         Row: {
+          affiliate_platform_id: string | null
           classification: string | null
           created_at: string
           domain: string | null
           id: string
           matched_pattern_id: string | null
+          original_domain: string | null
           original_url: string
+          retailer_pattern_id: string | null
           unshortened_url: string | null
           video_id: string
         }
         Insert: {
+          affiliate_platform_id?: string | null
           classification?: string | null
           created_at?: string
           domain?: string | null
           id?: string
           matched_pattern_id?: string | null
+          original_domain?: string | null
           original_url: string
+          retailer_pattern_id?: string | null
           unshortened_url?: string | null
           video_id: string
         }
         Update: {
+          affiliate_platform_id?: string | null
           classification?: string | null
           created_at?: string
           domain?: string | null
           id?: string
           matched_pattern_id?: string | null
+          original_domain?: string | null
           original_url?: string
+          retailer_pattern_id?: string | null
           unshortened_url?: string | null
           video_id?: string
         }
