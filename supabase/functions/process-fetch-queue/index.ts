@@ -177,6 +177,7 @@ serve(async (req) => {
             maxResults: "30",
             order: job.order_by || "relevance",
             type: "video",
+            regionCode: "IN",
             key: cachedApiKey.api_key,
           });
           if (job.published_after) params.set("publishedAfter", job.published_after);
