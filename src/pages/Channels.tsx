@@ -162,6 +162,17 @@ export default function Channels() {
                         </SelectContent>
                       </Select>
                     </TableHead>
+                    <TableHead>
+                      <Select value={filters.relevance} onValueChange={(v) => setFilters(f => ({ ...f, relevance: v === "all" ? "" : v }))}>
+                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="yes">Yes</SelectItem>
+                          <SelectItem value="no">No</SelectItem>
+                          <SelectItem value="unchecked">Unchecked</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableHead>
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
                     <TableHead />
                     <TableHead />
