@@ -1,44 +1,41 @@
 
 
-# Delete All Test Data — Full Reset
+# Add Download Button to Videos + Enhance Channels Tab
 
-Delete all data from videos, video_links, video_keywords, fetch_jobs, and keywords_search_runs tables. Also reset channel stats since they were computed from this data.
+## Changes
 
-## SQL Operations (using insert/update tool, not migrations)
+### 1. Videos tab — Add CSV download with market share columns (`src/pages/Videos.tsx`)
 
-Execute these DELETE statements in order (respecting dependencies):
+Add a `downloadVideosCSV` function and a "Download CSV" button next to the Refresh button. The CSV will include:
 
-```sql
--- 1. Delete all video links
-DELETE FROM video_links;
+- Video ID, Title, Channel Name, Keywords, Rank, Views, Likes, Comments, Published Date, Total Links
+- For each unique platform across all videos: two columns — `Platform: {name} (count)` and `Platform: {name} (%)` 
+- For each unique retailer across all videos: two columns — `Retailer: {name} (count)` and `Retailer: {name} (%)`
 
--- 2. Delete all video-keyword associations
-DELETE FROM video_keywords;
+Percentage = `count / total_links * 100`, rounded to nearest integer.
 
--- 3. Delete all videos
-DELETE FROM videos;
+### 2. Channels tab — Add percentage columns to CSV export (`src/pages/Channels.tsx`)
 
--- 4. Delete all fetch jobs
-DELETE FROM fetch_jobs;
+Update `downloadCSV` to add `%` columns alongside the existing count columns:
+- `Platform: {name}` (count) → add `Platform: {name} (%)` = `count / total_videos * 100`
+- `Retailer: {name}` (count) → add `Retailer: {name} (%)` = `count / total_videos * 100`
 
--- 5. Delete all keywords
-DELETE FROM keywords_search_runs;
+### 3. Channels tab — Add Channel Link column (`src/pages/Channels.tsx`)
 
--- 6. Reset channel stats to empty (since computed from deleted data)
-UPDATE channels 
-SET platform_video_counts = '{}',
-    retailer_video_counts = '{}',
-    retailer_via_affiliate_counts = '{}',
-    retailer_direct_counts = '{}',
-    affiliate_platform_names = '{}',
-    retailer_names = '{}',
-    affiliate_names = '{}',
-    total_videos_fetched = 0;
-```
+Add a "Channel Link" column showing the YouTube channel URL as a clickable link (the channel name already links, but add an explicit column with the URL visible/copyable).
 
-No schema changes needed. No code changes needed — the UI will simply show empty tables.
+### 4. Channels tab — Add "Videos" link column (`src/pages/Channels.tsx`)
+
+Add a "Videos" column with a link that navigates to `/videos?channel={channel_name}`, allowing users to see all videos for that channel.
+
+### 5. Videos tab — Support channel filter from URL (`src/pages/Videos.tsx`)
+
+Read `?channel=` query param from the URL on mount and pre-fill the channel filter, so the link from Channels tab works.
 
 ## Files Changed
 
-None — this is a data-only operation using SQL DELETE/UPDATE statements.
+| File | Change |
+|------|--------|
+| `src/pages/Videos.tsx` | Add `downloadVideosCSV`, Download CSV button, read `?channel` query param |
+| `src/pages/Channels.tsx` | Add `%` columns to CSV, add Channel Link column, add Videos link column |
 
