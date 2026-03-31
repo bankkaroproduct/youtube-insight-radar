@@ -271,8 +271,8 @@ export default function Videos() {
                 </TableHeader>
                 <TableBody>
                   {filteredAndSorted.map((v) => {
-                    const platforms = getUniquePlatforms(v);
-                    const retailers = getUniqueRetailers(v);
+                    const platformShares = getPlatformShares(v);
+                    const retailerShares = getRetailerShares(v);
                     return (
                       <>
                         <TableRow key={v.id} className="cursor-pointer" onClick={() => toggleExpand(v.id)}>
