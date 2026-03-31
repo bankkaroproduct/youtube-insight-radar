@@ -58,10 +58,10 @@ function downloadCSV(channels: any[]) {
   const retailerList = [...allRetailers].sort();
 
   const headers = [
-    "Channel Name", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
+    "Channel Name", "Channel Link", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
     "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram",
-    ...platformList.map(p => `Platform: ${p}`),
-    ...retailerList.map(r => `Retailer: ${r}`),
+    ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
+    ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
   ];
 
   const rows = channels.map(ch => {
