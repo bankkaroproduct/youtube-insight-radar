@@ -1,41 +1,31 @@
 
 
-# Add Download Button to Videos + Enhance Channels Tab
+# India-Only Filter, No Reels, Clickable Video Titles, and Fix Stat Cards
 
 ## Changes
 
-### 1. Videos tab — Add CSV download with market share columns (`src/pages/Videos.tsx`)
+### 1. Filter fetches to India-only channels and exclude Shorts/Reels (`supabase/functions/process-fetch-queue/index.ts`)
 
-Add a `downloadVideosCSV` function and a "Download CSV" button next to the Refresh button. The CSV will include:
+Add `regionCode: "IN"` to the YouTube Search API params (line ~174) so only Indian results are returned. Also filter out YouTube Shorts/Reels by checking video titles — exclude videos where the title contains "#shorts" or the video ID appears in a Shorts URL pattern. Additionally, after fetching video details, skip any video with a duration under 60 seconds (requires adding `contentDetails` to the `part` param on line 239) to reliably exclude Shorts.
 
-- Video ID, Title, Channel Name, Keywords, Rank, Views, Likes, Comments, Published Date, Total Links
-- For each unique platform across all videos: two columns — `Platform: {name} (count)` and `Platform: {name} (%)` 
-- For each unique retailer across all videos: two columns — `Retailer: {name} (count)` and `Retailer: {name} (%)`
+**Specific changes:**
+- Add `regionCode: "IN"` param to the search request (line ~174)
+- Add `contentDetails` to the video details `part` param to get duration
+- Parse ISO 8601 duration and skip videos shorter than 60 seconds
+- This ensures only Indian, non-Shorts videos are stored
 
-Percentage = `count / total_links * 100`, rounded to nearest integer.
+### 2. Make video title a clickable link to YouTube (`src/pages/Videos.tsx`)
 
-### 2. Channels tab — Add percentage columns to CSV export (`src/pages/Channels.tsx`)
+Replace the plain `ExpandableText` title (line 339) with an anchor tag wrapping it, linking to `https://www.youtube.com/watch?v={video_id}`. Open in new tab. Remove or keep the external link icon column as redundant (keep it for now).
 
-Update `downloadCSV` to add `%` columns alongside the existing count columns:
-- `Platform: {name}` (count) → add `Platform: {name} (%)` = `count / total_videos * 100`
-- `Retailer: {name}` (count) → add `Retailer: {name} (%)` = `count / total_videos * 100`
+### 3. Fix stat cards to use filtered data (`src/pages/Videos.tsx`)
 
-### 3. Channels tab — Add Channel Link column (`src/pages/Channels.tsx`)
-
-Add a "Channel Link" column showing the YouTube channel URL as a clickable link (the channel name already links, but add an explicit column with the URL visible/copyable).
-
-### 4. Channels tab — Add "Videos" link column (`src/pages/Channels.tsx`)
-
-Add a "Videos" column with a link that navigates to `/videos?channel={channel_name}`, allowing users to see all videos for that channel.
-
-### 5. Videos tab — Support channel filter from URL (`src/pages/Videos.tsx`)
-
-Read `?channel=` query param from the URL on mount and pre-fill the channel filter, so the link from Channels tab works.
+Currently stat cards (line 208-224) use `videos` (all data) rather than `filteredAndSorted`. Update the `stats` useMemo to compute from `filteredAndSorted` so the cards reflect what the user is currently seeing (matching the screenshot reference showing contextual counts).
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/pages/Videos.tsx` | Add `downloadVideosCSV`, Download CSV button, read `?channel` query param |
-| `src/pages/Channels.tsx` | Add `%` columns to CSV, add Channel Link column, add Videos link column |
+| `supabase/functions/process-fetch-queue/index.ts` | Add `regionCode: "IN"`, add `contentDetails` part, filter out Shorts (<60s) |
+| `src/pages/Videos.tsx` | Wrap title in YouTube link, update stats to use filtered data |
 
