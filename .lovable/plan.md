@@ -1,53 +1,42 @@
 
 
-# Fix URL Unshortening + Remove competitor_names + Correct Platform/Retailer Flow
+# Fix: Use Text Columns for Platform/Retailer Display in Videos
 
-## Problems
+## Problem
 
-### 1. URL unshortening not happening
-The screenshot shows `original_url` = `unshortened_url` for wishlink.com, haulpack.com, meesho.com URLs. Root cause: the edge function only unshortens URLs whose domain is in `KNOWN_SHORTENERS` (bit.ly, wsli.nk, etc.). URLs like `www.wishlink.com/share/xyz` or `share.haulpack.com/abc` are NOT short URLs in the traditional sense — they're **affiliate platform redirect URLs** that resolve to retailer destinations. The function treats them as normal links and copies `original_url` → `finalUrl` without following redirects.
+The `useVideos.ts` hook derives `platform_name` and `retailer_name` by looking up pattern IDs (`affiliate_platform_id`, `retailer_pattern_id`) in the `affiliate_patterns` table. This approach fails because:
 
-**Fix**: After building dynamic lookup maps from `affiliate_patterns`, treat any URL whose domain matches a known **affiliate platform pattern** as needing unshortening (redirect following). Add these domains to the shortener detection logic dynamically.
+1. **Platform ID is only set for shortened links** — when a wishlink.com URL doesn't successfully unshorten (original_url = unshortened_url), `isShortened` is `false`, so no `platformMatch` is attempted, and `affiliate_platform_id` stays `null`.
+2. **The text columns already exist and are populated** — the edge function already writes `affiliate_platform` and `resolved_retailer` as text columns directly on `video_links`. These are the correct values. The hook just doesn't use them.
 
-### 2. Platform = original URL, Retailer = unshortened URL
-The correct flow:
-- **Platform** is identified from the `original_url` domain (e.g., `wishlink.com` → Wishlink, `share.haulpack.com` → Haulpack)
-- **Retailer** is identified from the `unshortened_url` domain after resolving redirects (e.g., `amazon.in` → Amazon, `meesho.com` → Meesho)
-- If a domain doesn't match any platform or retailer → goes to **Discovered** with auto-detected type (`affiliate_platform` if it was the original domain of a shortened link, `retailer` if it was the destination)
-
-Currently the logic partially does this but fails because unshortening doesn't happen for affiliate platform URLs.
-
-### 3. Delete `competitor_names` table
-The `competitor_names` table is redundant — the `name` field in `affiliate_patterns` already serves the same purpose. The NameDropdown in Links.tsx should instead pull unique names from the existing `affiliate_patterns` table.
+Additionally, the edge function only identifies a platform via `lookupAffiliatePlatform()` when `isShortened` is true (line 242). For cases where unshortening fails (common with wishlink.com), no platform or retailer is tagged even though the domain is known.
 
 ## Changes
 
-### 1. Migration — Drop `competitor_names` table
-```sql
-DROP TABLE IF EXISTS public.competitor_names;
-```
+### 1. `src/hooks/useVideos.ts` — Use text columns instead of pattern ID lookups
 
-### 2. `supabase/functions/process-video-links/index.ts` — Fix unshortening logic
-- After building dynamic affiliate platform maps from DB, collect all affiliate platform domains (both hardcoded and from DB)
-- Change the shortener detection: a URL needs unshortening if its domain is in `KNOWN_SHORTENERS` **OR** matches any known affiliate platform pattern
-- This ensures `wishlink.com/share/xyz` gets resolved via redirect following to find the actual retailer destination
-- Platform is always identified from `original_domain`, retailer from `unshortened_domain` (the resolved URL)
+Remove the entire `affiliate_patterns` lookup (lines 82-99) and map `platform_name` / `retailer_name` from the text columns already on `video_links`:
 
-### 3. `src/pages/Links.tsx` — Remove competitor_names dependency
-- Remove `useCompetitorNames` import and usage
-- Replace `NameDropdown` with a simple `Input` for name entry, or derive unique names from existing `affiliate_patterns` data
-- The `DiscoveredNamePicker` can use unique names extracted from `confirmedPatterns` instead
+- `platform_name` → `link.affiliate_platform`
+- `retailer_name` → `link.resolved_retailer`
+- `affiliate_name` → `link.affiliate_platform || link.resolved_retailer`
 
-### 4. Delete `src/hooks/useCompetitorNames.ts`
-No longer needed.
+This eliminates the indirection that causes misattribution.
 
-### Files Changed
+### 2. `supabase/functions/process-video-links/index.ts` — Always check platform from original domain
+
+Currently line 234 calls `lookupAffiliatePlatform(originalDomain)` but line 242 only uses the result when `isShortened` is true. Fix: always check the original domain against platform patterns regardless of whether unshortening changed the URL. Also check the original domain against DB patterns for platform matching even when not shortened.
+
+This ensures that even when unshortening fails (wishlink.com → wishlink.com), the platform is still identified from the original URL, and the retailer check happens on the unshortened URL (or skipped if same).
+
+### 3. Edge function — Also check non-shortened retailer matches against DB patterns
+
+When `isShortened` is false, the current code checks `lookupRetailer(originalDomain)` but doesn't populate `resolved_retailer` text column in the "non-affiliate" path properly. Fix the logic so retailer text columns are always populated when a retailer match is found, regardless of whether a platform was also detected.
+
+## Files Changed
 
 | File | Change |
 |------|--------|
-| Migration SQL | `DROP TABLE competitor_names` |
-| `process-video-links/index.ts` | Unshorten affiliate platform URLs (wishlink, haulpack, etc.), not just generic shorteners |
-| `src/pages/Links.tsx` | Remove competitor_names usage, use names from affiliate_patterns |
-| `src/hooks/useCompetitorNames.ts` | Delete file |
-| `src/hooks/useAffiliatePatterns.ts` | Add `uniqueNames` derived from confirmed patterns |
+| `src/hooks/useVideos.ts` | Remove pattern ID lookup; use `affiliate_platform` and `resolved_retailer` text columns directly |
+| `supabase/functions/process-video-links/index.ts` | Always identify platform from original domain; fix retailer tagging for non-shortened links |
 
