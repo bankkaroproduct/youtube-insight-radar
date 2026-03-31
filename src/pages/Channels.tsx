@@ -214,6 +214,15 @@ export default function Channels() {
                            ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        {ch.is_relevant === true ? (
+                          <Badge variant="outline" className="bg-green-500/15 text-green-700 border-green-500/30">Yes</Badge>
+                        ) : ch.is_relevant === false ? (
+                          <Badge variant="outline" className="bg-muted text-muted-foreground">No</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[180px]">
                         <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
                       </TableCell>
