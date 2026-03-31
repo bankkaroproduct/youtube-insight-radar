@@ -80,7 +80,6 @@ export function useVideos() {
     const vkData = (vkResult.data ?? []) as any[];
 
 
-
     const keywordIds = [...new Set(vkData.map((vk) => vk.keyword_id).filter(Boolean))];
     let keywordsMap = new Map<string, string>();
     if (keywordIds.length > 0) {
