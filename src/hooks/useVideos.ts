@@ -87,14 +87,14 @@ export function useVideos() {
       if (l.retailer_pattern_id) allPatternIds.add(l.retailer_pattern_id);
     }
 
-    let patternsMap = new Map<string, string>();
+    let patternsMap = new Map<string, { name: string; type: string }>();
     if (allPatternIds.size > 0) {
       const { data: patternsData } = await supabase
         .from("affiliate_patterns")
-        .select("id, name")
+        .select("id, name, type")
         .in("id", [...allPatternIds]);
       for (const p of (patternsData ?? []) as any[]) {
-        patternsMap.set(p.id, p.name);
+        patternsMap.set(p.id, { name: p.name, type: (p.type || "").toLowerCase() });
       }
     }
 
@@ -113,17 +113,39 @@ export function useVideos() {
     const linksByVideo = new Map<string, VideoLink[]>();
     for (const link of linksData) {
       const list = linksByVideo.get(link.video_id) || [];
+
+      // Derive platform and retailer names using pattern type
+      let platformName: string | null = null;
+      let retailerName: string | null = null;
+      let affiliateName: string | null = null;
+
+      // Check all three pattern IDs and assign based on actual pattern type
+      const patternIds = [
+        link.matched_pattern_id,
+        link.affiliate_platform_id,
+        link.retailer_pattern_id,
+      ].filter(Boolean);
+
+      for (const pid of patternIds) {
+        const info = patternsMap.get(pid);
+        if (!info) continue;
+        if (info.type === "affiliate_platform") {
+          platformName = info.name;
+          affiliateName = info.name;
+        } else if (info.type === "retailer") {
+          retailerName = info.name;
+        }
+      }
+
+      // Prefer text columns from edge function if available
+      if (link.affiliate_platform) platformName = link.affiliate_platform;
+      if (link.resolved_retailer) retailerName = link.resolved_retailer;
+
       list.push({
         ...link,
-        affiliate_name: link.matched_pattern_id
-          ? patternsMap.get(link.matched_pattern_id) || null
-          : null,
-        platform_name: link.affiliate_platform_id
-          ? patternsMap.get(link.affiliate_platform_id) || null
-          : null,
-        retailer_name: link.retailer_pattern_id
-          ? patternsMap.get(link.retailer_pattern_id) || null
-          : null,
+        affiliate_name: affiliateName,
+        platform_name: platformName,
+        retailer_name: retailerName,
       });
       linksByVideo.set(link.video_id, list);
     }
