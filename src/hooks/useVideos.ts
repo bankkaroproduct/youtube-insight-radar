@@ -53,7 +53,7 @@ export function useVideos() {
       .from("videos")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(500);
+      .limit(999999999);
 
     if (error) {
       toast.error("Failed to load videos");
