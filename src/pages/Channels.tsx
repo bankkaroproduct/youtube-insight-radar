@@ -227,6 +227,9 @@ export default function Channels() {
                       <TableCell className="text-sm text-muted-foreground max-w-[180px]">
                         <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
                       </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {ch.country || "—"}
+                      </TableCell>
                       <TableCell>
                         {ch.affiliate_names?.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
@@ -239,11 +242,19 @@ export default function Channels() {
                         ) : "—"}
                       </TableCell>
                       <TableCell>
-                        {ch.contact_email ? (
-                          <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1 text-sm">
-                            <Mail className="h-3 w-3" /> Email
-                          </a>
-                        ) : "—"}
+                        <div className="flex items-center gap-2">
+                          {ch.contact_email ? (
+                            <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1 text-sm">
+                              <Mail className="h-3 w-3" /> Email
+                            </a>
+                          ) : null}
+                          {ch.instagram_url ? (
+                            <a href={ch.instagram_url} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline flex items-center gap-1 text-sm">
+                              <Instagram className="h-3 w-3" /> IG
+                            </a>
+                          ) : null}
+                          {!ch.contact_email && !ch.instagram_url ? "—" : null}
+                        </div>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[250px]">
                         <ExpandableText text={ch.description || ""} maxLength={60} />
