@@ -1,70 +1,29 @@
 
 
-# Integrate unshorten.me API for URL Resolution
+# Fix Stat Cards to Show Exact Unlimited Values
 
-## What Changes
+## Problem
+The `daily_quota_limit` column defaults to `10,000` per key, which artificially caps the "Quota Remaining" stat and marks keys as "exhausted" based on this limit. YouTube's actual daily quota per key is `10,000 units`, but the user wants no artificial ceiling — just raw, accurate numbers.
 
-Replace the current manual HEAD/GET redirect-following in `process-video-links` with the unshorten.me API, which is more reliable for resolving shortened affiliate URLs.
+## Changes
 
-## Files to Change
+### 1. Database Migration
+- Change `daily_quota_limit` default from `10000` to `0` (meaning unlimited/no cap)
+- Update all existing rows: set `daily_quota_limit = 0` where it's still `10000`
 
-### 1. `supabase/functions/process-video-links/index.ts`
+### 2. `src/hooks/useApiKeys.ts` — Fix stats calculation
+- **Quota Remaining**: When `daily_quota_limit` is `0` (unlimited), show total quota used instead of remaining. Or simply show `quota_used_today` totals as the stat
+- **Exhausted**: Only mark as exhausted if `daily_quota_limit > 0` AND usage exceeds it — keys with limit `0` are never "exhausted"
+- Change `quotaRemaining` to `quotaUsed` showing total units consumed today across all active keys (exact value, no cap)
 
-**Replace the `unshortenUrl` function** (lines 23-43) to call the unshorten.me API instead of doing HEAD/GET redirect follows:
+### 3. `src/components/api-keys/ApiKeyStatsCards.tsx`
+- Rename "Quota Remaining" card to "Quota Used Today" showing exact usage
+- Keep `.toLocaleString()` for comma formatting (this is display formatting, not a limit)
 
-```typescript
-async function unshortenUrl(url: string): Promise<string> {
-  const apiKey = Deno.env.get("UNSHORTEN_API_KEY");
-  if (!apiKey) {
-    console.warn("UNSHORTEN_API_KEY missing — falling back to redirect follow");
-    return fallbackUnshorten(url);
-  }
-  try {
-    const resp = await fetch(
-      `https://unshorten.me/api/v2/unshorten?url=${encodeURIComponent(url)}`,
-      {
-        headers: { Authorization: `Token ${apiKey}` },
-        signal: AbortSignal.timeout(5000),
-      }
-    );
-    if (resp.status === 429) {
-      console.warn("unshorten.me rate limited — falling back");
-      return fallbackUnshorten(url);
-    }
-    const data = await resp.json();
-    if (data.success && data.unshortened_url) {
-      return data.unshortened_url;
-    }
-    return fallbackUnshorten(url);
-  } catch {
-    return fallbackUnshorten(url);
-  }
-}
-```
+### 4. `supabase/functions/process-fetch-queue/index.ts`
+- In `getNextApiKey`: skip the `quota_used_today >= daily_quota_limit` check when `daily_quota_limit` is `0` (unlimited)
 
-Keep the old HEAD/GET logic as `fallbackUnshorten()` so the system degrades gracefully if the API key is missing or rate-limited.
-
-**Add shortener domains** from user's list that are currently missing: `fkrt.it`, `wsli.nk`, `tiny.cc`, `short.io`, `amzn.to`.
-
-### 2. Add Secret: `UNSHORTEN_API_KEY`
-
-Use the `add_secret` tool to request the API key from the user. This secret will be available to the edge function at runtime via `Deno.env.get("UNSHORTEN_API_KEY")`.
-
-### 3. `src/utils/unshortenUrl.ts` (new file)
-
-Create a client-side utility with `unshortenUrl()`, `unshortenMany()`, and `isShortUrl()` as specified. This uses `VITE_UNSHORTEN_API_KEY` for any client-side usage (though primary processing happens in the edge function).
-
-## What Does NOT Change
-
-- The overall pipeline flow remains identical
-- Affiliate pattern matching, classification, and channel stats triggering are untouched
-- The `parallelMap` with concurrency 10 stays the same
-- Batch DB writes stay the same
-
-## Summary
-
-- Edge function gets the real improvement (unshorten.me API replaces unreliable redirect-following)
-- Graceful fallback if API key missing or rate limit hit
-- Client-side utility created for any future front-end usage
-- One new secret to add: `UNSHORTEN_API_KEY`
+## What Stays the Same
+- All other stat cards (Total, Healthy, Invalid, Exhausted) keep their logic
+- API key table, testing, export unchanged
 
