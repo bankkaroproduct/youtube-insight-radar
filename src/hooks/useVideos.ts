@@ -115,15 +115,9 @@ export function useVideos() {
       const list = linksByVideo.get(link.video_id) || [];
       list.push({
         ...link,
-        affiliate_name: link.matched_pattern_id
-          ? patternsMap.get(link.matched_pattern_id) || null
-          : null,
-        platform_name: link.affiliate_platform_id
-          ? patternsMap.get(link.affiliate_platform_id) || null
-          : null,
-        retailer_name: link.retailer_pattern_id
-          ? patternsMap.get(link.retailer_pattern_id) || null
-          : null,
+        affiliate_name: link.affiliate_platform || link.resolved_retailer || null,
+        platform_name: link.affiliate_platform || null,
+        retailer_name: link.resolved_retailer || null,
       });
       linksByVideo.set(link.video_id, list);
     }
