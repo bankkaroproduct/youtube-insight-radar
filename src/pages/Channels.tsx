@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Brain } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
@@ -25,8 +25,8 @@ const statusColors: Record<string, string> = {
 };
 
 export default function Channels() {
-  const { channels, isLoading, refresh, recomputeStats } = useChannels();
-  const [filters, setFilters] = useState({ name: "", status: "", category: "" });
+  const { channels, isLoading, refresh, recomputeStats, checkRelevance } = useChannels();
+  const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   const filteredAndSorted = useMemo(() => {
@@ -34,6 +34,9 @@ export default function Channels() {
       if (filters.name && !ch.channel_name.toLowerCase().includes(filters.name.toLowerCase())) return false;
       if (filters.status && (ch.affiliate_status || "NEUTRAL") !== filters.status) return false;
       if (filters.category && !(ch.youtube_category || "").toLowerCase().includes(filters.category.toLowerCase())) return false;
+      if (filters.relevance === "yes" && ch.is_relevant !== true) return false;
+      if (filters.relevance === "no" && ch.is_relevant !== false) return false;
+      if (filters.relevance === "unchecked" && ch.is_relevant !== null) return false;
       return true;
     });
 
@@ -45,6 +48,7 @@ export default function Channels() {
         case "views": return item.median_views || 0;
         case "likes": return item.median_likes || 0;
         case "status": return item.affiliate_status || "NEUTRAL";
+        case "relevance": return item.is_relevant === true ? 1 : item.is_relevant === false ? 0 : -1;
         case "category": return item.youtube_category || "";
         default: return null;
       }
@@ -77,6 +81,9 @@ export default function Channels() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => checkRelevance()}>
+            <Brain className="h-4 w-4 mr-2" /> Check Relevance
+          </Button>
           <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
             <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
           </Button>
@@ -130,6 +137,7 @@ export default function Channels() {
                     <SortableHeader label="Median Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
                     <SortableHeader label="Median Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
                     <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <TableHead>Affiliates</TableHead>
                     <TableHead>Contact</TableHead>
@@ -151,6 +159,17 @@ export default function Channels() {
                           <SelectItem value="COMPETITOR">Competitor</SelectItem>
                           <SelectItem value="MIXED">Mixed</SelectItem>
                           <SelectItem value="NEUTRAL">Neutral</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableHead>
+                    <TableHead>
+                      <Select value={filters.relevance} onValueChange={(v) => setFilters(f => ({ ...f, relevance: v === "all" ? "" : v }))}>
+                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="yes">Yes</SelectItem>
+                          <SelectItem value="no">No</SelectItem>
+                          <SelectItem value="unchecked">Unchecked</SelectItem>
                         </SelectContent>
                       </Select>
                     </TableHead>
@@ -194,6 +213,15 @@ export default function Channels() {
                            ch.affiliate_status === "COMPETITOR" ? "Competitor" :
                            ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {ch.is_relevant === true ? (
+                          <Badge variant="outline" className="bg-green-500/15 text-green-700 border-green-500/30">Yes</Badge>
+                        ) : ch.is_relevant === false ? (
+                          <Badge variant="outline" className="bg-muted text-muted-foreground">No</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[180px]">
                         <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
