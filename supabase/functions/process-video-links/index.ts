@@ -21,7 +21,7 @@ const SKIP_DOMAINS = new Set([
   "apps.apple.com", "medium.com", "blogspot.com", "wordpress.com",
 ]);
 
-async function unshortenUrl(url: string): Promise<string> {
+async function fallbackUnshorten(url: string): Promise<string> {
   try {
     const resp = await fetch(url, {
       method: "HEAD",
@@ -40,6 +40,38 @@ async function unshortenUrl(url: string): Promise<string> {
     } catch {
       return url;
     }
+  }
+}
+
+async function unshortenUrl(url: string): Promise<string> {
+  const apiKey = Deno.env.get("UNSHORTEN_API_KEY");
+  if (!apiKey) {
+    console.warn("UNSHORTEN_API_KEY missing — falling back to redirect follow");
+    return fallbackUnshorten(url);
+  }
+  try {
+    const resp = await fetch(
+      `https://unshorten.me/api/v2/unshorten?url=${encodeURIComponent(url)}`,
+      {
+        headers: { Authorization: `Token ${apiKey}` },
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    if (resp.status === 401) {
+      console.warn("unshorten.me invalid API key — falling back");
+      return fallbackUnshorten(url);
+    }
+    if (resp.status === 429) {
+      console.warn("unshorten.me rate limited — falling back");
+      return fallbackUnshorten(url);
+    }
+    const data = await resp.json();
+    if (data.success && data.unshortened_url) {
+      return data.unshortened_url;
+    }
+    return fallbackUnshorten(url);
+  } catch {
+    return fallbackUnshorten(url);
   }
 }
 
