@@ -314,76 +314,49 @@ serve(async (req) => {
       }
     }
 
-    // Auto-trigger process-video-links
-    try {
-      const fnUrl = `${supabaseUrl}/functions/v1/process-video-links`;
-      await fetch(fnUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${serviceKey}`,
-          "Content-Type": "application/json",
-        },
-      });
-    } catch (e) {
-      console.error("Failed to trigger process-video-links:", e);
-    }
+    // Fire-and-forget: trigger downstream functions without awaiting
+    const triggerHeaders = {
+      "Authorization": `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    };
 
-    // Auto-trigger compute-channel-stats for all discovered channels
-    try {
-      const fnUrl = `${supabaseUrl}/functions/v1/compute-channel-stats`;
-      await fetch(fnUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${serviceKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ channel_ids: [...allChannelIds] }),
-      });
-    } catch (e) {
-      console.error("Failed to trigger compute-channel-stats:", e);
-    }
+    // process-video-links
+    fetch(`${supabaseUrl}/functions/v1/process-video-links`, {
+      method: "POST", headers: triggerHeaders,
+    }).catch(e => console.error("Failed to trigger process-video-links:", e));
 
-    // Auto-trigger analyze-keyword-priority for keywords without priority
-    try {
-      const keywordIds = [...new Set(pendingJobs.map(j => j.keyword_id).filter(Boolean))];
-      if (keywordIds.length > 0) {
-        const { data: unprioritized } = await supabase
-          .from("keywords_search_runs")
-          .select("id, keyword")
-          .in("id", keywordIds)
-          .is("priority", null);
-
-        if (unprioritized && unprioritized.length > 0) {
-          const fnUrl = `${supabaseUrl}/functions/v1/analyze-keyword-priority`;
-          await fetch(fnUrl, {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${serviceKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ keywords: unprioritized }),
-          });
-        }
-      }
-    } catch (e) {
-      console.error("Failed to trigger analyze-keyword-priority:", e);
-    }
-
-    // Auto-trigger analyze-channel-relevance for new channels
+    // compute-channel-stats
     if (allChannelIds.size > 0) {
-      try {
-        const fnUrl = `${supabaseUrl}/functions/v1/analyze-channel-relevance`;
-        await fetch(fnUrl, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${serviceKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ channel_ids: [...allChannelIds] }),
+      fetch(`${supabaseUrl}/functions/v1/compute-channel-stats`, {
+        method: "POST", headers: triggerHeaders,
+        body: JSON.stringify({ channel_ids: [...allChannelIds] }),
+      }).catch(e => console.error("Failed to trigger compute-channel-stats:", e));
+    }
+
+    // analyze-keyword-priority
+    const keywordIds = [...new Set(pendingJobs.map(j => j.keyword_id).filter(Boolean))];
+    if (keywordIds.length > 0) {
+      supabase
+        .from("keywords_search_runs")
+        .select("id, keyword")
+        .in("id", keywordIds)
+        .is("priority", null)
+        .then(({ data: unprioritized }) => {
+          if (unprioritized && unprioritized.length > 0) {
+            fetch(`${supabaseUrl}/functions/v1/analyze-keyword-priority`, {
+              method: "POST", headers: triggerHeaders,
+              body: JSON.stringify({ keywords: unprioritized }),
+            }).catch(e => console.error("Failed to trigger analyze-keyword-priority:", e));
+          }
         });
-      } catch (e) {
-        console.error("Failed to trigger analyze-channel-relevance:", e);
-      }
+    }
+
+    // analyze-channel-relevance
+    if (allChannelIds.size > 0) {
+      fetch(`${supabaseUrl}/functions/v1/analyze-channel-relevance`, {
+        method: "POST", headers: triggerHeaders,
+        body: JSON.stringify({ channel_ids: [...allChannelIds] }),
+      }).catch(e => console.error("Failed to trigger analyze-channel-relevance:", e));
     }
 
     return new Response(JSON.stringify({ success: true, processed: pendingJobs.length }), {
