@@ -19,6 +19,62 @@ const AFFILIATE_REDIRECT_DOMAINS = [
   "earnkaro.com", "cuelinks.com", "magicpin.in",
 ];
 
+// Domains that use JS-based redirects (not HTTP 3xx) — need HTML parsing
+const JS_REDIRECT_DOMAINS = [
+  "wishlink.com", "lehlah.club", "instamojo.com", "link.springer.com",
+  "haulpack.com", "earnkaro.com", "cuelinks.com", "magicpin.in",
+];
+
+function isJsRedirectDomain(domain: string): boolean {
+  return JS_REDIRECT_DOMAINS.some(d => domain.includes(d));
+}
+
+function extractRedirectFromHtml(html: string, sourceDomain: string): string | null {
+  // Pattern 1: window.location.href = "URL" or window.location = "URL"
+  const jsMatch = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
+  if (jsMatch && jsMatch[1]?.startsWith("http")) return jsMatch[1];
+
+  // Pattern 2: <meta http-equiv="refresh" content="...url=URL">
+  const metaMatch = html.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"'\s>]+)/i);
+  if (metaMatch && metaMatch[1]?.startsWith("http")) return metaMatch[1];
+
+  // Pattern 3: <link rel="canonical" href="URL">
+  const canonicalMatch = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i);
+  if (canonicalMatch && canonicalMatch[1]?.startsWith("http")) {
+    const canonDomain = extractDomain(canonicalMatch[1]);
+    // Only use canonical if it points to a different domain
+    if (canonDomain && !canonDomain.includes(sourceDomain) && !sourceDomain.includes(canonDomain)) {
+      return canonicalMatch[1];
+    }
+  }
+
+  // Pattern 4: First external <a href> not pointing back to source domain
+  const escapedDomain = sourceDomain.replace(/\./g, "\\.");
+  const extLinkRegex = new RegExp(`<a[^>]+href=["'](https?:\\/\\/(?!(?:[^"']*${escapedDomain}))[^"']+)["']`, "i");
+  const extMatch = html.match(extLinkRegex);
+  if (extMatch && extMatch[1]?.startsWith("http")) return extMatch[1];
+
+  return null;
+}
+
+async function resolveJsRedirect(url: string): Promise<string> {
+  try {
+    const resp = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LinkBot/1.0)" },
+    });
+    const html = await resp.text();
+    const domain = extractDomain(url);
+    const extracted = extractRedirectFromHtml(html, domain);
+    if (extracted) return extracted;
+    return url;
+  } catch {
+    return url;
+  }
+}
+
 // Affiliate short domains → platform name
 const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "wsli.nk": "Wishlink",
@@ -66,11 +122,20 @@ function lookupRetailer(domain: string): { name: string; domain: string } | null
 async function fallbackUnshorten(url: string): Promise<string> {
   try {
     const resp = await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(5000) });
-    return resp.url || url;
+    let resolved = resp.url || url;
+    // If we landed on a JS-redirect domain, parse HTML for the real destination
+    if (isJsRedirectDomain(extractDomain(resolved))) {
+      resolved = await resolveJsRedirect(resolved);
+    }
+    return resolved;
   } catch {
     try {
       const resp = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(5000) });
-      return resp.url || url;
+      let resolved = resp.url || url;
+      if (isJsRedirectDomain(extractDomain(resolved))) {
+        resolved = await resolveJsRedirect(resolved);
+      }
+      return resolved;
     } catch {
       return url;
     }
@@ -87,7 +152,14 @@ async function unshortenUrl(url: string): Promise<string> {
     );
     if (resp.status === 401 || resp.status === 429) return fallbackUnshorten(url);
     const data = await resp.json();
-    if (data.success && data.unshortened_url) return data.unshortened_url;
+    if (data.success && data.unshortened_url) {
+      let resolved = data.unshortened_url;
+      // If unshorten.me resolved to a JS-redirect domain, parse HTML too
+      if (isJsRedirectDomain(extractDomain(resolved))) {
+        resolved = await resolveJsRedirect(resolved);
+      }
+      return resolved;
+    }
     return fallbackUnshorten(url);
   } catch {
     return fallbackUnshorten(url);
@@ -223,7 +295,7 @@ serve(async (req) => {
         retailer_pattern_id: string | null;
         // New text columns
         is_shortened: boolean;
-        link_type: string | null;
+        link_type: string;
         affiliate_platform: string | null;
         affiliate_domain: string | null;
         resolved_retailer: string | null;
@@ -253,7 +325,7 @@ serve(async (req) => {
           retailerLookup = lookupRetailer(originalDomain);
         }
 
-        let linkType: string | null = null;
+        let linkType: string = "unknown";
         let resolvedRetailer: string | null = null;
         let resolvedRetailerDomain: string | null = null;
 
