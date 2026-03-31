@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { useChannels } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -6,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
@@ -57,17 +58,19 @@ function downloadCSV(channels: any[]) {
   const retailerList = [...allRetailers].sort();
 
   const headers = [
-    "Channel Name", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
+    "Channel Name", "Channel Link", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
     "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram",
-    ...platformList.map(p => `Platform: ${p}`),
-    ...retailerList.map(r => `Retailer: ${r}`),
+    ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
+    ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
   ];
 
   const rows = channels.map(ch => {
     const counts = ch.platform_video_counts || {};
     const rCounts = ch.retailer_video_counts || {};
+    const totalVids = ch.total_videos_fetched || 0;
     return [
       ch.channel_name,
+      ch.channel_url || "",
       ch.subscriber_count || 0,
       ch.total_videos_fetched || 0,
       ch.median_views || 0,
@@ -79,8 +82,8 @@ function downloadCSV(channels: any[]) {
       ch.country || "",
       ch.contact_email || "",
       ch.instagram_url || "",
-      ...platformList.map(p => counts[p] || 0),
-      ...retailerList.map(r => rCounts[r] || 0),
+      ...platformList.flatMap(p => { const c = counts[p] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
+      ...retailerList.flatMap(r => { const c = rCounts[r] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
     ];
   });
 
@@ -99,6 +102,7 @@ function downloadCSV(channels: any[]) {
 
 export default function Channels() {
   const { channels, isLoading, refresh, recomputeStats } = useChannels();
+  const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
@@ -213,6 +217,8 @@ export default function Channels() {
                     <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <TableHead>Platforms (videos / share)</TableHead>
                     <TableHead>Retailers (videos / share)</TableHead>
+                    <TableHead>Channel Link</TableHead>
+                    <TableHead>Videos</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
@@ -247,6 +253,8 @@ export default function Channels() {
                     </TableHead>
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.country} onChange={(e) => setFilters(f => ({ ...f, country: e.target.value }))} /></TableHead>
+                    <TableHead />
+                    <TableHead />
                     <TableHead />
                     <TableHead />
                     <TableHead />
@@ -288,6 +296,18 @@ export default function Channels() {
                       </TableCell>
                       <TableCell className="max-w-[220px]">
                         {renderCountTags(ch.retailer_video_counts, ch.total_videos_fetched || 0, "bg-purple-500/15 text-purple-700 border-purple-500/30")}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {ch.channel_url ? (
+                          <a href={ch.channel_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
+                            <ExternalLink className="h-3 w-3" /> Link
+                          </a>
+                        ) : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => navigate(`/videos?channel=${encodeURIComponent(ch.channel_name)}`)}>
+                          View Videos
+                        </Button>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
