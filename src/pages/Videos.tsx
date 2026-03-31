@@ -63,6 +63,52 @@ function getUniqueRetailers(video: Video): string[] {
   return getRetailerShares(video).map(e => e.name);
 }
 
+function downloadVideosCSV(videos: Video[]) {
+  const allPlatforms = new Set<string>();
+  const allRetailers = new Set<string>();
+  for (const v of videos) {
+    for (const e of getPlatformShares(v)) allPlatforms.add(e.name);
+    for (const e of getRetailerShares(v)) allRetailers.add(e.name);
+  }
+  const platformList = [...allPlatforms].sort();
+  const retailerList = [...allRetailers].sort();
+
+  const headers = [
+    "Video ID", "Title", "Channel Name", "Keywords", "Best Rank", "Views", "Likes", "Comments", "Published Date", "Total Links",
+    ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
+    ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
+  ];
+
+  const rows = videos.map(v => {
+    const pShares = getPlatformShares(v);
+    const rShares = getRetailerShares(v);
+    const pMap = new Map(pShares.map(e => [e.name, e]));
+    const rMap = new Map(rShares.map(e => [e.name, e]));
+    return [
+      v.video_id, v.title, v.channel_name,
+      v.keywords.map(k => k.keyword).join("; "),
+      v.best_rank ?? "",
+      v.view_count, v.like_count, v.comment_count,
+      v.published_at ? new Date(v.published_at).toISOString().split("T")[0] : "",
+      v.links.length,
+      ...platformList.flatMap(p => { const e = pMap.get(p); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
+      ...retailerList.flatMap(r => { const e = rMap.get(r); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
+    ];
+  });
+
+  const csvContent = [headers, ...rows]
+    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "videos_export.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function VideoDetailRow({ video }: { video: Video }) {
   return (
     <TableRow className="bg-muted/30">
