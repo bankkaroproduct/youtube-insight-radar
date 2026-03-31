@@ -19,6 +19,9 @@ export interface Channel {
   description: string | null;
   contact_email: string | null;
   youtube_category: string | null;
+  is_relevant: boolean | null;
+  relevance_reasoning: string | null;
+  last_relevance_check_at: string | null;
 }
 
 export function useChannels() {
