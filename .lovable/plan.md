@@ -1,57 +1,53 @@
 
 
-# Fix Pattern Visibility, Type Normalization & Dynamic Lookup
+# Fix URL Unshortening + Remove competitor_names + Correct Platform/Retailer Flow
 
-## Root Causes Found
+## Problems
 
-### 1. Case mismatch — patterns not showing in tabs
-The DB stores `type` as `"Retailer"` (capital R) but `useAffiliatePatterns.ts` filters with `p.type === "retailer"` (lowercase). Result: all retailer patterns appear in neither tab. Same risk for `"Affiliate Platform"` vs `"affiliate_platform"`.
+### 1. URL unshortening not happening
+The screenshot shows `original_url` = `unshortened_url` for wishlink.com, haulpack.com, meesho.com URLs. Root cause: the edge function only unshortens URLs whose domain is in `KNOWN_SHORTENERS` (bit.ly, wsli.nk, etc.). URLs like `www.wishlink.com/share/xyz` or `share.haulpack.com/abc` are NOT short URLs in the traditional sense — they're **affiliate platform redirect URLs** that resolve to retailer destinations. The function treats them as normal links and copies `original_url` → `finalUrl` without following redirects.
 
-### 2. Missing `name` in edge function select
-`process-video-links` line 127 selects `id, pattern, classification, is_confirmed, type` but NOT `name`. Lines 135/138 reference `p.name` to build dynamic lookup maps — this is always `undefined`, so user-added patterns are never used for text column population.
+**Fix**: After building dynamic lookup maps from `affiliate_patterns`, treat any URL whose domain matches a known **affiliate platform pattern** as needing unshortening (redirect following). Add these domains to the shortener detection logic dynamically.
 
-### 3. Bulk upload doesn't normalize type values
-If CSV contains "Retailer" instead of "retailer", it's stored as-is. No normalization happens.
+### 2. Platform = original URL, Retailer = unshortened URL
+The correct flow:
+- **Platform** is identified from the `original_url` domain (e.g., `wishlink.com` → Wishlink, `share.haulpack.com` → Haulpack)
+- **Retailer** is identified from the `unshortened_url` domain after resolving redirects (e.g., `amazon.in` → Amazon, `meesho.com` → Meesho)
+- If a domain doesn't match any platform or retailer → goes to **Discovered** with auto-detected type (`affiliate_platform` if it was the original domain of a shortened link, `retailer` if it was the destination)
+
+Currently the logic partially does this but fails because unshortening doesn't happen for affiliate platform URLs.
+
+### 3. Delete `competitor_names` table
+The `competitor_names` table is redundant — the `name` field in `affiliate_patterns` already serves the same purpose. The NameDropdown in Links.tsx should instead pull unique names from the existing `affiliate_patterns` table.
 
 ## Changes
 
-### 1. `src/hooks/useAffiliatePatterns.ts` — Case-insensitive filtering
-Change the filtering to use `.toLowerCase()`:
-```
-const platformPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "affiliate_platform");
-const retailerPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "retailer");
-```
-
-### 2. `supabase/functions/process-video-links/index.ts` — Add `name` to select + fix dynamic maps
-- Line 127: Add `name` to the select: `"id, pattern, name, classification, is_confirmed, type"`
-- Add `name` to the `Pattern` interface
-- Fix dynamic map building to use case-insensitive type comparison
-
-### 3. `src/components/links/BulkUploadDialog.tsx` — Normalize type
-In `parseCSVContent`, normalize the type column:
-```
-const rawType = (parts[3] || "").trim().toLowerCase();
-const type: PatternType = rawType === "affiliate_platform" || rawType === "platform" 
-  ? "affiliate_platform" : defaultType === "affiliate_platform" ? "affiliate_platform" : "retailer";
-```
-
-### 4. `src/pages/Links.tsx` — Case-insensitive type badge
-The PatternTable type badge check `p.type === "retailer"` should also be case-insensitive.
-
-### 5. Data fix migration — Normalize existing type values
-Run a migration to standardize all existing `type` values to lowercase:
+### 1. Migration — Drop `competitor_names` table
 ```sql
-UPDATE affiliate_patterns SET type = 'retailer' WHERE lower(type) = 'retailer' AND type != 'retailer';
-UPDATE affiliate_patterns SET type = 'affiliate_platform' WHERE lower(type) IN ('affiliate_platform', 'platform', 'affiliate platform') AND type != 'affiliate_platform';
+DROP TABLE IF EXISTS public.competitor_names;
 ```
 
-## Files Changed
+### 2. `supabase/functions/process-video-links/index.ts` — Fix unshortening logic
+- After building dynamic affiliate platform maps from DB, collect all affiliate platform domains (both hardcoded and from DB)
+- Change the shortener detection: a URL needs unshortening if its domain is in `KNOWN_SHORTENERS` **OR** matches any known affiliate platform pattern
+- This ensures `wishlink.com/share/xyz` gets resolved via redirect following to find the actual retailer destination
+- Platform is always identified from `original_domain`, retailer from `unshortened_domain` (the resolved URL)
+
+### 3. `src/pages/Links.tsx` — Remove competitor_names dependency
+- Remove `useCompetitorNames` import and usage
+- Replace `NameDropdown` with a simple `Input` for name entry, or derive unique names from existing `affiliate_patterns` data
+- The `DiscoveredNamePicker` can use unique names extracted from `confirmedPatterns` instead
+
+### 4. Delete `src/hooks/useCompetitorNames.ts`
+No longer needed.
+
+### Files Changed
 
 | File | Change |
 |------|--------|
-| Migration SQL | Normalize existing type values to lowercase |
-| `src/hooks/useAffiliatePatterns.ts` | Case-insensitive type filtering |
-| `src/pages/Links.tsx` | Case-insensitive type badge display |
-| `src/components/links/BulkUploadDialog.tsx` | Normalize type in CSV parsing |
-| `process-video-links/index.ts` | Add `name` to select + Pattern interface, fix dynamic map building |
+| Migration SQL | `DROP TABLE competitor_names` |
+| `process-video-links/index.ts` | Unshorten affiliate platform URLs (wishlink, haulpack, etc.), not just generic shorteners |
+| `src/pages/Links.tsx` | Remove competitor_names usage, use names from affiliate_patterns |
+| `src/hooks/useCompetitorNames.ts` | Delete file |
+| `src/hooks/useAffiliatePatterns.ts` | Add `uniqueNames` derived from confirmed patterns |
 
