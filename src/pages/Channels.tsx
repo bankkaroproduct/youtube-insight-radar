@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Brain } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
@@ -25,8 +25,8 @@ const statusColors: Record<string, string> = {
 };
 
 export default function Channels() {
-  const { channels, isLoading, refresh, recomputeStats, checkRelevance } = useChannels();
-  const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "" });
+  const { channels, isLoading, refresh, recomputeStats } = useChannels();
+  const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   const filteredAndSorted = useMemo(() => {
@@ -37,6 +37,7 @@ export default function Channels() {
       if (filters.relevance === "yes" && ch.is_relevant !== true) return false;
       if (filters.relevance === "no" && ch.is_relevant !== false) return false;
       if (filters.relevance === "unchecked" && ch.is_relevant !== null) return false;
+      if (filters.country && !(ch.country || "").toLowerCase().includes(filters.country.toLowerCase())) return false;
       return true;
     });
 
@@ -50,6 +51,7 @@ export default function Channels() {
         case "status": return item.affiliate_status || "NEUTRAL";
         case "relevance": return item.is_relevant === true ? 1 : item.is_relevant === false ? 0 : -1;
         case "category": return item.youtube_category || "";
+        case "country": return item.country || "";
         default: return null;
       }
     });
@@ -81,9 +83,6 @@ export default function Channels() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => checkRelevance()}>
-            <Brain className="h-4 w-4 mr-2" /> Check Relevance
-          </Button>
           <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
             <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
           </Button>
@@ -139,6 +138,7 @@ export default function Channels() {
                     <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <TableHead>Affiliates</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
@@ -174,6 +174,7 @@ export default function Channels() {
                       </Select>
                     </TableHead>
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
+                    <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.country} onChange={(e) => setFilters(f => ({ ...f, country: e.target.value }))} /></TableHead>
                     <TableHead />
                     <TableHead />
                     <TableHead />
@@ -226,6 +227,9 @@ export default function Channels() {
                       <TableCell className="text-sm text-muted-foreground max-w-[180px]">
                         <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
                       </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {ch.country || "—"}
+                      </TableCell>
                       <TableCell>
                         {ch.affiliate_names?.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
@@ -238,11 +242,19 @@ export default function Channels() {
                         ) : "—"}
                       </TableCell>
                       <TableCell>
-                        {ch.contact_email ? (
-                          <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1 text-sm">
-                            <Mail className="h-3 w-3" /> Email
-                          </a>
-                        ) : "—"}
+                        <div className="flex items-center gap-2">
+                          {ch.contact_email ? (
+                            <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1 text-sm">
+                              <Mail className="h-3 w-3" /> Email
+                            </a>
+                          ) : null}
+                          {ch.instagram_url ? (
+                            <a href={ch.instagram_url} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline flex items-center gap-1 text-sm">
+                              <Instagram className="h-3 w-3" /> IG
+                            </a>
+                          ) : null}
+                          {!ch.contact_email && !ch.instagram_url ? "—" : null}
+                        </div>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[250px]">
                         <ExpandableText text={ch.description || ""} maxLength={60} />
