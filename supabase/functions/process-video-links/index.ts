@@ -157,6 +157,7 @@ serve(async (req) => {
     // A URL needs unshortening if domain is a known shortener OR a known affiliate platform
     function needsUnshortening(domain: string): boolean {
       if (KNOWN_SHORTENERS.some(s => domain.includes(s))) return true;
+      if (AFFILIATE_REDIRECT_DOMAINS.some(s => domain.includes(s))) return true;
       for (const apDomain of affiliatePlatformDomains) {
         if (domain.includes(apDomain)) return true;
       }
