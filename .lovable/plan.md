@@ -1,42 +1,41 @@
 
 
-# Fix: Use Text Columns for Platform/Retailer Display in Videos
+# Fix Platform & Retailer Tagging in Process-Video-Links
 
-## Problem
+## Root Cause Analysis
 
-The `useVideos.ts` hook derives `platform_name` and `retailer_name` by looking up pattern IDs (`affiliate_platform_id`, `retailer_pattern_id`) in the `affiliate_patterns` table. This approach fails because:
+Three separate bugs in `supabase/functions/process-video-links/index.ts`:
 
-1. **Platform ID is only set for shortened links** — when a wishlink.com URL doesn't successfully unshorten (original_url = unshortened_url), `isShortened` is `false`, so no `platformMatch` is attempted, and `affiliate_platform_id` stays `null`.
-2. **The text columns already exist and are populated** — the edge function already writes `affiliate_platform` and `resolved_retailer` as text columns directly on `video_links`. These are the correct values. The hook just doesn't use them.
+### Bug 1: Step 3 (re-match) doesn't update text columns
+Lines 410-451 re-match previously-unmatched links when a user confirms a pattern. It updates `affiliate_platform_id` and `retailer_pattern_id` but **never updates** the text columns (`affiliate_platform`, `resolved_retailer`). Since `useVideos.ts` reads from text columns, re-matched links show blank platform/retailer even after confirmation.
 
-Additionally, the edge function only identifies a platform via `lookupAffiliatePlatform()` when `isShortened` is true (line 242). For cases where unshortening fails (common with wishlink.com), no platform or retailer is tagged even though the domain is known.
+### Bug 2: Auto-discovery misclassifies platforms as retailers
+Line 289: Platform auto-discovery only runs when `isShortened` is true. If a `wishlink.com` link fails to unshorten (original == unshortened), `isShortened` is false, so it skips platform discovery. Then line 292 discovers the same domain as a **retailer** — wrong type.
+
+### Bug 3: Affiliate redirect domains not always unshortened
+`needsUnshortening()` checks `affiliatePlatformDomains` from DB, but on first encounter (before the domain is in DB), redirect domains like `wishlink.com`, `lehlah.club`, `haulpack.com` won't be unshortened. They need to be in the hardcoded list or the function should always attempt redirect-following.
 
 ## Changes
 
-### 1. `src/hooks/useVideos.ts` — Use text columns instead of pattern ID lookups
+### `supabase/functions/process-video-links/index.ts`
 
-Remove the entire `affiliate_patterns` lookup (lines 82-99) and map `platform_name` / `retailer_name` from the text columns already on `video_links`:
+**Fix 1 — Step 3 re-match: also update text columns**
+When re-matching unmatched links (lines 419-451), look up the pattern name and populate:
+- `affiliate_platform` = platform pattern's `name` (when platform match found)
+- `resolved_retailer` = retailer pattern's `name` (when retailer match found)
+- `link_type` = "affiliate" / "retailer" / "both"
 
-- `platform_name` → `link.affiliate_platform`
-- `retailer_name` → `link.resolved_retailer`
-- `affiliate_name` → `link.affiliate_platform || link.resolved_retailer`
+**Fix 2 — Smarter auto-discovery type assignment**
+Change auto-discovery logic (lines 289-294):
+- If `originalDomain ≠ unshortenedDomain`: original → discovered as `affiliate_platform`, unshortened → discovered as `retailer`
+- If `originalDomain == unshortenedDomain` (unshortening failed or not a redirect): discover as `affiliate_platform` (not retailer), since we can't determine the destination
 
-This eliminates the indirection that causes misattribution.
-
-### 2. `supabase/functions/process-video-links/index.ts` — Always check platform from original domain
-
-Currently line 234 calls `lookupAffiliatePlatform(originalDomain)` but line 242 only uses the result when `isShortened` is true. Fix: always check the original domain against platform patterns regardless of whether unshortening changed the URL. Also check the original domain against DB patterns for platform matching even when not shortened.
-
-This ensures that even when unshortening fails (wishlink.com → wishlink.com), the platform is still identified from the original URL, and the retailer check happens on the unshortened URL (or skipped if same).
-
-### 3. Edge function — Also check non-shortened retailer matches against DB patterns
-
-When `isShortened` is false, the current code checks `lookupRetailer(originalDomain)` but doesn't populate `resolved_retailer` text column in the "non-affiliate" path properly. Fix the logic so retailer text columns are always populated when a retailer match is found, regardless of whether a platform was also detected.
+**Fix 3 — Add known affiliate redirect domains to unshortening list**
+Add `wishlink.com`, `lehlah.club`, `haulpack.com` and similar affiliate redirect domains to either `KNOWN_SHORTENERS` or a new `AFFILIATE_REDIRECT_DOMAINS` list so they always get unshortened, even before they appear in DB patterns.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/hooks/useVideos.ts` | Remove pattern ID lookup; use `affiliate_platform` and `resolved_retailer` text columns directly |
-| `supabase/functions/process-video-links/index.ts` | Always identify platform from original domain; fix retailer tagging for non-shortened links |
+| `supabase/functions/process-video-links/index.ts` | Fix all 3 bugs: update text columns in Step 3, fix auto-discovery type, add affiliate redirect domains |
 
