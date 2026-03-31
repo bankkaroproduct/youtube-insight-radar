@@ -292,11 +292,20 @@ serve(async (req) => {
           }
         }
 
-        // Auto-discover new domains
-        if (!platformMatch && isShortened && originalDomain && !SKIP_DOMAINS.has(originalDomain)) {
-          if (!allPatterns.find(p => p.pattern === originalDomain)) newPlatformDomains.add(originalDomain);
+        // Auto-discover new domains with smarter type assignment
+        if (!platformMatch && !retailerMatch && originalDomain && !SKIP_DOMAINS.has(originalDomain)) {
+          if (!allPatterns.find(p => p.pattern === originalDomain)) {
+            if (isShortened || affiliatePlatformName || AFFILIATE_REDIRECT_DOMAINS.some(s => originalDomain.includes(s))) {
+              // Original domain redirects somewhere → it's a platform
+              newPlatformDomains.add(originalDomain);
+            } else {
+              // No redirect, no platform match → discover as retailer
+              newRetailerDomains.add(originalDomain);
+            }
+          }
         }
-        if (!retailerMatch && unshortenedDomain && !SKIP_DOMAINS.has(unshortenedDomain)) {
+        // If shortened and unshortened domain is different, also discover retailer destination
+        if (!retailerMatch && isShortened && unshortenedDomain && unshortenedDomain !== originalDomain && !SKIP_DOMAINS.has(unshortenedDomain)) {
           if (!allPatterns.find(p => p.pattern === unshortenedDomain)) newRetailerDomains.add(unshortenedDomain);
         }
 
