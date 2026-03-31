@@ -103,12 +103,12 @@ async function parallelMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concur
 }
 
 interface Pattern {
-  id: string; pattern: string; classification: string; is_confirmed: boolean; type: string;
+  id: string; pattern: string; name: string; classification: string; is_confirmed: boolean; type: string;
 }
 
 function matchPattern(domain: string, url: string, patterns: Pattern[], filterType?: string): Pattern | null {
   for (const p of patterns) {
-    if (filterType && p.type !== filterType) continue;
+    if (filterType && p.type?.toLowerCase() !== filterType) continue;
     if (domain.includes(p.pattern) || url.includes(p.pattern)) return p;
   }
   return null;
@@ -124,17 +124,18 @@ serve(async (req) => {
 
     const { data: patterns } = await supabase
       .from("affiliate_patterns")
-      .select("id, pattern, classification, is_confirmed, type");
+      .select("id, pattern, name, classification, is_confirmed, type");
 
     const allPatterns: Pattern[] = (patterns || []) as Pattern[];
 
     // Build dynamic lookup maps from DB patterns (confirmed ones take priority)
     for (const p of allPatterns) {
-      if (!p.is_confirmed) continue;
-      if (p.type === "affiliate_platform" && !AFFILIATE_SHORT_DOMAINS[p.pattern]) {
+      if (!p.is_confirmed || !p.name) continue;
+      const pType = (p.type || "").toLowerCase();
+      if (pType === "affiliate_platform" && !AFFILIATE_SHORT_DOMAINS[p.pattern]) {
         AFFILIATE_SHORT_DOMAINS[p.pattern] = p.name;
       }
-      if (p.type === "retailer" && !RETAILER_DOMAINS[p.pattern]) {
+      if (pType === "retailer" && !RETAILER_DOMAINS[p.pattern]) {
         RETAILER_DOMAINS[p.pattern] = p.name;
       }
     }

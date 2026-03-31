@@ -126,8 +126,8 @@ function PatternTable({
               </Badge>
             </TableCell>
             <TableCell>
-              <Badge variant="outline" className={typeColors[p.type] || typeColors.affiliate_platform}>
-                {p.type === "retailer" ? "Retailer" : "Platform"}
+              <Badge variant="outline" className={typeColors[p.type?.toLowerCase()] || typeColors.affiliate_platform}>
+                {p.type?.toLowerCase() === "retailer" ? "Retailer" : "Platform"}
               </Badge>
             </TableCell>
             <TableCell className="text-sm text-muted-foreground">

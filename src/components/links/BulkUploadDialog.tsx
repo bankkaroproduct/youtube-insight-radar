@@ -33,7 +33,9 @@ function parseCSVContent(text: string, defaultType: PatternType): ParsedRow[] {
     const pattern = parts[0];
     const name = parts[1];
     const classification = (parts[2] || "NEUTRAL").toUpperCase();
-    const type = (parts[3] as PatternType) || defaultType;
+    const rawType = (parts[3] || "").trim().toLowerCase();
+    const type: PatternType = rawType === "affiliate_platform" || rawType === "platform"
+      ? "affiliate_platform" : rawType === "retailer" ? "retailer" : defaultType;
 
     if (!pattern || !name) continue;
     if (!["OWN", "COMPETITOR", "NEUTRAL"].includes(classification)) continue;
