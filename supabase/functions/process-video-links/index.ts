@@ -13,6 +13,12 @@ const KNOWN_SHORTENERS = [
   "fkrt.it", "wsli.nk", "tiny.cc", "short.io", "amzn.to",
 ];
 
+// Known affiliate redirect domains that MUST always be unshortened to reveal retailer
+const AFFILIATE_REDIRECT_DOMAINS = [
+  "wishlink.com", "lehlah.club", "haulpack.com",
+  "earnkaro.com", "cuelinks.com", "magicpin.in",
+];
+
 // Affiliate short domains → platform name
 const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "wsli.nk": "Wishlink",
