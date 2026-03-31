@@ -106,10 +106,13 @@ export type Database = {
           created_at: string
           description: string | null
           id: string
+          is_relevant: boolean | null
           last_analyzed_at: string | null
+          last_relevance_check_at: string | null
           median_comments: number | null
           median_likes: number | null
           median_views: number | null
+          relevance_reasoning: string | null
           subscriber_count: number | null
           total_videos_fetched: number | null
           youtube_category: string | null
@@ -124,10 +127,13 @@ export type Database = {
           created_at?: string
           description?: string | null
           id?: string
+          is_relevant?: boolean | null
           last_analyzed_at?: string | null
+          last_relevance_check_at?: string | null
           median_comments?: number | null
           median_likes?: number | null
           median_views?: number | null
+          relevance_reasoning?: string | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null
@@ -142,10 +148,13 @@ export type Database = {
           created_at?: string
           description?: string | null
           id?: string
+          is_relevant?: boolean | null
           last_analyzed_at?: string | null
+          last_relevance_check_at?: string | null
           median_comments?: number | null
           median_likes?: number | null
           median_views?: number | null
+          relevance_reasoning?: string | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null
