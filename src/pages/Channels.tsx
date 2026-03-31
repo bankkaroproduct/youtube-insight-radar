@@ -138,6 +138,7 @@ export default function Channels() {
                     <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                    <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <TableHead>Affiliates</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
