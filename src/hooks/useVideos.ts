@@ -79,24 +79,7 @@ export function useVideos() {
     const linksData = (linksResult.data ?? []) as any[];
     const vkData = (vkResult.data ?? []) as any[];
 
-    // Collect all pattern IDs (matched, platform, retailer)
-    const allPatternIds = new Set<string>();
-    for (const l of linksData) {
-      if (l.matched_pattern_id) allPatternIds.add(l.matched_pattern_id);
-      if (l.affiliate_platform_id) allPatternIds.add(l.affiliate_platform_id);
-      if (l.retailer_pattern_id) allPatternIds.add(l.retailer_pattern_id);
-    }
 
-    let patternsMap = new Map<string, string>();
-    if (allPatternIds.size > 0) {
-      const { data: patternsData } = await supabase
-        .from("affiliate_patterns")
-        .select("id, name")
-        .in("id", [...allPatternIds]);
-      for (const p of (patternsData ?? []) as any[]) {
-        patternsMap.set(p.id, p.name);
-      }
-    }
 
     const keywordIds = [...new Set(vkData.map((vk) => vk.keyword_id).filter(Boolean))];
     let keywordsMap = new Map<string, string>();
@@ -115,15 +98,9 @@ export function useVideos() {
       const list = linksByVideo.get(link.video_id) || [];
       list.push({
         ...link,
-        affiliate_name: link.matched_pattern_id
-          ? patternsMap.get(link.matched_pattern_id) || null
-          : null,
-        platform_name: link.affiliate_platform_id
-          ? patternsMap.get(link.affiliate_platform_id) || null
-          : null,
-        retailer_name: link.retailer_pattern_id
-          ? patternsMap.get(link.retailer_pattern_id) || null
-          : null,
+        affiliate_name: link.affiliate_platform || link.resolved_retailer || null,
+        platform_name: link.affiliate_platform || null,
+        retailer_name: link.resolved_retailer || null,
       });
       linksByVideo.set(link.video_id, list);
     }
