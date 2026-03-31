@@ -215,6 +215,11 @@ export default function Links() {
               </div>
             </DialogContent>
           </Dialog>
+          <BulkUploadDialog onUpload={async (rows) => {
+            for (const r of rows) {
+              await addPattern(r.pattern, r.name, r.classification, r.type);
+            }
+          }} />
           <Button variant="outline" size="sm" onClick={processLinks}>
             <Zap className="h-4 w-4 mr-2" /> Process Links
           </Button>
