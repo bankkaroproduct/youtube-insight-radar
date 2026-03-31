@@ -237,7 +237,7 @@ serve(async (req) => {
           const activeKey = cachedApiKey!;
 
           const detailParams = new URLSearchParams({
-            part: "snippet,statistics",
+            part: "snippet,statistics,contentDetails",
             id: chunk.join(","),
             key: activeKey.api_key,
           });
@@ -250,6 +250,18 @@ serve(async (req) => {
             for (const video of (detailData.items || [])) {
               const snippet = video.snippet || {};
               const stats = video.statistics || {};
+              const contentDetails = video.contentDetails || {};
+
+              // Parse ISO 8601 duration and skip Shorts/Reels (< 60s)
+              const duration = contentDetails.duration || "";
+              const durationMatch = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+              const totalSeconds = durationMatch
+                ? (parseInt(durationMatch[1] || "0") * 3600) + (parseInt(durationMatch[2] || "0") * 60) + parseInt(durationMatch[3] || "0")
+                : 0;
+              if (totalSeconds > 0 && totalSeconds < 60) continue;
+
+              // Also skip if title contains #shorts
+              if ((snippet.title || "").toLowerCase().includes("#shorts")) continue;
 
               if (snippet.channelId) allChannelIds.add(snippet.channelId);
 

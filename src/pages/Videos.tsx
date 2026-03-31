@@ -337,7 +337,15 @@ export default function Videos() {
                             {v.thumbnail_url ? <img src={v.thumbnail_url} alt="" className="w-12 h-8 rounded object-cover" /> : <div className="w-12 h-8 rounded bg-muted" />}
                           </TableCell>
                           <TableCell className="max-w-[300px]">
-                            <ExpandableText text={v.title} maxLength={80} className="font-medium text-sm" />
+                            <a
+                              href={`https://www.youtube.com/watch?v=${v.video_id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-sm text-primary hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExpandableText text={v.title} maxLength={80} />
+                            </a>
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">{v.channel_name}</TableCell>
                           <TableCell>
