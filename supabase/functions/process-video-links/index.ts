@@ -403,57 +403,27 @@ serve(async (req) => {
     // Step 3: Match previously-unmatched links by domain
     const { data: unmatchedLinks } = await supabase
       .from("video_links")
-      .select("id, domain, original_domain, original_url, unshortened_url, video_id")
+      .select("id, domain, original_domain, video_id")
       .is("matched_pattern_id", null)
       .not("domain", "is", null)
       .not("unshortened_url", "is", null)
       .limit(2000);
 
     if (unmatchedLinks && unmatchedLinks.length > 0) {
-      interface Step3Update {
-        id: string; matched_pattern_id: string; classification: string;
-        affiliate_platform_id: string | null; retailer_pattern_id: string | null;
-        affiliate_platform: string | null; resolved_retailer: string | null;
-        resolved_retailer_domain: string | null;
-      }
-      const batchUpdates: Step3Update[] = [];
+      const batchUpdates: { id: string; matched_pattern_id: string; classification: string; affiliate_platform_id: string | null; retailer_pattern_id: string | null }[] = [];
 
       for (const link of unmatchedLinks) {
         if (!link.domain || SKIP_DOMAINS.has(link.domain)) continue;
         const retailerMatch = matchPattern(link.domain, "", allPatterns, "retailer");
         const platformMatch = link.original_domain ? matchPattern(link.original_domain, "", allPatterns, "affiliate_platform") : null;
-        const fallbackMatch = matchPattern(link.domain, "", allPatterns);
-        const anyMatch = retailerMatch || platformMatch || fallbackMatch;
+        const anyMatch = retailerMatch || platformMatch || matchPattern(link.domain, "", allPatterns);
         if (anyMatch) {
-          // Assign IDs based on pattern type, not just which variable matched
-          let affPlatformId: string | null = platformMatch?.id || null;
-          let retPatternId: string | null = retailerMatch?.id || null;
-          let affPlatformName: string | null = platformMatch?.name || null;
-          let retName: string | null = retailerMatch?.name || null;
-          let retDomain: string | null = retailerMatch ? link.domain : null;
-
-          // If only fallback matched, assign based on its type
-          if (!platformMatch && !retailerMatch && fallbackMatch) {
-            const fType = (fallbackMatch.type || "").toLowerCase();
-            if (fType === "affiliate_platform") {
-              affPlatformId = fallbackMatch.id;
-              affPlatformName = fallbackMatch.name;
-            } else if (fType === "retailer") {
-              retPatternId = fallbackMatch.id;
-              retName = fallbackMatch.name;
-              retDomain = link.domain;
-            }
-          }
-
           batchUpdates.push({
             id: link.id,
             matched_pattern_id: anyMatch.id,
             classification: anyMatch.is_confirmed ? anyMatch.classification : "NEUTRAL",
-            affiliate_platform_id: affPlatformId,
-            retailer_pattern_id: retPatternId,
-            affiliate_platform: affPlatformName,
-            resolved_retailer: retName,
-            resolved_retailer_domain: retDomain,
+            affiliate_platform_id: platformMatch?.id || null,
+            retailer_pattern_id: retailerMatch?.id || null,
           });
           const ch = videoChannelCache.get(link.video_id);
           if (ch) affectedChannels.add(ch);
@@ -468,69 +438,9 @@ serve(async (req) => {
               classification: u.classification,
               affiliate_platform_id: u.affiliate_platform_id,
               retailer_pattern_id: u.retailer_pattern_id,
-              affiliate_platform: u.affiliate_platform,
-              resolved_retailer: u.resolved_retailer,
-              resolved_retailer_domain: u.resolved_retailer_domain,
             }).eq("id", u.id)
           )
         );
-      }
-    }
-
-    // Step 4: Re-assign platform/retailer IDs for links where pattern type changed
-    // e.g. Wishlink was auto-discovered as retailer but user changed it to affiliate_platform
-    for (const p of confirmedPatterns) {
-      const pType = (p.type || "").toLowerCase();
-      
-      if (pType === "affiliate_platform") {
-        // This pattern is a platform — clear it from retailer_pattern_id and set as affiliate_platform_id
-        const { data: wrongLinks } = await supabase
-          .from("video_links")
-          .select("id, video_id")
-          .eq("retailer_pattern_id", p.id)
-          .limit(1000);
-        
-        if (wrongLinks && wrongLinks.length > 0) {
-          await Promise.all(
-            wrongLinks.map(l =>
-              supabase.from("video_links").update({
-                retailer_pattern_id: null,
-                affiliate_platform_id: p.id,
-                resolved_retailer: null,
-                resolved_retailer_domain: null,
-                affiliate_platform: p.name,
-              }).eq("id", l.id)
-            )
-          );
-          for (const l of wrongLinks) {
-            const ch = videoChannelCache.get(l.video_id);
-            if (ch) affectedChannels.add(ch);
-          }
-        }
-      } else if (pType === "retailer") {
-        // This pattern is a retailer — clear it from affiliate_platform_id and set as retailer_pattern_id
-        const { data: wrongLinks } = await supabase
-          .from("video_links")
-          .select("id, video_id")
-          .eq("affiliate_platform_id", p.id)
-          .limit(1000);
-        
-        if (wrongLinks && wrongLinks.length > 0) {
-          await Promise.all(
-            wrongLinks.map(l =>
-              supabase.from("video_links").update({
-                affiliate_platform_id: null,
-                retailer_pattern_id: p.id,
-                affiliate_platform: null,
-                resolved_retailer: p.name,
-              }).eq("id", l.id)
-            )
-          );
-          for (const l of wrongLinks) {
-            const ch = videoChannelCache.get(l.video_id);
-            if (ch) affectedChannels.add(ch);
-          }
-        }
       }
     }
 
