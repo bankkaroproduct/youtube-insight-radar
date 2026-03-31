@@ -331,6 +331,49 @@ serve(async (req) => {
       console.error("Failed to trigger compute-channel-stats:", e);
     }
 
+    // Auto-trigger analyze-keyword-priority for keywords without priority
+    try {
+      const keywordIds = [...new Set(pendingJobs.map(j => j.keyword_id).filter(Boolean))];
+      if (keywordIds.length > 0) {
+        const { data: unprioritized } = await supabase
+          .from("keywords_search_runs")
+          .select("id, keyword")
+          .in("id", keywordIds)
+          .is("priority", null);
+
+        if (unprioritized && unprioritized.length > 0) {
+          const fnUrl = `${supabaseUrl}/functions/v1/analyze-keyword-priority`;
+          await fetch(fnUrl, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${serviceKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ keywords: unprioritized }),
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Failed to trigger analyze-keyword-priority:", e);
+    }
+
+    // Auto-trigger analyze-channel-relevance for new channels
+    if (allChannelIds.size > 0) {
+      try {
+        const fnUrl = `${supabaseUrl}/functions/v1/analyze-channel-relevance`;
+        await fetch(fnUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ channel_ids: [...allChannelIds] }),
+        });
+      } catch (e) {
+        console.error("Failed to trigger analyze-channel-relevance:", e);
+      }
+    }
+
     return new Response(JSON.stringify({ success: true, processed: pendingJobs.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
