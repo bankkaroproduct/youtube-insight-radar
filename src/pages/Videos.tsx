@@ -206,22 +206,23 @@ export default function Videos() {
   }, [videos, filters, sortFn]);
 
   const stats = useMemo(() => {
-    const allLinks = videos.flatMap((v) => v.links);
-    const uniqueChannels = new Set(videos.map((v) => v.channel_id));
+    const data = filteredAndSorted;
+    const allLinks = data.flatMap((v) => v.links);
+    const uniqueChannels = new Set(data.map((v) => v.channel_id));
     const uniquePlatforms = new Set<string>();
     const uniqueRetailers = new Set<string>();
-    for (const v of videos) {
+    for (const v of data) {
       for (const name of getUniquePlatforms(v)) uniquePlatforms.add(name);
       for (const name of getUniqueRetailers(v)) uniqueRetailers.add(name);
     }
     return {
-      totalVideos: videos.length,
+      totalVideos: data.length,
       totalLinks: allLinks.length,
       uniqueChannels: uniqueChannels.size,
       uniquePlatforms: uniquePlatforms.size,
       uniqueRetailers: uniqueRetailers.size,
     };
-  }, [videos]);
+  }, [filteredAndSorted]);
 
   const statCards = [
     { label: "Total Videos", value: stats.totalVideos, icon: VideoIcon, color: "text-primary" },
@@ -336,7 +337,15 @@ export default function Videos() {
                             {v.thumbnail_url ? <img src={v.thumbnail_url} alt="" className="w-12 h-8 rounded object-cover" /> : <div className="w-12 h-8 rounded bg-muted" />}
                           </TableCell>
                           <TableCell className="max-w-[300px]">
-                            <ExpandableText text={v.title} maxLength={80} className="font-medium text-sm" />
+                            <a
+                              href={`https://www.youtube.com/watch?v=${v.video_id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-sm text-primary hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExpandableText text={v.title} maxLength={80} />
+                            </a>
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">{v.channel_name}</TableCell>
                           <TableCell>
