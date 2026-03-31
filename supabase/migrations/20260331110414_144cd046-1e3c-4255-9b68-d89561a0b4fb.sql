@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS affiliate_patterns_pattern_unique ON public.affiliate_patterns (pattern);
