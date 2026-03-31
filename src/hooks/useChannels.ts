@@ -26,6 +26,8 @@ export interface Channel {
   last_relevance_check_at: string | null;
   instagram_url: string | null;
   country: string | null;
+  platform_video_counts: Record<string, number> | null;
+  retailer_video_counts: Record<string, number> | null;
 }
 
 export function useChannels() {
