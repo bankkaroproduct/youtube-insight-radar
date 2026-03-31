@@ -257,6 +257,8 @@ export default function Channels() {
                     <TableHead />
                     <TableHead />
                     <TableHead />
+                    <TableHead />
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
