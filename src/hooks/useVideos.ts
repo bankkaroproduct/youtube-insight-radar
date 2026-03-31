@@ -72,8 +72,8 @@ export function useVideos() {
     const videoIds = videoRows.map((v) => v.id);
 
     const [linksResult, vkResult] = await Promise.all([
-      supabase.from("video_links").select("*").in("video_id", videoIds),
-      supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds),
+      supabase.from("video_links").select("*").in("video_id", videoIds).limit(999999999),
+      supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds).limit(999999999),
     ]);
 
     const linksData = (linksResult.data ?? []) as any[];
