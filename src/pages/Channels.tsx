@@ -102,6 +102,7 @@ function downloadCSV(channels: any[]) {
 
 export default function Channels() {
   const { channels, isLoading, refresh, recomputeStats } = useChannels();
+  const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
