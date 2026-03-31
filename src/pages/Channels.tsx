@@ -34,6 +34,9 @@ export default function Channels() {
       if (filters.name && !ch.channel_name.toLowerCase().includes(filters.name.toLowerCase())) return false;
       if (filters.status && (ch.affiliate_status || "NEUTRAL") !== filters.status) return false;
       if (filters.category && !(ch.youtube_category || "").toLowerCase().includes(filters.category.toLowerCase())) return false;
+      if (filters.relevance === "yes" && ch.is_relevant !== true) return false;
+      if (filters.relevance === "no" && ch.is_relevant !== false) return false;
+      if (filters.relevance === "unchecked" && ch.is_relevant !== null) return false;
       return true;
     });
 
