@@ -304,8 +304,8 @@ serve(async (req) => {
           retailer_pattern_id: retailerMatch?.id || null,
           is_shortened: isShortened,
           link_type: linkType,
-          affiliate_platform: affiliatePlatformName,
-          affiliate_domain: isShortened ? originalDomain : null,
+          affiliate_platform: affiliatePlatformName || (platformMatch ? platformMatch.name : null),
+          affiliate_domain: (affiliatePlatformName || platformMatch) ? originalDomain : null,
           resolved_retailer: resolvedRetailer,
           resolved_retailer_domain: resolvedRetailerDomain,
         });
