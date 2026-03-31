@@ -110,12 +110,15 @@ export function useAffiliatePatterns() {
   const platformPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "affiliate_platform");
   const retailerPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "retailer");
 
+  const uniqueNames = [...new Set(confirmedPatterns.map(p => p.name).filter(Boolean))].sort();
+
   return {
     patterns,
     confirmedPatterns,
     discoveredPatterns,
     platformPatterns,
     retailerPatterns,
+    uniqueNames,
     isLoading,
     addPattern,
     confirmPattern,

@@ -322,11 +322,11 @@ export default function Links() {
                           </TableCell>
                           <TableCell className="flex gap-1">
                             <DiscoveredNamePicker
-                              names={names} onAddNew={addName} classification="OWN" label="Ours" className="text-green-700"
+                              names={uniqueNames} onAddNew={addName} classification="OWN" label="Ours" className="text-green-700"
                               onConfirm={(name) => confirmPattern(p.id, "OWN", name, selectedType)}
                             />
                             <DiscoveredNamePicker
-                              names={names} onAddNew={addName} classification="COMPETITOR" label="Competitor" className="text-red-700"
+                              names={uniqueNames} onAddNew={addName} classification="COMPETITOR" label="Competitor" className="text-red-700"
                               onConfirm={(name) => confirmPattern(p.id, "COMPETITOR", name, selectedType)}
                             />
                             <Button variant="outline" size="sm" onClick={() => confirmPattern(p.id, "NEUTRAL", undefined, selectedType)}>
