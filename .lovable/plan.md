@@ -1,48 +1,43 @@
 
 
-# Fix Discovered Patterns + Add Bulk Upload
+# Fix Retailer Visibility + Domain Deduplication
 
-## Root Cause: Why Discovered Patterns Don't Work
+## Problems Identified
 
-The `process-video-links` edge function uses `upsert` with `onConflict: "pattern"` but **there is no unique constraint on the `pattern` column** in `affiliate_patterns`. This causes the upsert to fail silently, so no auto-discovered patterns are ever created.
+### 1. Retailer not visible after adding
+The `addPattern` function in `useAffiliatePatterns.ts` uses `insert`, but the unique index on `affiliate_patterns(pattern)` causes a conflict error if the pattern was previously auto-discovered. The error toast shows briefly but the pattern doesn't appear. **Fix**: Change `insert` to `upsert` so adding a pattern that already exists (e.g. from auto-discovery) updates it instead of failing.
 
-**Fix**: Add a unique index on `affiliate_patterns.pattern`.
+### 2. Hardcoded domain maps ignore user-added patterns
+`process-video-links` uses hardcoded `AFFILIATE_SHORT_DOMAINS` and `RETAILER_DOMAINS` maps. When users add new retailers/platforms via bulk upload, those are only in the DB — the edge function doesn't use them for populating `affiliate_platform` and `resolved_retailer` text columns. **Fix**: After fetching patterns from DB, build the lookup maps dynamically from `affiliate_patterns` table entries, merging with the hardcoded defaults.
+
+### 3. Multiple domains → same name deduplication
+When `amazon.in` and `amazon.com` both have name "Amazon", the `compute-channel-stats` function groups by pattern ID, not by name. Two separate patterns with the same name would be counted separately. **Fix**: In `compute-channel-stats`, use the text columns (`affiliate_platform`, `resolved_retailer`) from `video_links` directly instead of joining to pattern IDs. This naturally deduplicates because both `amazon.in` and `amazon.com` resolve to "Amazon".
 
 ## Changes
 
-### 1. Migration — Add unique constraint
-Add `CREATE UNIQUE INDEX` on `affiliate_patterns(pattern)` so the upsert works correctly.
+### 1. `src/hooks/useAffiliatePatterns.ts` — Fix addPattern
+Change `insert` to `upsert` with `onConflict: "pattern"`. When the user adds a pattern that already exists (auto-discovered or duplicate domain), it updates the name/classification/type instead of failing silently.
 
-### 2. Update `process-video-links` — populate new text columns
-The function currently doesn't set `link_type`, `affiliate_platform`, `affiliate_domain`, `resolved_retailer`, `resolved_retailer_domain`, or `is_shortened` on `video_links`. Add these to the update payload using the domain lookup maps:
+### 2. `supabase/functions/process-video-links/index.ts` — Dynamic lookup maps
+After fetching `affiliate_patterns` from DB, build `AFFILIATE_SHORT_DOMAINS` and `RETAILER_DOMAINS` maps dynamically:
+- For each confirmed pattern with `type = "affiliate_platform"`, add `pattern → name` to affiliate map
+- For each confirmed pattern with `type = "retailer"`, add `pattern → name` to retailer map
+- Merge with hardcoded defaults (DB values take priority)
 
-- Known affiliate short domains: `wsli.nk` → Wishlink, `fkrt.it` → Flipkart Affiliate, `amzn.to` → Amazon Associates
-- Known retailer domains: `amazon.in` → Amazon, `flipkart.com` → Flipkart, etc.
-- Set `is_shortened = true` when original domain differs from unshortened
-- Set `link_type` = "affiliate" / "retailer" / "both" based on what was detected
+This means user-added patterns via bulk upload are immediately used for text column population.
 
-### 3. Add Bulk Upload to Links Page
+### 3. `supabase/functions/compute-channel-stats/index.ts` — Use text columns
+Change the `select` to include `affiliate_platform, resolved_retailer, link_type` from `video_links`. Group by these text fields instead of looking up pattern IDs → names. This naturally handles deduplication (amazon.in + amazon.com both set `resolved_retailer = "Amazon"`).
 
-Add a bulk upload section (dialog or inline card) on the Links page with two modes:
+Also compute `retailer_via_affiliate_counts` and `retailer_direct_counts` using `link_type`:
+- `retailer_via_affiliate_counts`: count videos where `link_type = "both"` grouped by `resolved_retailer`
+- `retailer_direct_counts`: count videos where `link_type = "retailer"` grouped by `resolved_retailer`
 
-**Option A — Textarea paste** (tab-separated or CSV):
-- Format: `pattern, name, classification` (one per line)
-- Example: `amazon.in, Amazon, COMPETITOR`
-- Type selector at top to choose "Affiliate Platform" or "Retailer"
-- Parse and insert all rows at once via multiple `addPattern` calls
-
-**Option B — File upload** (CSV/Excel):
-- Accept `.csv` file with columns: pattern, name, classification, type
-- Parse with `FileReader` + simple CSV split
-- Preview parsed rows in a table before confirming
-
-Both options will be in a new "Bulk Upload" dialog accessible from the header buttons.
-
-### 4. Files Changed
+### Files Changed
 
 | File | Change |
 |------|--------|
-| Migration SQL | Add unique index on `affiliate_patterns(pattern)` |
-| `process-video-links/index.ts` | Populate `link_type`, `affiliate_platform`, `affiliate_domain`, `resolved_retailer`, `resolved_retailer_domain`, `is_shortened` |
-| `src/pages/Links.tsx` | Add Bulk Upload dialog with CSV paste + file upload |
+| `src/hooks/useAffiliatePatterns.ts` | `insert` → `upsert` with `onConflict: "pattern"` |
+| `process-video-links/index.ts` | Build lookup maps from DB patterns + hardcoded defaults |
+| `compute-channel-stats/index.ts` | Use text columns for grouping, compute via/direct splits |
 
