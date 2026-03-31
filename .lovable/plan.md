@@ -1,45 +1,54 @@
 
 
-# Speed Up Video Fetching Pipeline
+# Speed Up the Entire Pipeline
 
-## Problem
-Every database write (video upsert, link insert, keyword mapping, channel upsert) runs **one at a time sequentially**. For 30 videos with ~10 links each, that's ~390 individual `await` calls to the database. Each round-trip is ~50-100ms, totaling 20-40 seconds just for DB writes.
+## Current Bottlenecks
 
-## Fix: Batch and Parallelize All DB Operations
+The main fetch function was optimized, but 4 downstream functions still run slowly due to sequential DB calls and serial HTTP requests.
 
-### 1. Batch video upserts
-Instead of upserting videos one-by-one, collect all video records into an array and upsert them in a single call:
-```typescript
-// Single bulk upsert for all 30 videos
-await supabase.from("videos").upsert(allVideoRecords, { onConflict: "video_id" }).select("id, video_id");
-```
+### 1. `process-video-links` — Slowest (~60s+ for 200 links)
+- Unshortens URLs **one at a time** (each up to 10s timeout)
+- Updates each link individually
+- Looks up `channel_id` per link individually
 
-### 2. Batch link inserts
-Collect all extracted links from all videos, then upsert in one call:
-```typescript
-await supabase.from("video_links").upsert(allLinkRecords, { onConflict: "video_id,original_url" });
-```
+### 2. `compute-channel-stats` — Slow for many channels
+- Loops through each channel sequentially with 3 queries + 1 update per channel
 
-### 3. Batch video_keywords upserts
-Same pattern — collect all keyword mappings, upsert once:
-```typescript
-await supabase.from("video_keywords").upsert(allKeywordRecords, { onConflict: "video_id,keyword_id" });
-```
+### 3. `analyze-keyword-priority` & `analyze-channel-relevance`
+- Update DB records one-by-one after AI response
 
-### 4. Batch channel upserts
-Collect unique channels, upsert once:
-```typescript
-await supabase.from("channels").upsert(channelRecords, { onConflict: "channel_id" });
-```
+### 4. `process-fetch-queue` — Minor remaining issues
+- `incrementQuota` does SELECT then UPDATE (2 calls) every time
+- `fetchChannelDetails` updates channels one-by-one
 
-### 5. Simplify quota tracking
-Replace the SELECT-then-UPDATE pattern in `incrementQuota` with a single RPC call or just an update using raw increment. Also cache the API key within the function instead of calling `getNextApiKey` repeatedly.
+---
+
+## Fix Plan
+
+### File: `supabase/functions/process-video-links/index.ts`
+- **Parallelize URL unshortening**: Use `Promise.allSettled` to unshorten up to 10 URLs concurrently instead of sequentially
+- **Batch update video_links**: Collect all updates and write in bulk instead of per-link
+- **Pre-fetch all video→channel mappings** in one query instead of per-link lookups
+- **Batch pattern lookups**: Check all unknown domains at once
+
+### File: `supabase/functions/compute-channel-stats/index.ts`
+- **Replace per-channel loop with a single RPC function** that computes stats for all channels in one SQL query (videos + links + patterns joined), returning results in one call
+- Or at minimum: parallelize channel processing with `Promise.allSettled`
+
+### File: `supabase/functions/analyze-keyword-priority/index.ts`
+- **Batch update**: Replace per-keyword `update` loop with a single batch update after AI response
+
+### File: `supabase/functions/analyze-channel-relevance/index.ts`
+- **Batch update**: Replace per-channel `update` loop with parallel `Promise.all` updates
+
+### File: `supabase/functions/process-fetch-queue/index.ts`
+- **Cache API key**: Call `getNextApiKey` once, reuse throughout
+- **Simplify `incrementQuota`**: Use a single UPDATE with raw SQL increment instead of SELECT+UPDATE
+- **Batch `fetchChannelDetails` updates**: Collect all channel updates, write once
 
 ## Expected Result
-- ~390 sequential DB calls reduced to ~4 batch calls
-- Processing time drops from 20-40 seconds to 2-4 seconds
-- No more timeout risk
-
-## Files Changed
-- `supabase/functions/process-fetch-queue/index.ts` — restructure the video processing loop to collect records first, then batch-write
+- Link processing: 60s+ → ~10s (parallel unshorten + batch writes)
+- Channel stats: 20s+ → ~2s (single query or parallel)  
+- Priority/relevance: minor speedup from batch writes
+- Overall pipeline: from 2+ minutes down to ~15-20 seconds total
 
