@@ -127,6 +127,18 @@ serve(async (req) => {
       .select("id, pattern, classification, is_confirmed, type");
 
     const allPatterns: Pattern[] = (patterns || []) as Pattern[];
+
+    // Build dynamic lookup maps from DB patterns (confirmed ones take priority)
+    for (const p of allPatterns) {
+      if (!p.is_confirmed) continue;
+      if (p.type === "affiliate_platform" && !AFFILIATE_SHORT_DOMAINS[p.pattern]) {
+        AFFILIATE_SHORT_DOMAINS[p.pattern] = p.name;
+      }
+      if (p.type === "retailer" && !RETAILER_DOMAINS[p.pattern]) {
+        RETAILER_DOMAINS[p.pattern] = p.name;
+      }
+    }
+
     const affectedChannels = new Set<string>();
     let totalProcessed = 0;
     const MAX_TOTAL = 500;
