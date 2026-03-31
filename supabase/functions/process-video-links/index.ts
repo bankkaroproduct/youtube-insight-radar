@@ -13,6 +13,12 @@ const KNOWN_SHORTENERS = [
   "fkrt.it", "wsli.nk", "tiny.cc", "short.io", "amzn.to",
 ];
 
+// Known affiliate redirect domains that MUST always be unshortened to reveal retailer
+const AFFILIATE_REDIRECT_DOMAINS = [
+  "wishlink.com", "lehlah.club", "haulpack.com",
+  "earnkaro.com", "cuelinks.com", "magicpin.in",
+];
+
 // Affiliate short domains → platform name
 const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "wsli.nk": "Wishlink",
@@ -151,6 +157,7 @@ serve(async (req) => {
     // A URL needs unshortening if domain is a known shortener OR a known affiliate platform
     function needsUnshortening(domain: string): boolean {
       if (KNOWN_SHORTENERS.some(s => domain.includes(s))) return true;
+      if (AFFILIATE_REDIRECT_DOMAINS.some(s => domain.includes(s))) return true;
       for (const apDomain of affiliatePlatformDomains) {
         if (domain.includes(apDomain)) return true;
       }
@@ -285,11 +292,20 @@ serve(async (req) => {
           }
         }
 
-        // Auto-discover new domains
-        if (!platformMatch && isShortened && originalDomain && !SKIP_DOMAINS.has(originalDomain)) {
-          if (!allPatterns.find(p => p.pattern === originalDomain)) newPlatformDomains.add(originalDomain);
+        // Auto-discover new domains with smarter type assignment
+        if (!platformMatch && !retailerMatch && originalDomain && !SKIP_DOMAINS.has(originalDomain)) {
+          if (!allPatterns.find(p => p.pattern === originalDomain)) {
+            if (isShortened || affiliatePlatformName || AFFILIATE_REDIRECT_DOMAINS.some(s => originalDomain.includes(s))) {
+              // Original domain redirects somewhere → it's a platform
+              newPlatformDomains.add(originalDomain);
+            } else {
+              // No redirect, no platform match → discover as retailer
+              newRetailerDomains.add(originalDomain);
+            }
+          }
         }
-        if (!retailerMatch && unshortenedDomain && !SKIP_DOMAINS.has(unshortenedDomain)) {
+        // If shortened and unshortened domain is different, also discover retailer destination
+        if (!retailerMatch && isShortened && unshortenedDomain && unshortenedDomain !== originalDomain && !SKIP_DOMAINS.has(unshortenedDomain)) {
           if (!allPatterns.find(p => p.pattern === unshortenedDomain)) newRetailerDomains.add(unshortenedDomain);
         }
 
@@ -417,7 +433,7 @@ serve(async (req) => {
       .limit(2000);
 
     if (unmatchedLinks && unmatchedLinks.length > 0) {
-      const batchUpdates: { id: string; matched_pattern_id: string; classification: string; affiliate_platform_id: string | null; retailer_pattern_id: string | null }[] = [];
+      const batchUpdates: { id: string; matched_pattern_id: string; classification: string; affiliate_platform_id: string | null; retailer_pattern_id: string | null; affiliate_platform: string | null; resolved_retailer: string | null; link_type: string | null }[] = [];
 
       for (const link of unmatchedLinks) {
         if (!link.domain || SKIP_DOMAINS.has(link.domain)) continue;
@@ -425,12 +441,28 @@ serve(async (req) => {
         const platformMatch = link.original_domain ? matchPattern(link.original_domain, "", allPatterns, "affiliate_platform") : null;
         const anyMatch = retailerMatch || platformMatch || matchPattern(link.domain, "", allPatterns);
         if (anyMatch) {
+          let linkType: string | null = null;
+          let affiliatePlatformName: string | null = null;
+          let resolvedRetailerName: string | null = null;
+
+          if (platformMatch) {
+            affiliatePlatformName = platformMatch.name;
+            linkType = "affiliate";
+          }
+          if (retailerMatch) {
+            resolvedRetailerName = retailerMatch.name;
+            linkType = platformMatch ? "both" : "retailer";
+          }
+
           batchUpdates.push({
             id: link.id,
             matched_pattern_id: anyMatch.id,
             classification: anyMatch.is_confirmed ? anyMatch.classification : "NEUTRAL",
             affiliate_platform_id: platformMatch?.id || null,
             retailer_pattern_id: retailerMatch?.id || null,
+            affiliate_platform: affiliatePlatformName,
+            resolved_retailer: resolvedRetailerName,
+            link_type: linkType,
           });
           const ch = videoChannelCache.get(link.video_id);
           if (ch) affectedChannels.add(ch);
@@ -445,6 +477,9 @@ serve(async (req) => {
               classification: u.classification,
               affiliate_platform_id: u.affiliate_platform_id,
               retailer_pattern_id: u.retailer_pattern_id,
+              affiliate_platform: u.affiliate_platform,
+              resolved_retailer: u.resolved_retailer,
+              link_type: u.link_type,
             }).eq("id", u.id)
           )
         );
