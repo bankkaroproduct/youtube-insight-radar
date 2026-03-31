@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag, Users, AlertTriangle } from "lucide-react";
+import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag, Users, AlertTriangle, Globe, Store } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
@@ -24,26 +24,26 @@ const classificationColors: Record<string, string> = {
   NEUTRAL: "bg-muted text-muted-foreground border-border",
 };
 
-interface AffiliateInfo {
-  name: string;
-  classification: string;
+function getUniquePlatforms(video: Video): string[] {
+  const set = new Set<string>();
+  for (const link of video.links) {
+    if (link.platform_name) set.add(link.platform_name);
+  }
+  return [...set];
 }
 
-function getUniqueAffiliates(video: Video): AffiliateInfo[] {
-  const map = new Map<string, string>();
+function getUniqueRetailers(video: Video): string[] {
+  const set = new Set<string>();
   for (const link of video.links) {
-    const name = link.affiliate_name || link.domain;
-    if (name && !map.has(name)) {
-      map.set(name, link.classification || "NEUTRAL");
-    }
+    if (link.retailer_name) set.add(link.retailer_name);
   }
-  return [...map.entries()].map(([name, classification]) => ({ name, classification }));
+  return [...set];
 }
 
 function VideoDetailRow({ video }: { video: Video }) {
   return (
     <TableRow className="bg-muted/30">
-      <TableCell colSpan={12} className="p-4">
+      <TableCell colSpan={13} className="p-4">
         <div className="space-y-3">
           {video.description && (
             <div>
@@ -62,13 +62,19 @@ function VideoDetailRow({ video }: { video: Video }) {
                     <Badge variant="outline" className={classificationColors[link.classification || "NEUTRAL"] || classificationColors.NEUTRAL}>
                       {link.classification || "NEUTRAL"}
                     </Badge>
-                    {link.affiliate_name && (
-                      <span className="text-xs font-medium text-foreground">{link.affiliate_name}</span>
+                    {link.platform_name && (
+                      <Badge variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">
+                        {link.platform_name}
+                      </Badge>
+                    )}
+                    {link.retailer_name && (
+                      <Badge variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">
+                        {link.retailer_name}
+                      </Badge>
                     )}
                     <a
                       href={link.unshortened_url || link.original_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      target="_blank" rel="noopener noreferrer"
                       className="text-primary hover:underline truncate max-w-lg"
                     >
                       {link.unshortened_url || link.original_url}
@@ -109,8 +115,8 @@ export default function Videos() {
       if (filters.channel && !v.channel_name.toLowerCase().includes(filters.channel.toLowerCase())) return false;
       if (filters.keyword && !v.keywords.some(k => k.keyword.toLowerCase().includes(filters.keyword.toLowerCase()))) return false;
       if (filters.classification) {
-        const affiliates = getUniqueAffiliates(v);
-        if (!affiliates.some(a => a.classification === filters.classification)) return false;
+        const hasMatch = v.links.some(l => l.classification === filters.classification);
+        if (!hasMatch) return false;
       }
       return true;
     });
@@ -132,12 +138,18 @@ export default function Videos() {
   const stats = useMemo(() => {
     const allLinks = videos.flatMap((v) => v.links);
     const uniqueChannels = new Set(videos.map((v) => v.channel_id));
+    const uniquePlatforms = new Set<string>();
+    const uniqueRetailers = new Set<string>();
+    for (const v of videos) {
+      for (const name of getUniquePlatforms(v)) uniquePlatforms.add(name);
+      for (const name of getUniqueRetailers(v)) uniqueRetailers.add(name);
+    }
     return {
       totalVideos: videos.length,
       totalLinks: allLinks.length,
       uniqueChannels: uniqueChannels.size,
-      ownLinks: allLinks.filter((l) => l.classification === "OWN").length,
-      competitorLinks: allLinks.filter((l) => l.classification === "COMPETITOR").length,
+      uniquePlatforms: uniquePlatforms.size,
+      uniqueRetailers: uniqueRetailers.size,
     };
   }, [videos]);
 
@@ -145,8 +157,8 @@ export default function Videos() {
     { label: "Total Videos", value: stats.totalVideos, icon: VideoIcon, color: "text-primary" },
     { label: "Total Links", value: stats.totalLinks, icon: Link2, color: "text-purple-500" },
     { label: "Unique Channels", value: stats.uniqueChannels, icon: Users, color: "text-blue-500" },
-    { label: "Own Links", value: stats.ownLinks, icon: Tag, color: "text-green-500" },
-    { label: "Competitor Links", value: stats.competitorLinks, icon: AlertTriangle, color: "text-red-500" },
+    { label: "Aff. Platforms", value: stats.uniquePlatforms, icon: Globe, color: "text-green-500" },
+    { label: "Retailers", value: stats.uniqueRetailers, icon: Store, color: "text-orange-500" },
   ];
 
   return (
@@ -154,9 +166,7 @@ export default function Videos() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold">Videos</h1>
-          <p className="text-muted-foreground mt-1">
-            {videos.length} videos fetched from YouTube.
-          </p>
+          <p className="text-muted-foreground mt-1">{videos.length} videos fetched from YouTube.</p>
         </div>
         <Button variant="outline" size="sm" onClick={refresh}>
           <RefreshCw className="h-4 w-4 mr-2" /> Refresh
@@ -187,11 +197,7 @@ export default function Videos() {
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
+            <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
           ) : videos.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
               No videos yet. Fetch videos by running keyword jobs from the Keywords page.
@@ -210,17 +216,18 @@ export default function Videos() {
                     <SortableHeader label="Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
                     <SortableHeader label="Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
                     <SortableHeader label="Links" sortKey="links" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Affiliates</TableHead>
+                    <TableHead>Platforms</TableHead>
+                    <TableHead>Retailers</TableHead>
                     <SortableHeader label="Published" sortKey="published" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <TableHead className="w-[40px]"></TableHead>
                   </TableRow>
-                  {/* Filter row */}
                   <TableRow className="bg-muted/30">
                     <TableHead />
                     <TableHead />
                     <TableHead><Input placeholder="Filter title..." className="h-7 text-xs" value={filters.title} onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))} /></TableHead>
                     <TableHead><Input placeholder="Filter channel..." className="h-7 text-xs" value={filters.channel} onChange={(e) => setFilters(f => ({ ...f, channel: e.target.value }))} /></TableHead>
                     <TableHead><Input placeholder="Filter keyword..." className="h-7 text-xs" value={filters.keyword} onChange={(e) => setFilters(f => ({ ...f, keyword: e.target.value }))} /></TableHead>
+                    <TableHead />
                     <TableHead />
                     <TableHead />
                     <TableHead />
@@ -242,50 +249,31 @@ export default function Videos() {
                 </TableHeader>
                 <TableBody>
                   {filteredAndSorted.map((v) => {
-                    const affiliates = getUniqueAffiliates(v);
+                    const platforms = getUniquePlatforms(v);
+                    const retailers = getUniqueRetailers(v);
                     return (
                       <>
                         <TableRow key={v.id} className="cursor-pointer" onClick={() => toggleExpand(v.id)}>
                           <TableCell>
-                            {expandedIds.has(v.id) ? (
-                              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                            )}
+                            {expandedIds.has(v.id) ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                           </TableCell>
                           <TableCell>
-                            {v.thumbnail_url ? (
-                              <img src={v.thumbnail_url} alt="" className="w-12 h-8 rounded object-cover" />
-                            ) : (
-                              <div className="w-12 h-8 rounded bg-muted" />
-                            )}
+                            {v.thumbnail_url ? <img src={v.thumbnail_url} alt="" className="w-12 h-8 rounded object-cover" /> : <div className="w-12 h-8 rounded bg-muted" />}
                           </TableCell>
                           <TableCell className="max-w-[300px]">
                             <ExpandableText text={v.title} maxLength={80} className="font-medium text-sm" />
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
-                            {v.channel_name}
-                          </TableCell>
+                          <TableCell className="text-muted-foreground text-sm">{v.channel_name}</TableCell>
                           <TableCell>
                             {v.keywords.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {v.keywords.map((kw) => (
-                                  <Badge key={kw.id} variant="secondary" className="text-xs">
-                                    {kw.keyword}
-                                  </Badge>
-                                ))}
+                                {v.keywords.map((kw) => (<Badge key={kw.id} variant="secondary" className="text-xs">{kw.keyword}</Badge>))}
                               </div>
                             ) : "—"}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums font-medium">
-                            {v.best_rank != null ? `#${v.best_rank}` : "—"}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatNumber(v.view_count)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatNumber(v.like_count)}
-                          </TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">{v.best_rank != null ? `#${v.best_rank}` : "—"}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatNumber(v.view_count)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatNumber(v.like_count)}</TableCell>
                           <TableCell>
                             {v.links.length > 0 ? (
                               <div className="flex flex-wrap gap-1 max-w-[200px]">
@@ -294,19 +282,24 @@ export default function Videos() {
                                     {link.domain || new URL(link.original_url).hostname}
                                   </Badge>
                                 ))}
-                                {v.links.length > 3 && (
-                                  <Badge variant="secondary" className="text-xs">+{v.links.length - 3}</Badge>
-                                )}
+                                {v.links.length > 3 && <Badge variant="secondary" className="text-xs">+{v.links.length - 3}</Badge>}
                               </div>
                             ) : "—"}
                           </TableCell>
                           <TableCell>
-                            {affiliates.length > 0 ? (
+                            {platforms.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {affiliates.map((a) => (
-                                  <Badge key={a.name} variant="outline" className={`text-xs ${classificationColors[a.classification] || classificationColors.NEUTRAL}`}>
-                                    {a.name}
-                                  </Badge>
+                                {platforms.map((name) => (
+                                  <Badge key={name} variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">{name}</Badge>
+                                ))}
+                              </div>
+                            ) : "—"}
+                          </TableCell>
+                          <TableCell>
+                            {retailers.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {retailers.map((name) => (
+                                  <Badge key={name} variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">{name}</Badge>
                                 ))}
                               </div>
                             ) : "—"}
@@ -315,13 +308,7 @@ export default function Videos() {
                             {v.published_at ? format(new Date(v.published_at), "MMM d, yyyy") : "—"}
                           </TableCell>
                           <TableCell>
-                            <a
-                              href={`https://www.youtube.com/watch?v=${v.video_id}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-muted-foreground hover:text-foreground"
-                              onClick={(e) => e.stopPropagation()}
-                            >
+                            <a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground" onClick={(e) => e.stopPropagation()}>
                               <ExternalLink className="h-4 w-4" />
                             </a>
                           </TableCell>

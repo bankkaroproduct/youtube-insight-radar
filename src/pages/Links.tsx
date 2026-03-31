@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAffiliatePatterns } from "@/hooks/useAffiliatePatterns";
+import { useAffiliatePatterns, PatternType } from "@/hooks/useAffiliatePatterns";
 import { useCompetitorNames } from "@/hooks/useCompetitorNames";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
-import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap } from "lucide-react";
+import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const classColors: Record<string, string> = {
@@ -20,16 +20,15 @@ const classColors: Record<string, string> = {
   NEUTRAL: "bg-muted text-muted-foreground",
 };
 
+const typeColors: Record<string, string> = {
+  affiliate_platform: "bg-blue-500/15 text-blue-700 border-blue-500/30",
+  retailer: "bg-purple-500/15 text-purple-700 border-purple-500/30",
+};
+
 function NameDropdown({
-  names,
-  value,
-  onChange,
-  onAddNew,
+  names, value, onChange, onAddNew,
 }: {
-  names: string[];
-  value: string;
-  onChange: (v: string) => void;
-  onAddNew: (name: string) => Promise<void>;
+  names: string[]; value: string; onChange: (v: string) => void; onAddNew: (name: string) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -38,81 +37,41 @@ function NameDropdown({
     return (
       <div className="flex gap-1">
         <Input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="New name..."
-          className="h-8 text-sm"
-          autoFocus
+          value={newName} onChange={(e) => setNewName(e.target.value)}
+          placeholder="New name..." className="h-8 text-sm" autoFocus
           onKeyDown={async (e) => {
             if (e.key === "Enter" && newName.trim()) {
-              await onAddNew(newName.trim());
-              onChange(newName.trim());
-              setNewName("");
-              setAdding(false);
+              await onAddNew(newName.trim()); onChange(newName.trim());
+              setNewName(""); setAdding(false);
             }
-            if (e.key === "Escape") {
-              setAdding(false);
-              setNewName("");
-            }
+            if (e.key === "Escape") { setAdding(false); setNewName(""); }
           }}
         />
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8"
-          onClick={async () => {
-            if (newName.trim()) {
-              await onAddNew(newName.trim());
-              onChange(newName.trim());
-              setNewName("");
-              setAdding(false);
-            }
-          }}
-        >
-          Add
-        </Button>
+        <Button size="sm" variant="outline" className="h-8" onClick={async () => {
+          if (newName.trim()) { await onAddNew(newName.trim()); onChange(newName.trim()); setNewName(""); setAdding(false); }
+        }}>Add</Button>
       </div>
     );
   }
 
   return (
-    <Select value={value} onValueChange={(v) => {
-      if (v === "__add_new__") {
-        setAdding(true);
-      } else {
-        onChange(v);
-      }
-    }}>
+    <Select value={value} onValueChange={(v) => { v === "__add_new__" ? setAdding(true) : onChange(v); }}>
       <SelectTrigger><SelectValue placeholder="Select name..." /></SelectTrigger>
       <SelectContent>
-        {names.map((n) => (
-          <SelectItem key={n} value={n}>{n}</SelectItem>
-        ))}
-        <SelectItem value="__add_new__" className="text-primary font-medium">
-          + Add new...
-        </SelectItem>
+        {names.map((n) => (<SelectItem key={n} value={n}>{n}</SelectItem>))}
+        <SelectItem value="__add_new__" className="text-primary font-medium">+ Add new...</SelectItem>
       </SelectContent>
     </Select>
   );
 }
 
 function DiscoveredNamePicker({
-  names,
-  onAddNew,
-  onConfirm,
-  classification,
-  label,
-  className,
+  names, onAddNew, onConfirm, classification, label, className,
 }: {
-  names: string[];
-  onAddNew: (name: string) => Promise<void>;
-  onConfirm: (name: string) => void;
-  classification: string;
-  label: string;
-  className?: string;
+  names: string[]; onAddNew: (name: string) => Promise<void>; onConfirm: (name: string) => void;
+  classification: string; label: string; className?: string;
 }) {
   const [selectedName, setSelectedName] = useState("");
-
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -122,21 +81,8 @@ function DiscoveredNamePicker({
       </PopoverTrigger>
       <PopoverContent className="w-64 space-y-3">
         <Label className="text-sm font-medium">Select competitor name</Label>
-        <NameDropdown
-          names={names}
-          value={selectedName}
-          onChange={setSelectedName}
-          onAddNew={onAddNew}
-        />
-        <Button
-          size="sm"
-          className="w-full"
-          disabled={!selectedName}
-          onClick={() => {
-            onConfirm(selectedName);
-            setSelectedName("");
-          }}
-        >
+        <NameDropdown names={names} value={selectedName} onChange={setSelectedName} onAddNew={onAddNew} />
+        <Button size="sm" className="w-full" disabled={!selectedName} onClick={() => { onConfirm(selectedName); setSelectedName(""); }}>
           Confirm as {classification}
         </Button>
       </PopoverContent>
@@ -144,9 +90,63 @@ function DiscoveredNamePicker({
   );
 }
 
+function PatternTable({
+  patterns, onDelete, typeLabel,
+}: {
+  patterns: any[]; onDelete: (id: string) => void; typeLabel?: string;
+}) {
+  if (patterns.length === 0) {
+    return (
+      <div className="h-24 flex items-center justify-center text-muted-foreground">
+        No {typeLabel || "patterns"} yet.
+      </div>
+    );
+  }
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Pattern</TableHead>
+          <TableHead>Name</TableHead>
+          <TableHead>Classification</TableHead>
+          <TableHead>Type</TableHead>
+          <TableHead>Source</TableHead>
+          <TableHead className="w-[60px]"></TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {patterns.map((p) => (
+          <TableRow key={p.id}>
+            <TableCell className="font-mono text-sm">{p.pattern}</TableCell>
+            <TableCell>{p.name}</TableCell>
+            <TableCell>
+              <Badge variant="outline" className={classColors[p.classification] || classColors.NEUTRAL}>
+                {p.classification}
+              </Badge>
+            </TableCell>
+            <TableCell>
+              <Badge variant="outline" className={typeColors[p.type] || typeColors.affiliate_platform}>
+                {p.type === "retailer" ? "Retailer" : "Platform"}
+              </Badge>
+            </TableCell>
+            <TableCell className="text-sm text-muted-foreground">
+              {p.is_auto_discovered ? "Auto" : "Manual"}
+            </TableCell>
+            <TableCell>
+              <Button variant="ghost" size="icon" onClick={() => onDelete(p.id)} className="h-8 w-8 text-destructive hover:text-destructive">
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 export default function Links() {
   const {
-    confirmedPatterns, discoveredPatterns, isLoading,
+    platformPatterns, retailerPatterns, discoveredPatterns, isLoading,
     addPattern, confirmPattern, deletePattern, processLinks,
   } = useAffiliatePatterns();
   const { names, addName } = useCompetitorNames();
@@ -155,142 +155,112 @@ export default function Links() {
   const [newPattern, setNewPattern] = useState("");
   const [newName, setNewName] = useState("");
   const [newClass, setNewClass] = useState("COMPETITOR");
+  const [newType, setNewType] = useState<PatternType>("affiliate_platform");
 
   const handleAdd = async () => {
     if (!newPattern || !newName) return;
-    await addPattern(newPattern, newName, newClass);
-    setNewPattern("");
-    setNewName("");
-    setOpen(false);
+    await addPattern(newPattern, newName, newClass, newType);
+    setNewPattern(""); setNewName(""); setOpen(false);
   };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-display font-bold">Affiliates</h1>
+          <h1 className="text-3xl font-display font-bold">Affiliates & Retailers</h1>
           <p className="text-muted-foreground mt-1">
-            Manage affiliate patterns for link classification.
+            Manage affiliate platform and retailer patterns for link classification.
           </p>
         </div>
         <div className="flex gap-2">
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm"><Plus className="h-4 w-4 mr-2" /> Add Pattern</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader><DialogTitle>Add Pattern</DialogTitle></DialogHeader>
+              <div className="space-y-4 pt-2">
+                <div>
+                  <Label>Type</Label>
+                  <Select value={newType} onValueChange={(v) => setNewType(v as PatternType)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="affiliate_platform">Affiliate Platform</SelectItem>
+                      <SelectItem value="retailer">Retailer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Domain / Pattern</Label>
+                  <Input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder={newType === "retailer" ? "e.g. amazon.in" : "e.g. impact.com"} />
+                </div>
+                <div>
+                  <Label>Display Name</Label>
+                  <NameDropdown names={names} value={newName} onChange={setNewName} onAddNew={addName} />
+                </div>
+                <div>
+                  <Label>Classification</Label>
+                  <Select value={newClass} onValueChange={setNewClass}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="OWN">OWN (Ours)</SelectItem>
+                      <SelectItem value="COMPETITOR">COMPETITOR</SelectItem>
+                      <SelectItem value="NEUTRAL">NEUTRAL</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button onClick={handleAdd} className="w-full" disabled={!newPattern || !newName}>Add Pattern</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
           <Button variant="outline" size="sm" onClick={processLinks}>
             <Zap className="h-4 w-4 mr-2" /> Process Links
           </Button>
         </div>
       </div>
 
-      <Tabs defaultValue="patterns">
+      <Tabs defaultValue="platforms">
         <TabsList>
-          <TabsTrigger value="patterns">
-            Affiliate Patterns ({confirmedPatterns.length})
+          <TabsTrigger value="platforms">
+            <Globe className="h-4 w-4 mr-1" /> Platforms ({platformPatterns.length})
+          </TabsTrigger>
+          <TabsTrigger value="retailers">
+            <Store className="h-4 w-4 mr-1" /> Retailers ({retailerPatterns.length})
           </TabsTrigger>
           <TabsTrigger value="discovered">
-            Discovered ({discoveredPatterns.length})
+            <RefreshCw className="h-4 w-4 mr-1" /> Discovered ({discoveredPatterns.length})
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="patterns">
+        <TabsContent value="platforms">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader>
               <CardTitle className="font-display flex items-center gap-2">
-                <LinkIcon className="h-5 w-5" /> Known Patterns
+                <Globe className="h-5 w-5" /> Affiliate Platforms
               </CardTitle>
-              <Dialog open={open} onOpenChange={setOpen}>
-                <DialogTrigger asChild>
-                  <Button size="sm">
-                    <Plus className="h-4 w-4 mr-2" /> Add Pattern
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Add Affiliate Pattern</DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-4 pt-2">
-                    <div>
-                      <Label>Domain / Pattern</Label>
-                      <Input
-                        value={newPattern}
-                        onChange={(e) => setNewPattern(e.target.value)}
-                        placeholder="e.g. cashkaro.com"
-                      />
-                    </div>
-                    <div>
-                      <Label>Display Name</Label>
-                      <NameDropdown
-                        names={names}
-                        value={newName}
-                        onChange={setNewName}
-                        onAddNew={addName}
-                      />
-                    </div>
-                    <div>
-                      <Label>Classification</Label>
-                      <Select value={newClass} onValueChange={setNewClass}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="OWN">OWN (Ours)</SelectItem>
-                          <SelectItem value="COMPETITOR">COMPETITOR</SelectItem>
-                          <SelectItem value="NEUTRAL">NEUTRAL</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <Button onClick={handleAdd} className="w-full" disabled={!newPattern || !newName}>
-                      Add Pattern
-                    </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="space-y-2">
-                  {Array.from({ length: 3 }).map((_, i) => (
-                    <Skeleton key={i} className="h-10 w-full" />
-                  ))}
-                </div>
-              ) : confirmedPatterns.length === 0 ? (
-                <div className="h-32 flex items-center justify-center text-muted-foreground">
-                  No patterns yet. Add patterns to classify description links.
-                </div>
+                <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Pattern</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Classification</TableHead>
-                      <TableHead>Source</TableHead>
-                      <TableHead className="w-[60px]"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {confirmedPatterns.map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell className="font-mono text-sm">{p.pattern}</TableCell>
-                        <TableCell>{p.name}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={classColors[p.classification] || classColors.NEUTRAL}>
-                            {p.classification}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {p.is_auto_discovered ? "Auto" : "Manual"}
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => deletePattern(p.id)}
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <PatternTable patterns={platformPatterns} onDelete={deletePattern} typeLabel="affiliate platforms" />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="retailers">
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-display flex items-center gap-2">
+                <Store className="h-5 w-5" /> Retailers
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
+              ) : (
+                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} typeLabel="retailers" />
               )}
             </CardContent>
           </Card>
@@ -314,6 +284,7 @@ export default function Links() {
                     <TableRow>
                       <TableHead>Domain</TableHead>
                       <TableHead>Name</TableHead>
+                      <TableHead>Suggested Type</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -322,36 +293,24 @@ export default function Links() {
                       <TableRow key={p.id}>
                         <TableCell className="font-mono text-sm">{p.pattern}</TableCell>
                         <TableCell>{p.name}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={typeColors[p.type] || typeColors.affiliate_platform}>
+                            {p.type === "retailer" ? "Retailer" : "Platform"}
+                          </Badge>
+                        </TableCell>
                         <TableCell className="flex gap-1">
                           <DiscoveredNamePicker
-                            names={names}
-                            onAddNew={addName}
-                            classification="OWN"
-                            label="Ours"
-                            className="text-green-700"
+                            names={names} onAddNew={addName} classification="OWN" label="Ours" className="text-green-700"
                             onConfirm={(name) => confirmPattern(p.id, "OWN", name)}
                           />
                           <DiscoveredNamePicker
-                            names={names}
-                            onAddNew={addName}
-                            classification="COMPETITOR"
-                            label="Competitor"
-                            className="text-red-700"
+                            names={names} onAddNew={addName} classification="COMPETITOR" label="Competitor" className="text-red-700"
                             onConfirm={(name) => confirmPattern(p.id, "COMPETITOR", name)}
                           />
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => confirmPattern(p.id, "NEUTRAL")}
-                          >
+                          <Button variant="outline" size="sm" onClick={() => confirmPattern(p.id, "NEUTRAL")}>
                             <Check className="h-3 w-3 mr-1" /> Neutral
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => deletePattern(p.id)}
-                            className="h-8 w-8 text-destructive"
-                          >
+                          <Button variant="ghost" size="icon" onClick={() => deletePattern(p.id)} className="h-8 w-8 text-destructive">
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </TableCell>

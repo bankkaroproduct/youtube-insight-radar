@@ -57,12 +57,7 @@ async function unshortenUrl(url: string): Promise<string> {
         signal: AbortSignal.timeout(5000),
       }
     );
-    if (resp.status === 401) {
-      console.warn("unshorten.me invalid API key — falling back");
-      return fallbackUnshorten(url);
-    }
-    if (resp.status === 429) {
-      console.warn("unshorten.me rate limited — falling back");
+    if (resp.status === 401 || resp.status === 429) {
       return fallbackUnshorten(url);
     }
     const data = await resp.json();
@@ -83,7 +78,6 @@ function extractDomain(url: string): string {
   }
 }
 
-// Process N promises concurrently with a concurrency limit
 async function parallelMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let idx = 0;
@@ -97,6 +91,24 @@ async function parallelMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concur
   return results;
 }
 
+interface Pattern {
+  id: string;
+  pattern: string;
+  classification: string;
+  is_confirmed: boolean;
+  type: string;
+}
+
+function matchPattern(domain: string, url: string, patterns: Pattern[], filterType?: string): Pattern | null {
+  for (const p of patterns) {
+    if (filterType && p.type !== filterType) continue;
+    if (domain.includes(p.pattern) || url.includes(p.pattern)) {
+      return p;
+    }
+  }
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -108,15 +120,14 @@ serve(async (req) => {
     // Get ALL affiliate patterns once
     const { data: patterns } = await supabase
       .from("affiliate_patterns")
-      .select("id, pattern, classification, is_confirmed");
+      .select("id, pattern, classification, is_confirmed, type");
 
-    const allPatterns = patterns || [];
+    const allPatterns: Pattern[] = (patterns || []) as Pattern[];
     const affectedChannels = new Set<string>();
     let totalProcessed = 0;
     const MAX_TOTAL = 500;
     const BATCH_SIZE = 50;
 
-    // Pre-fetch video→channel mapping for all videos with unprocessed links
     const videoChannelCache = new Map<string, string>();
 
     while (totalProcessed < MAX_TOTAL) {
@@ -129,7 +140,6 @@ serve(async (req) => {
       if (error) throw error;
       if (!links || links.length === 0) break;
 
-      // Pre-fetch all video→channel mappings for this batch in one query
       const uniqueVideoIds = [...new Set(links.map(l => l.video_id))];
       const missingVideoIds = uniqueVideoIds.filter(id => !videoChannelCache.has(id));
       if (missingVideoIds.length > 0) {
@@ -142,7 +152,6 @@ serve(async (req) => {
         }
       }
 
-      // Separate shortened vs non-shortened links
       const shortenedLinks: typeof links = [];
       const normalLinks: typeof links = [];
       for (const link of links) {
@@ -154,7 +163,6 @@ serve(async (req) => {
         }
       }
 
-      // Parallel unshorten (10 concurrent)
       const unshortenResults = await parallelMap(
         shortenedLinks,
         async (link) => {
@@ -164,81 +172,145 @@ serve(async (req) => {
         10
       );
 
-      // Combine results
       const processedLinks = [
         ...normalLinks.map(l => ({ ...l, finalUrl: l.original_url })),
         ...unshortenResults,
       ];
 
-      // Collect new domains to auto-discover in bulk
-      const newDomains = new Set<string>();
-      const linkUpdates: { id: string; unshortened_url: string; domain: string; classification: string; matched_pattern_id: string | null }[] = [];
+      const newPlatformDomains = new Set<string>();
+      const newRetailerDomains = new Set<string>();
+
+      interface LinkUpdate {
+        id: string;
+        unshortened_url: string;
+        domain: string;
+        original_domain: string;
+        classification: string;
+        matched_pattern_id: string | null;
+        affiliate_platform_id: string | null;
+        retailer_pattern_id: string | null;
+      }
+
+      const linkUpdates: LinkUpdate[] = [];
 
       for (const link of processedLinks) {
-        const domain = extractDomain(link.finalUrl);
+        const originalDomain = extractDomain(link.original_url);
+        const unshortenedDomain = extractDomain(link.finalUrl);
+        const isShortened = originalDomain !== unshortenedDomain;
+
+        // Match affiliate platform: use original_domain (shortened URL domain)
+        let platformMatch: Pattern | null = null;
+        if (isShortened) {
+          platformMatch = matchPattern(originalDomain, link.original_url, allPatterns, "affiliate_platform");
+        }
+
+        // Match retailer: use unshortened domain
+        let retailerMatch = matchPattern(unshortenedDomain, link.finalUrl, allPatterns, "retailer");
+
+        // Legacy: overall classification from any match
         let classification = "NEUTRAL";
         let matchedPatternId: string | null = null;
 
-        for (const p of allPatterns) {
-          if (domain.includes(p.pattern) || link.finalUrl.includes(p.pattern)) {
-            classification = p.is_confirmed ? p.classification : "NEUTRAL";
-            matchedPatternId = p.id;
-            break;
+        // Prefer retailer match for classification, fallback to platform
+        if (retailerMatch && retailerMatch.is_confirmed) {
+          classification = retailerMatch.classification;
+          matchedPatternId = retailerMatch.id;
+        } else if (platformMatch && platformMatch.is_confirmed) {
+          classification = platformMatch.classification;
+          matchedPatternId = platformMatch.id;
+        } else {
+          // Try any pattern match (backward compat)
+          const anyMatch = matchPattern(unshortenedDomain, link.finalUrl, allPatterns);
+          if (anyMatch) {
+            classification = anyMatch.is_confirmed ? anyMatch.classification : "NEUTRAL";
+            matchedPatternId = anyMatch.id;
           }
         }
 
-        if (!matchedPatternId && domain && !SKIP_DOMAINS.has(domain)) {
-          // Check if already in allPatterns
-          const existing = allPatterns.find(p => p.pattern === domain);
-          if (existing) {
-            matchedPatternId = existing.id;
-          } else {
-            newDomains.add(domain);
+        // Auto-discover: shortened domain → affiliate_platform, unshortened → retailer
+        if (!platformMatch && isShortened && originalDomain && !SKIP_DOMAINS.has(originalDomain)) {
+          const existing = allPatterns.find(p => p.pattern === originalDomain);
+          if (!existing) {
+            newPlatformDomains.add(originalDomain);
+          }
+        }
+        if (!retailerMatch && unshortenedDomain && !SKIP_DOMAINS.has(unshortenedDomain)) {
+          const existing = allPatterns.find(p => p.pattern === unshortenedDomain);
+          if (!existing) {
+            newRetailerDomains.add(unshortenedDomain);
           }
         }
 
-        linkUpdates.push({ id: link.id, unshortened_url: link.finalUrl, domain, classification, matched_pattern_id: matchedPatternId });
+        linkUpdates.push({
+          id: link.id,
+          unshortened_url: link.finalUrl,
+          domain: unshortenedDomain,
+          original_domain: originalDomain,
+          classification,
+          matched_pattern_id: matchedPatternId,
+          affiliate_platform_id: platformMatch?.id || null,
+          retailer_pattern_id: retailerMatch?.id || null,
+        });
 
-        // Track affected channels
         const chId = videoChannelCache.get(link.video_id);
         if (chId) affectedChannels.add(chId);
       }
 
-      // Batch auto-discover new patterns
-      if (newDomains.size > 0) {
-        const newPatternRows = [...newDomains].map(d => ({
-          pattern: d,
-          name: d,
-          classification: "NEUTRAL",
-          is_auto_discovered: true,
-          is_confirmed: false,
+      // Batch auto-discover new platform patterns
+      if (newPlatformDomains.size > 0) {
+        const rows = [...newPlatformDomains].map(d => ({
+          pattern: d, name: d, classification: "NEUTRAL",
+          is_auto_discovered: true, is_confirmed: false, type: "affiliate_platform",
         }));
         const { data: inserted } = await supabase
           .from("affiliate_patterns")
-          .upsert(newPatternRows, { onConflict: "pattern" })
-          .select("id, pattern, classification, is_confirmed");
-
+          .upsert(rows, { onConflict: "pattern" })
+          .select("id, pattern, classification, is_confirmed, type");
         if (inserted) {
           for (const p of inserted) {
-            allPatterns.push(p);
-            // Update linkUpdates that match this domain
+            allPatterns.push(p as Pattern);
             for (const lu of linkUpdates) {
-              if (!lu.matched_pattern_id && lu.domain === p.pattern) {
-                lu.matched_pattern_id = p.id;
+              if (!lu.affiliate_platform_id && lu.original_domain === p.pattern) {
+                lu.affiliate_platform_id = p.id;
               }
             }
           }
         }
       }
 
-      // Batch update all links - use individual updates via Promise.all since each row has different values
+      // Batch auto-discover new retailer patterns
+      if (newRetailerDomains.size > 0) {
+        const rows = [...newRetailerDomains].map(d => ({
+          pattern: d, name: d, classification: "NEUTRAL",
+          is_auto_discovered: true, is_confirmed: false, type: "retailer",
+        }));
+        const { data: inserted } = await supabase
+          .from("affiliate_patterns")
+          .upsert(rows, { onConflict: "pattern" })
+          .select("id, pattern, classification, is_confirmed, type");
+        if (inserted) {
+          for (const p of inserted) {
+            allPatterns.push(p as Pattern);
+            for (const lu of linkUpdates) {
+              if (!lu.retailer_pattern_id && lu.domain === p.pattern) {
+                lu.retailer_pattern_id = p.id;
+              }
+            }
+          }
+        }
+      }
+
+      // Batch update all links
       await Promise.all(
         linkUpdates.map(lu =>
           supabase.from("video_links").update({
             unshortened_url: lu.unshortened_url,
             domain: lu.domain,
+            original_domain: lu.original_domain,
             classification: lu.classification,
             matched_pattern_id: lu.matched_pattern_id,
+            affiliate_platform_id: lu.affiliate_platform_id,
+            retailer_pattern_id: lu.retailer_pattern_id,
           }).eq("id", lu.id)
         )
       );
@@ -246,7 +318,7 @@ serve(async (req) => {
       totalProcessed += processedLinks.length;
     }
 
-    // Step 2: Re-classify stale links (batch)
+    // Step 2: Re-classify stale links
     const confirmedPatterns = allPatterns.filter(p => p.is_confirmed);
     for (const p of confirmedPatterns) {
       const { data: staleLinks } = await supabase
@@ -262,7 +334,6 @@ serve(async (req) => {
           .update({ classification: p.classification })
           .in("id", staleLinks.map(l => l.id));
 
-        // Batch fetch channels for stale video_ids
         const staleVideoIds = [...new Set(staleLinks.map(l => l.video_id))];
         const missingIds = staleVideoIds.filter(id => !videoChannelCache.has(id));
         if (missingIds.length > 0) {
@@ -279,48 +350,44 @@ serve(async (req) => {
     // Step 3: Match previously-unmatched links by domain
     const { data: unmatchedLinks } = await supabase
       .from("video_links")
-      .select("id, domain, video_id")
+      .select("id, domain, original_domain, video_id")
       .is("matched_pattern_id", null)
       .not("domain", "is", null)
       .not("unshortened_url", "is", null)
       .limit(2000);
 
     if (unmatchedLinks && unmatchedLinks.length > 0) {
-      const domainPatternMap = new Map<string, { id: string; classification: string; is_confirmed: boolean }>();
-      for (const p of allPatterns) {
-        domainPatternMap.set(p.pattern, p);
-      }
-
-      const batchUpdates: { id: string; matched_pattern_id: string; classification: string }[] = [];
+      const batchUpdates: { id: string; matched_pattern_id: string; classification: string; affiliate_platform_id: string | null; retailer_pattern_id: string | null }[] = [];
 
       for (const link of unmatchedLinks) {
         if (!link.domain || SKIP_DOMAINS.has(link.domain)) continue;
 
-        let matched = domainPatternMap.get(link.domain);
-        if (!matched) {
-          for (const p of allPatterns) {
-            if (link.domain.includes(p.pattern) || p.pattern.includes(link.domain)) {
-              matched = p;
-              break;
-            }
-          }
-        }
+        const retailerMatch = matchPattern(link.domain, "", allPatterns, "retailer");
+        const platformMatch = link.original_domain ? matchPattern(link.original_domain, "", allPatterns, "affiliate_platform") : null;
 
-        if (matched) {
-          const classification = matched.is_confirmed ? matched.classification : "NEUTRAL";
-          batchUpdates.push({ id: link.id, matched_pattern_id: matched.id, classification });
+        const anyMatch = retailerMatch || platformMatch || matchPattern(link.domain, "", allPatterns);
+        if (anyMatch) {
+          const classification = anyMatch.is_confirmed ? anyMatch.classification : "NEUTRAL";
+          batchUpdates.push({
+            id: link.id,
+            matched_pattern_id: anyMatch.id,
+            classification,
+            affiliate_platform_id: platformMatch?.id || null,
+            retailer_pattern_id: retailerMatch?.id || null,
+          });
           const ch = videoChannelCache.get(link.video_id);
           if (ch) affectedChannels.add(ch);
         }
       }
 
-      // Batch update unmatched links via Promise.all
       if (batchUpdates.length > 0) {
         await Promise.all(
           batchUpdates.map(u =>
             supabase.from("video_links").update({
               matched_pattern_id: u.matched_pattern_id,
               classification: u.classification,
+              affiliate_platform_id: u.affiliate_platform_id,
+              retailer_pattern_id: u.retailer_pattern_id,
             }).eq("id", u.id)
           )
         );

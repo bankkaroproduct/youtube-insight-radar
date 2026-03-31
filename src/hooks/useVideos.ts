@@ -7,9 +7,14 @@ export interface VideoLink {
   original_url: string;
   unshortened_url: string | null;
   domain: string | null;
+  original_domain: string | null;
   classification: string | null;
   matched_pattern_id: string | null;
+  affiliate_platform_id: string | null;
+  retailer_pattern_id: string | null;
   affiliate_name: string | null;
+  platform_name: string | null;
+  retailer_name: string | null;
 }
 
 export interface VideoKeyword {
@@ -74,13 +79,20 @@ export function useVideos() {
     const linksData = (linksResult.data ?? []) as any[];
     const vkData = (vkResult.data ?? []) as any[];
 
-    const patternIds = [...new Set(linksData.map((l) => l.matched_pattern_id).filter(Boolean))];
+    // Collect all pattern IDs (matched, platform, retailer)
+    const allPatternIds = new Set<string>();
+    for (const l of linksData) {
+      if (l.matched_pattern_id) allPatternIds.add(l.matched_pattern_id);
+      if (l.affiliate_platform_id) allPatternIds.add(l.affiliate_platform_id);
+      if (l.retailer_pattern_id) allPatternIds.add(l.retailer_pattern_id);
+    }
+
     let patternsMap = new Map<string, string>();
-    if (patternIds.length > 0) {
+    if (allPatternIds.size > 0) {
       const { data: patternsData } = await supabase
         .from("affiliate_patterns")
         .select("id, name")
-        .in("id", patternIds);
+        .in("id", [...allPatternIds]);
       for (const p of (patternsData ?? []) as any[]) {
         patternsMap.set(p.id, p.name);
       }
@@ -106,6 +118,12 @@ export function useVideos() {
         affiliate_name: link.matched_pattern_id
           ? patternsMap.get(link.matched_pattern_id) || null
           : null,
+        platform_name: link.affiliate_platform_id
+          ? patternsMap.get(link.affiliate_platform_id) || null
+          : null,
+        retailer_name: link.retailer_pattern_id
+          ? patternsMap.get(link.retailer_pattern_id) || null
+          : null,
       });
       linksByVideo.set(link.video_id, list);
     }
@@ -120,7 +138,6 @@ export function useVideos() {
       }
       keywordsByVideo.set(vk.video_id, list);
 
-      // Track best (lowest) rank
       if (vk.search_rank != null) {
         const current = bestRankByVideo.get(vk.video_id);
         if (current == null || vk.search_rank < current) {

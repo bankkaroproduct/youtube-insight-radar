@@ -35,7 +35,7 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   const videoIds = videos.map((v: any) => v.id);
   const { data: links } = await supabase
     .from("video_links")
-    .select("classification, matched_pattern_id")
+    .select("classification, matched_pattern_id, affiliate_platform_id, retailer_pattern_id")
     .in("video_id", videoIds)
     .not("classification", "eq", "NEUTRAL");
 
@@ -47,20 +47,37 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   else if (hasOwn) affiliateStatus = "WITH_US";
   else if (hasCompetitor) affiliateStatus = "COMPETITOR";
 
+  // Collect all pattern IDs (legacy)
   const allPatternIds = [...new Set(
     (links || [])
       .filter((l: any) => l.matched_pattern_id && l.classification !== "NEUTRAL")
       .map((l: any) => l.matched_pattern_id)
   )];
 
-  let affiliateNames: string[] = [];
-  if (allPatternIds.length > 0) {
+  // Collect platform and retailer pattern IDs separately
+  const platformIds = [...new Set(
+    (links || []).map((l: any) => l.affiliate_platform_id).filter(Boolean)
+  )];
+  const retailerIds = [...new Set(
+    (links || []).map((l: any) => l.retailer_pattern_id).filter(Boolean)
+  )];
+
+  // Fetch all pattern names in one query
+  const allIds = [...new Set([...allPatternIds, ...platformIds, ...retailerIds])];
+  let patternsMap = new Map<string, { name: string; type: string }>();
+  if (allIds.length > 0) {
     const { data: patternData } = await supabase
       .from("affiliate_patterns")
-      .select("name")
-      .in("id", allPatternIds);
-    affiliateNames = (patternData || []).map((p: any) => p.name);
+      .select("id, name, type")
+      .in("id", allIds);
+    for (const p of (patternData || [])) {
+      patternsMap.set(p.id, { name: p.name, type: p.type });
+    }
   }
+
+  const affiliateNames = allPatternIds.map(id => patternsMap.get(id)?.name).filter(Boolean) as string[];
+  const affiliatePlatformNames = [...new Set(platformIds.map(id => patternsMap.get(id)?.name).filter(Boolean))] as string[];
+  const retailerNames = [...new Set(retailerIds.map(id => patternsMap.get(id)?.name).filter(Boolean))] as string[];
 
   await supabase.from("channels").update({
     total_videos_fetched: videos.length,
@@ -69,6 +86,8 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
     median_comments: computeMedian(comments, 5),
     affiliate_status: affiliateStatus,
     affiliate_names: affiliateNames,
+    affiliate_platform_names: affiliatePlatformNames,
+    retailer_names: retailerNames,
     last_analyzed_at: new Date().toISOString(),
   }).eq("channel_id", chId);
 
@@ -91,7 +110,6 @@ serve(async (req) => {
       channelIds = (data || []).map((c: any) => c.channel_id);
     }
 
-    // Process channels in parallel batches of 10
     let updated = 0;
     const CONCURRENCY = 10;
     for (let i = 0; i < channelIds.length; i += CONCURRENCY) {
