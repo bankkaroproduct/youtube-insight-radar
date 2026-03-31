@@ -57,13 +57,40 @@ export default function Keywords() {
       orderBy: fetchSettings.orderBy,
       publishedAfter: fetchSettings.publishedAfter ? format(fetchSettings.publishedAfter, "yyyy-MM-dd") : undefined,
     }));
-    const { error } = await supabase.functions.invoke("queue-fetch-jobs", { body: { jobs: jobPayload } });
-    if (error) toast.error("Failed to queue fetch jobs");
-    else {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+    if (!accessToken) {
+      toast.error("Session expired. Please sign in again.");
+      setFetchLoading(false);
+      return;
+    }
+    const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/queue-fetch-jobs`;
+    try {
+      const response = await fetch(functionUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ jobs: jobPayload }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Failed");
       toast.success(`Queued ${selected.length} fetch job(s)`);
       setSelectedIds(new Set());
-      // Trigger processing of the queued jobs
-      supabase.functions.invoke("process-fetch-queue").catch(() => {});
+      // Trigger processing
+      fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-fetch-queue`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({}),
+      }).catch(() => {});
+    } catch (err: any) {
+      toast.error(err.message || "Failed to queue fetch jobs");
     }
     setFetchLoading(false);
   };
