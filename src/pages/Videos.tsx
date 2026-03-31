@@ -238,9 +238,14 @@ export default function Videos() {
           <h1 className="text-3xl font-display font-bold">Videos</h1>
           <p className="text-muted-foreground mt-1">{videos.length} videos fetched from YouTube.</p>
         </div>
-        <Button variant="outline" size="sm" onClick={refresh}>
-          <RefreshCw className="h-4 w-4 mr-2" /> Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadVideosCSV(filteredAndSorted)}>
+            <Download className="h-4 w-4 mr-2" /> Download CSV
+          </Button>
+          <Button variant="outline" size="sm" onClick={refresh}>
+            <RefreshCw className="h-4 w-4 mr-2" /> Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">

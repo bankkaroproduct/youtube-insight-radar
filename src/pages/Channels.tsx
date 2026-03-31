@@ -297,6 +297,18 @@ export default function Channels() {
                       <TableCell className="max-w-[220px]">
                         {renderCountTags(ch.retailer_video_counts, ch.total_videos_fetched || 0, "bg-purple-500/15 text-purple-700 border-purple-500/30")}
                       </TableCell>
+                      <TableCell className="text-sm">
+                        {ch.channel_url ? (
+                          <a href={ch.channel_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
+                            <ExternalLink className="h-3 w-3" /> Link
+                          </a>
+                        ) : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => navigate(`/videos?channel=${encodeURIComponent(ch.channel_name)}`)}>
+                          View Videos
+                        </Button>
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           {ch.contact_email ? (
