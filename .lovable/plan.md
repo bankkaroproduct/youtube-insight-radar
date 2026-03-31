@@ -1,41 +1,44 @@
 
 
-# Add Link-Level Market Share for Platforms & Retailers in Videos Tab
+# Delete All Test Data — Full Reset
 
-## What
-Show per-video link-level market share for platforms and retailers. If a video has 10 links and 4 have `retailer = Meesho`, Meesho's share is `4/10 = 40%`. Same logic for platforms.
+Delete all data from videos, video_links, video_keywords, fetch_jobs, and keywords_search_runs tables. Also reset channel stats since they were computed from this data.
 
-## How
+## SQL Operations (using insert/update tool, not migrations)
 
-### `src/pages/Videos.tsx` — Display market share in Platforms and Retailers columns
+Execute these DELETE statements in order (respecting dependencies):
 
-Replace the current simple badge display in the Platforms and Retailers columns with badges that include the percentage share.
+```sql
+-- 1. Delete all video links
+DELETE FROM video_links;
 
-**Platform market share calculation** (per video):
+-- 2. Delete all video-keyword associations
+DELETE FROM video_keywords;
+
+-- 3. Delete all videos
+DELETE FROM videos;
+
+-- 4. Delete all fetch jobs
+DELETE FROM fetch_jobs;
+
+-- 5. Delete all keywords
+DELETE FROM keywords_search_runs;
+
+-- 6. Reset channel stats to empty (since computed from deleted data)
+UPDATE channels 
+SET platform_video_counts = '{}',
+    retailer_video_counts = '{}',
+    retailer_via_affiliate_counts = '{}',
+    retailer_direct_counts = '{}',
+    affiliate_platform_names = '{}',
+    retailer_names = '{}',
+    affiliate_names = '{}',
+    total_videos_fetched = 0;
 ```
-totalLinks = video.links.length
-For each unique platform_name, count how many links have that platform_name
-Share = count / totalLinks → display as "Wishlink (40%)"
-```
 
-**Retailer market share calculation** (per video):
-```
-totalLinks = video.links.length
-For each unique retailer_name, count how many links have that retailer_name
-Share = count / totalLinks → display as "Amazon (30%)"
-```
+No schema changes needed. No code changes needed — the UI will simply show empty tables.
 
-Update `getUniquePlatforms` and `getUniqueRetailers` to return `{ name: string, count: number }[]` instead of `string[]`, then render as:
+## Files Changed
 
-```
-<Badge>Wishlink 40%</Badge>  <Badge>Amazon 30%</Badge>
-```
-
-Sort entries by count descending so the dominant platform/retailer appears first.
-
-### Changes summary
-
-| File | Change |
-|------|--------|
-| `src/pages/Videos.tsx` | Refactor `getUniquePlatforms`/`getUniqueRetailers` to return name+count, compute `count/totalLinks` percentage, display in badges |
+None — this is a data-only operation using SQL DELETE/UPDATE statements.
 
