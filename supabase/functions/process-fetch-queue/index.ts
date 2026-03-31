@@ -161,7 +161,7 @@ serve(async (req) => {
           const params = new URLSearchParams({
             part: "snippet",
             q: job.keyword,
-            maxResults: "50",
+            maxResults: "30",
             order: job.order_by || "relevance",
             type: "video",
             key: apiKey.api_key,
