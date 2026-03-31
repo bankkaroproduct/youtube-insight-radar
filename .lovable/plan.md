@@ -1,43 +1,57 @@
 
 
-# Fix Retailer Visibility + Domain Deduplication
+# Fix Pattern Visibility, Type Normalization & Dynamic Lookup
 
-## Problems Identified
+## Root Causes Found
 
-### 1. Retailer not visible after adding
-The `addPattern` function in `useAffiliatePatterns.ts` uses `insert`, but the unique index on `affiliate_patterns(pattern)` causes a conflict error if the pattern was previously auto-discovered. The error toast shows briefly but the pattern doesn't appear. **Fix**: Change `insert` to `upsert` so adding a pattern that already exists (e.g. from auto-discovery) updates it instead of failing.
+### 1. Case mismatch — patterns not showing in tabs
+The DB stores `type` as `"Retailer"` (capital R) but `useAffiliatePatterns.ts` filters with `p.type === "retailer"` (lowercase). Result: all retailer patterns appear in neither tab. Same risk for `"Affiliate Platform"` vs `"affiliate_platform"`.
 
-### 2. Hardcoded domain maps ignore user-added patterns
-`process-video-links` uses hardcoded `AFFILIATE_SHORT_DOMAINS` and `RETAILER_DOMAINS` maps. When users add new retailers/platforms via bulk upload, those are only in the DB — the edge function doesn't use them for populating `affiliate_platform` and `resolved_retailer` text columns. **Fix**: After fetching patterns from DB, build the lookup maps dynamically from `affiliate_patterns` table entries, merging with the hardcoded defaults.
+### 2. Missing `name` in edge function select
+`process-video-links` line 127 selects `id, pattern, classification, is_confirmed, type` but NOT `name`. Lines 135/138 reference `p.name` to build dynamic lookup maps — this is always `undefined`, so user-added patterns are never used for text column population.
 
-### 3. Multiple domains → same name deduplication
-When `amazon.in` and `amazon.com` both have name "Amazon", the `compute-channel-stats` function groups by pattern ID, not by name. Two separate patterns with the same name would be counted separately. **Fix**: In `compute-channel-stats`, use the text columns (`affiliate_platform`, `resolved_retailer`) from `video_links` directly instead of joining to pattern IDs. This naturally deduplicates because both `amazon.in` and `amazon.com` resolve to "Amazon".
+### 3. Bulk upload doesn't normalize type values
+If CSV contains "Retailer" instead of "retailer", it's stored as-is. No normalization happens.
 
 ## Changes
 
-### 1. `src/hooks/useAffiliatePatterns.ts` — Fix addPattern
-Change `insert` to `upsert` with `onConflict: "pattern"`. When the user adds a pattern that already exists (auto-discovered or duplicate domain), it updates the name/classification/type instead of failing silently.
+### 1. `src/hooks/useAffiliatePatterns.ts` — Case-insensitive filtering
+Change the filtering to use `.toLowerCase()`:
+```
+const platformPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "affiliate_platform");
+const retailerPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "retailer");
+```
 
-### 2. `supabase/functions/process-video-links/index.ts` — Dynamic lookup maps
-After fetching `affiliate_patterns` from DB, build `AFFILIATE_SHORT_DOMAINS` and `RETAILER_DOMAINS` maps dynamically:
-- For each confirmed pattern with `type = "affiliate_platform"`, add `pattern → name` to affiliate map
-- For each confirmed pattern with `type = "retailer"`, add `pattern → name` to retailer map
-- Merge with hardcoded defaults (DB values take priority)
+### 2. `supabase/functions/process-video-links/index.ts` — Add `name` to select + fix dynamic maps
+- Line 127: Add `name` to the select: `"id, pattern, name, classification, is_confirmed, type"`
+- Add `name` to the `Pattern` interface
+- Fix dynamic map building to use case-insensitive type comparison
 
-This means user-added patterns via bulk upload are immediately used for text column population.
+### 3. `src/components/links/BulkUploadDialog.tsx` — Normalize type
+In `parseCSVContent`, normalize the type column:
+```
+const rawType = (parts[3] || "").trim().toLowerCase();
+const type: PatternType = rawType === "affiliate_platform" || rawType === "platform" 
+  ? "affiliate_platform" : defaultType === "affiliate_platform" ? "affiliate_platform" : "retailer";
+```
 
-### 3. `supabase/functions/compute-channel-stats/index.ts` — Use text columns
-Change the `select` to include `affiliate_platform, resolved_retailer, link_type` from `video_links`. Group by these text fields instead of looking up pattern IDs → names. This naturally handles deduplication (amazon.in + amazon.com both set `resolved_retailer = "Amazon"`).
+### 4. `src/pages/Links.tsx` — Case-insensitive type badge
+The PatternTable type badge check `p.type === "retailer"` should also be case-insensitive.
 
-Also compute `retailer_via_affiliate_counts` and `retailer_direct_counts` using `link_type`:
-- `retailer_via_affiliate_counts`: count videos where `link_type = "both"` grouped by `resolved_retailer`
-- `retailer_direct_counts`: count videos where `link_type = "retailer"` grouped by `resolved_retailer`
+### 5. Data fix migration — Normalize existing type values
+Run a migration to standardize all existing `type` values to lowercase:
+```sql
+UPDATE affiliate_patterns SET type = 'retailer' WHERE lower(type) = 'retailer' AND type != 'retailer';
+UPDATE affiliate_patterns SET type = 'affiliate_platform' WHERE lower(type) IN ('affiliate_platform', 'platform', 'affiliate platform') AND type != 'affiliate_platform';
+```
 
-### Files Changed
+## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/hooks/useAffiliatePatterns.ts` | `insert` → `upsert` with `onConflict: "pattern"` |
-| `process-video-links/index.ts` | Build lookup maps from DB patterns + hardcoded defaults |
-| `compute-channel-stats/index.ts` | Use text columns for grouping, compute via/direct splits |
+| Migration SQL | Normalize existing type values to lowercase |
+| `src/hooks/useAffiliatePatterns.ts` | Case-insensitive type filtering |
+| `src/pages/Links.tsx` | Case-insensitive type badge display |
+| `src/components/links/BulkUploadDialog.tsx` | Normalize type in CSV parsing |
+| `process-video-links/index.ts` | Add `name` to select + Pattern interface, fix dynamic map building |
 
