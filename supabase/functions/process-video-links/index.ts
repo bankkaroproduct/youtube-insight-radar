@@ -230,16 +230,27 @@ serve(async (req) => {
         const unshortenedDomain = extractDomain(link.finalUrl);
         const isShortened = originalDomain !== unshortenedDomain;
 
-        // Platform identified from original_url domain
+        // Platform identified from original_url domain (always, regardless of isShortened)
         const affiliatePlatformName = lookupAffiliatePlatform(originalDomain);
+        // Also check DB patterns for platform match on original domain (always)
+        let platformMatch: Pattern | null = matchPattern(originalDomain, link.original_url, allPatterns, "affiliate_platform");
+
         // Retailer identified from unshortened_url domain (resolved destination)
-        const retailerLookup = isShortened ? lookupRetailer(unshortenedDomain) : lookupRetailer(originalDomain);
+        // If shortened, check unshortened domain; if not shortened but platform matched, skip retailer (same domain)
+        // If not shortened and no platform, check original domain for retailer
+        let retailerLookup: { name: string; domain: string } | null = null;
+        if (isShortened) {
+          retailerLookup = lookupRetailer(unshortenedDomain);
+        } else if (!affiliatePlatformName && !platformMatch) {
+          // Not a platform URL, check if it's a direct retailer link
+          retailerLookup = lookupRetailer(originalDomain);
+        }
 
         let linkType: string | null = null;
         let resolvedRetailer: string | null = null;
         let resolvedRetailerDomain: string | null = null;
 
-        if (affiliatePlatformName && isShortened) {
+        if (affiliatePlatformName || platformMatch) {
           // Original URL is an affiliate platform
           linkType = "affiliate";
           if (retailerLookup) {
@@ -254,11 +265,7 @@ serve(async (req) => {
           resolvedRetailerDomain = retailerLookup.domain;
         }
 
-        // --- Pattern matching (existing logic) ---
-        let platformMatch: Pattern | null = null;
-        if (isShortened) {
-          platformMatch = matchPattern(originalDomain, link.original_url, allPatterns, "affiliate_platform");
-        }
+        // Retailer pattern match from DB
         let retailerMatch = matchPattern(unshortenedDomain, link.finalUrl, allPatterns, "retailer");
 
         let classification = "NEUTRAL";
