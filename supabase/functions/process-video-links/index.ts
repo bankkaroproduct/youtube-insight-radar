@@ -230,28 +230,28 @@ serve(async (req) => {
         const unshortenedDomain = extractDomain(link.finalUrl);
         const isShortened = originalDomain !== unshortenedDomain;
 
-        // --- New: populate text columns ---
-        const affiliatePlatformName = isShortened ? lookupAffiliatePlatform(originalDomain) : null;
-        const retailerLookup = lookupRetailer(unshortenedDomain);
-        // Also check if direct (non-shortened) URL is a retailer
-        const directRetailerLookup = !isShortened ? lookupRetailer(originalDomain) : null;
+        // Platform identified from original_url domain
+        const affiliatePlatformName = lookupAffiliatePlatform(originalDomain);
+        // Retailer identified from unshortened_url domain (resolved destination)
+        const retailerLookup = isShortened ? lookupRetailer(unshortenedDomain) : lookupRetailer(originalDomain);
 
         let linkType: string | null = null;
         let resolvedRetailer: string | null = null;
         let resolvedRetailerDomain: string | null = null;
 
-        if (isShortened && retailerLookup) {
-          // Shortened URL resolved to a known retailer
-          linkType = affiliatePlatformName ? "both" : "affiliate";
+        if (affiliatePlatformName && isShortened) {
+          // Original URL is an affiliate platform
+          linkType = "affiliate";
+          if (retailerLookup) {
+            linkType = "both";
+            resolvedRetailer = retailerLookup.name;
+            resolvedRetailerDomain = retailerLookup.domain;
+          }
+        } else if (retailerLookup) {
+          // Direct retailer link
+          linkType = "retailer";
           resolvedRetailer = retailerLookup.name;
           resolvedRetailerDomain = retailerLookup.domain;
-        } else if (isShortened && !retailerLookup) {
-          linkType = "affiliate";
-        } else if (!isShortened && directRetailerLookup) {
-          // Direct retailer link (not shortened)
-          linkType = "retailer";
-          resolvedRetailer = directRetailerLookup.name;
-          resolvedRetailerDomain = directRetailerLookup.domain;
         }
 
         // --- Pattern matching (existing logic) ---
