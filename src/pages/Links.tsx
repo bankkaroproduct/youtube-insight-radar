@@ -285,38 +285,50 @@ export default function Links() {
                     <TableRow>
                       <TableHead>Domain</TableHead>
                       <TableHead>Name</TableHead>
-                      <TableHead>Suggested Type</TableHead>
+                      <TableHead>Type</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {discoveredPatterns.map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell className="font-mono text-sm">{p.pattern}</TableCell>
-                        <TableCell>{p.name}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={typeColors[p.type] || typeColors.affiliate_platform}>
-                            {p.type === "retailer" ? "Retailer" : "Platform"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="flex gap-1">
-                          <DiscoveredNamePicker
-                            names={names} onAddNew={addName} classification="OWN" label="Ours" className="text-green-700"
-                            onConfirm={(name) => confirmPattern(p.id, "OWN", name)}
-                          />
-                          <DiscoveredNamePicker
-                            names={names} onAddNew={addName} classification="COMPETITOR" label="Competitor" className="text-red-700"
-                            onConfirm={(name) => confirmPattern(p.id, "COMPETITOR", name)}
-                          />
-                          <Button variant="outline" size="sm" onClick={() => confirmPattern(p.id, "NEUTRAL")}>
-                            <Check className="h-3 w-3 mr-1" /> Neutral
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={() => deletePattern(p.id)} className="h-8 w-8 text-destructive">
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {discoveredPatterns.map((p) => {
+                      const selectedType = discoveredTypes[p.id] || (p.type as PatternType);
+                      return (
+                        <TableRow key={p.id}>
+                          <TableCell className="font-mono text-sm">{p.pattern}</TableCell>
+                          <TableCell>{p.name}</TableCell>
+                          <TableCell>
+                            <Select
+                              value={selectedType}
+                              onValueChange={(v) => setDiscoveredTypes(prev => ({ ...prev, [p.id]: v as PatternType }))}
+                            >
+                              <SelectTrigger className="w-[140px] h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="affiliate_platform">Platform</SelectItem>
+                                <SelectItem value="retailer">Retailer</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
+                          <TableCell className="flex gap-1">
+                            <DiscoveredNamePicker
+                              names={names} onAddNew={addName} classification="OWN" label="Ours" className="text-green-700"
+                              onConfirm={(name) => confirmPattern(p.id, "OWN", name, selectedType)}
+                            />
+                            <DiscoveredNamePicker
+                              names={names} onAddNew={addName} classification="COMPETITOR" label="Competitor" className="text-red-700"
+                              onConfirm={(name) => confirmPattern(p.id, "COMPETITOR", name, selectedType)}
+                            />
+                            <Button variant="outline" size="sm" onClick={() => confirmPattern(p.id, "NEUTRAL", undefined, selectedType)}>
+                              <Check className="h-3 w-3 mr-1" /> Neutral
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => deletePattern(p.id)} className="h-8 w-8 text-destructive">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
