@@ -166,8 +166,9 @@ function VideoDetailRow({ video }: { video: Video }) {
 
 export default function Videos() {
   const { videos, isLoading, refresh } = useVideos();
+  const [searchParams] = useSearchParams();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [filters, setFilters] = useState({ title: "", channel: "", keyword: "", classification: "" });
+  const [filters, setFilters] = useState({ title: "", channel: searchParams.get("channel") || "", keyword: "", classification: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<Video>();
 
   const toggleExpand = (id: string) => {
