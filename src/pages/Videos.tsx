@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag, Users, AlertTriangle, Globe, Store } from "lucide-react";
+import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag, Users, AlertTriangle, Globe, Store, Download } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
