@@ -295,7 +295,7 @@ serve(async (req) => {
         retailer_pattern_id: string | null;
         // New text columns
         is_shortened: boolean;
-        link_type: string | null;
+        link_type: string;
         affiliate_platform: string | null;
         affiliate_domain: string | null;
         resolved_retailer: string | null;
