@@ -1,25 +1,53 @@
 
 
-# Fix Platform/Retailer Display in Videos Page
+# Fix URL Unshortening + Remove competitor_names + Correct Platform/Retailer Flow
 
-## Root Cause
+## Problems
 
-`useVideos.ts` fetches `video_links` and then looks up `affiliate_platform_id` and `retailer_pattern_id` in the `affiliate_patterns` table to get names. It uses those names as `platform_name` and `retailer_name`. Problem: the pattern lookup doesn't respect the type — it just gets the name from whichever pattern ID is stored. If Wishlink's pattern record exists but the IDs are mapped incorrectly (or the same pattern appears as both platform and retailer in the lookup), names end up in the wrong column.
+### 1. URL unshortening not happening
+The screenshot shows `original_url` = `unshortened_url` for wishlink.com, haulpack.com, meesho.com URLs. Root cause: the edge function only unshortens URLs whose domain is in `KNOWN_SHORTENERS` (bit.ly, wsli.nk, etc.). URLs like `www.wishlink.com/share/xyz` or `share.haulpack.com/abc` are NOT short URLs in the traditional sense — they're **affiliate platform redirect URLs** that resolve to retailer destinations. The function treats them as normal links and copies `original_url` → `finalUrl` without following redirects.
 
-The `video_links` table already has text columns `affiliate_platform` and `resolved_retailer` that are correctly populated by the edge function. The hook should use those directly.
+**Fix**: After building dynamic lookup maps from `affiliate_patterns`, treat any URL whose domain matches a known **affiliate platform pattern** as needing unshortening (redirect following). Add these domains to the shortener detection logic dynamically.
+
+### 2. Platform = original URL, Retailer = unshortened URL
+The correct flow:
+- **Platform** is identified from the `original_url` domain (e.g., `wishlink.com` → Wishlink, `share.haulpack.com` → Haulpack)
+- **Retailer** is identified from the `unshortened_url` domain after resolving redirects (e.g., `amazon.in` → Amazon, `meesho.com` → Meesho)
+- If a domain doesn't match any platform or retailer → goes to **Discovered** with auto-detected type (`affiliate_platform` if it was the original domain of a shortened link, `retailer` if it was the destination)
+
+Currently the logic partially does this but fails because unshortening doesn't happen for affiliate platform URLs.
+
+### 3. Delete `competitor_names` table
+The `competitor_names` table is redundant — the `name` field in `affiliate_patterns` already serves the same purpose. The NameDropdown in Links.tsx should instead pull unique names from the existing `affiliate_patterns` table.
 
 ## Changes
 
-### `src/hooks/useVideos.ts`
-- Remove the `affiliate_patterns` lookup entirely (no need to fetch pattern names separately)
-- Use the `affiliate_platform` and `resolved_retailer` text columns directly from `video_links` data
-- Map `platform_name` → `link.affiliate_platform` and `retailer_name` → `link.resolved_retailer`
-- This eliminates the pattern ID → name indirection that causes misattribution
+### 1. Migration — Drop `competitor_names` table
+```sql
+DROP TABLE IF EXISTS public.competitor_names;
+```
 
-### `src/pages/Videos.tsx`
-- No changes needed — it already reads `platform_name` and `retailer_name` from the link objects
+### 2. `supabase/functions/process-video-links/index.ts` — Fix unshortening logic
+- After building dynamic affiliate platform maps from DB, collect all affiliate platform domains (both hardcoded and from DB)
+- Change the shortener detection: a URL needs unshortening if its domain is in `KNOWN_SHORTENERS` **OR** matches any known affiliate platform pattern
+- This ensures `wishlink.com/share/xyz` gets resolved via redirect following to find the actual retailer destination
+- Platform is always identified from `original_domain`, retailer from `unshortened_domain` (the resolved URL)
+
+### 3. `src/pages/Links.tsx` — Remove competitor_names dependency
+- Remove `useCompetitorNames` import and usage
+- Replace `NameDropdown` with a simple `Input` for name entry, or derive unique names from existing `affiliate_patterns` data
+- The `DiscoveredNamePicker` can use unique names extracted from `confirmedPatterns` instead
+
+### 4. Delete `src/hooks/useCompetitorNames.ts`
+No longer needed.
+
+### Files Changed
 
 | File | Change |
 |------|--------|
-| `src/hooks/useVideos.ts` | Use text columns from video_links instead of pattern ID lookups |
+| Migration SQL | `DROP TABLE competitor_names` |
+| `process-video-links/index.ts` | Unshorten affiliate platform URLs (wishlink, haulpack, etc.), not just generic shorteners |
+| `src/pages/Links.tsx` | Remove competitor_names usage, use names from affiliate_patterns |
+| `src/hooks/useCompetitorNames.ts` | Delete file |
+| `src/hooks/useAffiliatePatterns.ts` | Add `uniqueNames` derived from confirmed patterns |
 
