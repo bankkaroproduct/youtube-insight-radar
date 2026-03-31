@@ -217,6 +217,8 @@ export default function Channels() {
                     <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
                     <TableHead>Platforms (videos / share)</TableHead>
                     <TableHead>Retailers (videos / share)</TableHead>
+                    <TableHead>Channel Link</TableHead>
+                    <TableHead>Videos</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
