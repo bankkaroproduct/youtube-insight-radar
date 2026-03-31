@@ -30,14 +30,17 @@ async function markKeyExhausted(supabase: any, keyId: string) {
   }).eq("id", keyId);
 }
 
+// Simplified: single UPDATE instead of SELECT+UPDATE, track locally
+let quotaCache = new Map<string, number>();
+
 async function incrementQuota(supabase: any, keyId: string, units: number) {
-  const { data } = await supabase.from("youtube_api_keys").select("quota_used_today").eq("id", keyId).single();
-  if (data) {
-    await supabase.from("youtube_api_keys").update({
-      quota_used_today: data.quota_used_today + units,
-      last_used_at: new Date().toISOString(),
-    }).eq("id", keyId);
-  }
+  const current = quotaCache.get(keyId) || 0;
+  const newVal = current + units;
+  quotaCache.set(keyId, newVal);
+  await supabase.from("youtube_api_keys").update({
+    quota_used_today: newVal,
+    last_used_at: new Date().toISOString(),
+  }).eq("id", keyId);
 }
 
 function extractUrls(text: string): string[] {
@@ -62,7 +65,9 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
     await incrementQuota(supabase, apiKeyData.id, 1);
 
     const data = await resp.json();
-    for (const ch of (data.items || [])) {
+    
+    // Collect all channel updates and batch them via Promise.all
+    const updatePromises = (data.items || []).map((ch: any) => {
       const snippet = ch.snippet || {};
       const stats = ch.statistics || {};
       const topicDetails = ch.topicDetails || {};
@@ -97,8 +102,10 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
         updateData.country = snippet.country;
       }
 
-      await supabase.from("channels").update(updateData).eq("channel_id", ch.id);
-    }
+      return supabase.from("channels").update(updateData).eq("channel_id", ch.id);
+    });
+
+    await Promise.all(updatePromises);
   } catch (e) {
     console.error("Failed to fetch channel details:", e);
   }
@@ -111,6 +118,9 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // Reset quota cache at start
+    quotaCache = new Map();
 
     const { data: pendingJobs, error: fetchError } = await supabase
       .from("fetch_jobs")
@@ -128,6 +138,12 @@ serve(async (req) => {
 
     const allChannelIds = new Set<string>();
 
+    // Get API key once and reuse
+    let cachedApiKey = await getNextApiKey(supabase);
+    if (cachedApiKey) {
+      quotaCache.set(cachedApiKey.id, cachedApiKey.quota_used_today);
+    }
+
     for (const job of pendingJobs) {
       await supabase.from("fetch_jobs").update({
         status: "processing",
@@ -135,8 +151,12 @@ serve(async (req) => {
       }).eq("id", job.id);
 
       try {
-        const apiKey = await getNextApiKey(supabase);
-        if (!apiKey) {
+        if (!cachedApiKey) {
+          cachedApiKey = await getNextApiKey(supabase);
+          if (cachedApiKey) quotaCache.set(cachedApiKey.id, cachedApiKey.quota_used_today);
+        }
+
+        if (!cachedApiKey) {
           await supabase.from("fetch_jobs").update({
             status: "failed",
             error_message: "No available API keys with remaining quota",
@@ -150,7 +170,6 @@ serve(async (req) => {
         let nextPageToken: string | null = null;
         let globalIndex = 0;
 
-        // Step 1: YouTube Search API (paginated)
         for (let page = 0; page < MAX_PAGES; page++) {
           const params = new URLSearchParams({
             part: "snippet",
@@ -158,7 +177,7 @@ serve(async (req) => {
             maxResults: "30",
             order: job.order_by || "relevance",
             type: "video",
-            key: apiKey.api_key,
+            key: cachedApiKey.api_key,
           });
           if (job.published_after) params.set("publishedAfter", job.published_after);
           if (nextPageToken) params.set("pageToken", nextPageToken);
@@ -169,7 +188,9 @@ serve(async (req) => {
             const body = await resp.json();
             const reason = body?.error?.errors?.[0]?.reason;
             if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
-              await markKeyExhausted(supabase, apiKey.id);
+              await markKeyExhausted(supabase, cachedApiKey.id);
+              cachedApiKey = await getNextApiKey(supabase);
+              if (cachedApiKey) quotaCache.set(cachedApiKey.id, cachedApiKey.quota_used_today);
               if (page === 0) {
                 await supabase.from("fetch_jobs").update({ status: "pending", started_at: null }).eq("id", job.id);
               }
@@ -178,7 +199,7 @@ serve(async (req) => {
             throw new Error(body?.error?.message || `YouTube API error: ${resp.status}`);
           }
 
-          await incrementQuota(supabase, apiKey.id, 100);
+          await incrementQuota(supabase, cachedApiKey.id, 100);
 
           const searchData = await resp.json();
           const items = (searchData.items || []).filter((item: any) => item.id?.videoId);
@@ -205,15 +226,14 @@ serve(async (req) => {
           continue;
         }
 
-        // Step 2: Get video details (in chunks of 50) and collect records for batch insert
+        // Get video details (reuse cached key)
         const videoRecords: any[] = [];
         const channelRecordsMap = new Map<string, any>();
-        const videoSnippets = new Map<string, any>(); // videoId -> snippet for link extraction
+        const videoSnippets = new Map<string, any>();
 
         for (let i = 0; i < allVideoIds.length; i += 50) {
           const chunk = allVideoIds.slice(i, i + 50);
-          const detailKey = await getNextApiKey(supabase);
-          const activeKey = detailKey || apiKey;
+          const activeKey = cachedApiKey!;
 
           const detailParams = new URLSearchParams({
             part: "snippet,statistics",
@@ -259,63 +279,47 @@ serve(async (req) => {
           }
         }
 
-        // Step 3: Batch upsert all videos
+        // Batch upserts
         const { data: insertedVideos } = await supabase
           .from("videos")
           .upsert(videoRecords, { onConflict: "video_id" })
           .select("id, video_id");
 
-        // Build a map from youtube video_id to internal UUID
         const videoIdMap = new Map<string, string>();
         if (insertedVideos) {
-          for (const v of insertedVideos) {
-            videoIdMap.set(v.video_id, v.id);
-          }
+          for (const v of insertedVideos) videoIdMap.set(v.video_id, v.id);
         }
 
-        // Step 4: Batch upsert video_keywords
         if (job.keyword_id && videoIdMap.size > 0) {
-          const keywordRecords: any[] = [];
-          for (const [ytVideoId, internalId] of videoIdMap) {
-            const rank = videoRankMap.get(ytVideoId) || null;
-            keywordRecords.push({
-              video_id: internalId,
-              keyword_id: job.keyword_id,
-              search_rank: rank,
-            });
-          }
+          const keywordRecords = [...videoIdMap.entries()].map(([ytId, intId]) => ({
+            video_id: intId,
+            keyword_id: job.keyword_id,
+            search_rank: videoRankMap.get(ytId) || null,
+          }));
           if (keywordRecords.length > 0) {
             await supabase.from("video_keywords").upsert(keywordRecords, { onConflict: "video_id,keyword_id" });
           }
         }
 
-        // Step 5: Batch upsert video_links
         const linkRecords: any[] = [];
         for (const [ytVideoId, snippet] of videoSnippets) {
           const internalId = videoIdMap.get(ytVideoId);
           if (!internalId) continue;
-          const urls = extractUrls(snippet.description || "");
-          for (const url of urls) {
-            linkRecords.push({
-              video_id: internalId,
-              original_url: url,
-            });
+          for (const url of extractUrls(snippet.description || "")) {
+            linkRecords.push({ video_id: internalId, original_url: url });
           }
         }
         if (linkRecords.length > 0) {
-          // Upsert in chunks of 500 to avoid payload limits
           for (let i = 0; i < linkRecords.length; i += 500) {
             await supabase.from("video_links").upsert(linkRecords.slice(i, i + 500), { onConflict: "video_id,original_url" });
           }
         }
 
-        // Step 6: Batch upsert channels
         const channelRecords = [...channelRecordsMap.values()];
         if (channelRecords.length > 0) {
           await supabase.from("channels").upsert(channelRecords, { onConflict: "channel_id" });
         }
 
-        // Mark job completed
         await supabase.from("fetch_jobs").update({
           status: "completed",
           videos_found: allVideoIds.length,
@@ -341,18 +345,21 @@ serve(async (req) => {
       }
     }
 
-    // After all jobs, fetch channel details for newly discovered channels
+    // Fetch channel details (reuse cached key or get new one)
     if (allChannelIds.size > 0) {
-      const channelKey = await getNextApiKey(supabase);
+      const channelKey = cachedApiKey || await getNextApiKey(supabase);
       if (channelKey) {
         const ids = [...allChannelIds];
+        // Parallel channel detail fetches for each chunk of 50
+        const chunkPromises = [];
         for (let i = 0; i < ids.length; i += 50) {
-          await fetchChannelDetails(supabase, ids.slice(i, i + 50), channelKey);
+          chunkPromises.push(fetchChannelDetails(supabase, ids.slice(i, i + 50), channelKey));
         }
+        await Promise.all(chunkPromises);
       }
     }
 
-    // Fire-and-forget: trigger downstream functions
+    // Fire-and-forget downstream
     const triggerHeaders = {
       "Authorization": `Bearer ${serviceKey}`,
       "Content-Type": "application/json",

@@ -9,17 +9,70 @@ const corsHeaders = {
 function computeMedian(values: number[], skipEnds: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
-  
   let trimmed = sorted;
   if (sorted.length > skipEnds * 2) {
     trimmed = sorted.slice(skipEnds, sorted.length - skipEnds);
   }
-  
   if (trimmed.length === 0) return 0;
   const mid = Math.floor(trimmed.length / 2);
   return trimmed.length % 2 === 0
     ? Math.round((trimmed[mid - 1] + trimmed[mid]) / 2)
     : trimmed[mid];
+}
+
+async function processChannel(supabase: any, chId: string): Promise<boolean> {
+  const { data: videos } = await supabase
+    .from("videos")
+    .select("id, view_count, like_count, comment_count")
+    .eq("channel_id", chId);
+
+  if (!videos || videos.length === 0) return false;
+
+  const views = videos.map((v: any) => Number(v.view_count || 0));
+  const likes = videos.map((v: any) => Number(v.like_count || 0));
+  const comments = videos.map((v: any) => Number(v.comment_count || 0));
+
+  const videoIds = videos.map((v: any) => v.id);
+  const { data: links } = await supabase
+    .from("video_links")
+    .select("classification, matched_pattern_id")
+    .in("video_id", videoIds)
+    .not("classification", "eq", "NEUTRAL");
+
+  const hasOwn = (links || []).some((l: any) => l.classification === "OWN");
+  const hasCompetitor = (links || []).some((l: any) => l.classification === "COMPETITOR");
+
+  let affiliateStatus = "NEUTRAL";
+  if (hasOwn && hasCompetitor) affiliateStatus = "MIXED";
+  else if (hasOwn) affiliateStatus = "WITH_US";
+  else if (hasCompetitor) affiliateStatus = "COMPETITOR";
+
+  const allPatternIds = [...new Set(
+    (links || [])
+      .filter((l: any) => l.matched_pattern_id && l.classification !== "NEUTRAL")
+      .map((l: any) => l.matched_pattern_id)
+  )];
+
+  let affiliateNames: string[] = [];
+  if (allPatternIds.length > 0) {
+    const { data: patternData } = await supabase
+      .from("affiliate_patterns")
+      .select("name")
+      .in("id", allPatternIds);
+    affiliateNames = (patternData || []).map((p: any) => p.name);
+  }
+
+  await supabase.from("channels").update({
+    total_videos_fetched: videos.length,
+    median_views: computeMedian(views, 5),
+    median_likes: computeMedian(likes, 5),
+    median_comments: computeMedian(comments, 5),
+    affiliate_status: affiliateStatus,
+    affiliate_names: affiliateNames,
+    last_analyzed_at: new Date().toISOString(),
+  }).eq("channel_id", chId);
+
+  return true;
 }
 
 serve(async (req) => {
@@ -33,74 +86,22 @@ serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     let channelIds: string[] = body.channel_ids || [];
 
-    // If no specific channels, compute for all
     if (channelIds.length === 0) {
       const { data } = await supabase.from("channels").select("channel_id");
       channelIds = (data || []).map((c: any) => c.channel_id);
     }
 
+    // Process channels in parallel batches of 10
     let updated = 0;
-
-    for (const chId of channelIds) {
-      // Get all videos for this channel
-      const { data: videos } = await supabase
-        .from("videos")
-        .select("id, view_count, like_count, comment_count")
-        .eq("channel_id", chId);
-
-      if (!videos || videos.length === 0) continue;
-
-      const views = videos.map(v => Number(v.view_count || 0));
-      const likes = videos.map(v => Number(v.like_count || 0));
-      const comments = videos.map(v => Number(v.comment_count || 0));
-
-      const medianViews = computeMedian(views, 5);
-      const medianLikes = computeMedian(likes, 5);
-      const medianComments = computeMedian(comments, 5);
-
-      // Get all links for this channel's videos
-      const videoIds = videos.map(v => v.id);
-      const { data: links } = await supabase
-        .from("video_links")
-        .select("classification, matched_pattern_id")
-        .in("video_id", videoIds)
-        .not("classification", "eq", "NEUTRAL");
-
-      const hasOwn = (links || []).some(l => l.classification === "OWN");
-      const hasCompetitor = (links || []).some(l => l.classification === "COMPETITOR");
-
-      let affiliateStatus = "NEUTRAL";
-      if (hasOwn && hasCompetitor) affiliateStatus = "MIXED";
-      else if (hasOwn) affiliateStatus = "WITH_US";
-      else if (hasCompetitor) affiliateStatus = "COMPETITOR";
-
-      // Get ALL affiliate names (OWN + COMPETITOR)
-      const allPatternIds = [...new Set(
-        (links || [])
-          .filter(l => l.matched_pattern_id && l.classification !== "NEUTRAL")
-          .map(l => l.matched_pattern_id)
-      )];
-
-      let affiliateNames: string[] = [];
-      if (allPatternIds.length > 0) {
-        const { data: patternData } = await supabase
-          .from("affiliate_patterns")
-          .select("name")
-          .in("id", allPatternIds);
-        affiliateNames = (patternData || []).map(p => p.name);
+    const CONCURRENCY = 10;
+    for (let i = 0; i < channelIds.length; i += CONCURRENCY) {
+      const batch = channelIds.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map(chId => processChannel(supabase, chId))
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) updated++;
       }
-
-      await supabase.from("channels").update({
-        total_videos_fetched: videos.length,
-        median_views: medianViews,
-        median_likes: medianLikes,
-        median_comments: medianComments,
-        affiliate_status: affiliateStatus,
-        affiliate_names: affiliateNames,
-        last_analyzed_at: new Date().toISOString(),
-      }).eq("channel_id", chId);
-
-      updated++;
     }
 
     return new Response(JSON.stringify({ success: true, updated }), {

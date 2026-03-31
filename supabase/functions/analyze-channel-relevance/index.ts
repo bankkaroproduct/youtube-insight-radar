@@ -29,7 +29,6 @@ serve(async (req) => {
 
     const { channel_ids } = await req.json();
 
-    // Fetch channels to analyze
     let query = supabase
       .from("channels")
       .select("id, channel_name, description, youtube_category")
@@ -51,7 +50,6 @@ serve(async (req) => {
       );
     }
 
-    // Process in batches of 20
     const batchSize = 20;
     let totalAnalyzed = 0;
 
@@ -90,8 +88,7 @@ serve(async (req) => {
                 type: "function",
                 function: {
                   name: "evaluate_channels",
-                  description:
-                    "Return relevance evaluation for each channel",
+                  description: "Return relevance evaluation for each channel",
                   parameters: {
                     type: "object",
                     properties: {
@@ -100,19 +97,9 @@ serve(async (req) => {
                         items: {
                           type: "object",
                           properties: {
-                            index: {
-                              type: "integer",
-                              description: "1-based index of the channel",
-                            },
-                            is_relevant: {
-                              type: "boolean",
-                              description:
-                                "true if useful for Flipkart/Wishlink affiliate marketing",
-                            },
-                            reasoning: {
-                              type: "string",
-                              description: "One-line explanation",
-                            },
+                            index: { type: "integer", description: "1-based index of the channel" },
+                            is_relevant: { type: "boolean", description: "true if useful for Flipkart/Wishlink affiliate marketing" },
+                            reasoning: { type: "string", description: "One-line explanation" },
                           },
                           required: ["index", "is_relevant", "reasoning"],
                           additionalProperties: false,
@@ -160,22 +147,24 @@ serve(async (req) => {
         continue;
       }
 
-      // Update each channel
-      for (const result of results) {
-        const channel = batch[result.index - 1];
-        if (!channel) continue;
+      // Batch update all channels in this batch via Promise.all
+      const now = new Date().toISOString();
+      await Promise.all(
+        results.map((result: any) => {
+          const channel = batch[result.index - 1];
+          if (!channel) return Promise.resolve();
+          return supabase
+            .from("channels")
+            .update({
+              is_relevant: result.is_relevant,
+              relevance_reasoning: result.reasoning,
+              last_relevance_check_at: now,
+            })
+            .eq("id", channel.id);
+        })
+      );
 
-        await supabase
-          .from("channels")
-          .update({
-            is_relevant: result.is_relevant,
-            relevance_reasoning: result.reasoning,
-            last_relevance_check_at: new Date().toISOString(),
-          })
-          .eq("id", channel.id);
-
-        totalAnalyzed++;
-      }
+      totalAnalyzed += results.length;
     }
 
     return new Response(

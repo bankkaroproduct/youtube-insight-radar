@@ -69,21 +69,23 @@ serve(async (req) => {
     const result = JSON.parse(toolCall.function.arguments);
     const classifications = result.classifications;
 
-    // Update database
+    // Update database — batch via Promise.all
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    for (const cls of classifications) {
-      const match = keywords.find((k: { keyword: string }) => k.keyword.toLowerCase() === cls.keyword.toLowerCase());
-      if (match) {
-        await supabase.from("keywords_search_runs").update({
+    const now = new Date().toISOString();
+    await Promise.all(
+      classifications.map((cls: any) => {
+        const match = keywords.find((k: { keyword: string }) => k.keyword.toLowerCase() === cls.keyword.toLowerCase());
+        if (!match) return Promise.resolve();
+        return supabase.from("keywords_search_runs").update({
           priority: cls.priority,
           estimated_volume: cls.estimated_volume,
-          last_priority_fetch_at: new Date().toISOString(),
+          last_priority_fetch_at: now,
         }).eq("id", match.id);
-      }
-    }
+      })
+    );
 
     return new Response(JSON.stringify({ success: true, classifications }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
