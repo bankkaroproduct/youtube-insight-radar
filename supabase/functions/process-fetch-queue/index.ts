@@ -72,10 +72,8 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
         description: snippet.description || null,
       };
 
-      // Extract YouTube category from topicDetails.topicCategories
       const topicCategories = topicDetails.topicCategories || [];
       if (topicCategories.length > 0) {
-        // topicCategories are Wikipedia URLs like "https://en.wikipedia.org/wiki/Entertainment"
         const categoryNames = topicCategories.map((url: string) => {
           const parts = url.split("/");
           return decodeURIComponent(parts[parts.length - 1]).replace(/_/g, " ");
@@ -83,21 +81,18 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
         updateData.youtube_category = categoryNames.join(", ");
       }
 
-      // Try to extract contact email from description
       const emailRegex = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
       const descEmails = (snippet.description || "").match(emailRegex);
       if (descEmails && descEmails.length > 0) {
         updateData.contact_email = descEmails[0];
       }
 
-      // Extract Instagram URL from description
       const igRegex = /https?:\/\/(?:www\.)?instagram\.com\/[^\s<>"')\]]+/gi;
       const igMatches = (snippet.description || "").match(igRegex);
       if (igMatches && igMatches.length > 0) {
         updateData.instagram_url = igMatches[0];
       }
 
-      // Extract country from snippet
       if (snippet.country) {
         updateData.country = snippet.country;
       }
@@ -151,12 +146,11 @@ serve(async (req) => {
         }
 
         let allVideoIds: string[] = [];
-        // Map videoId -> search rank (1-indexed position across all pages)
         const videoRankMap = new Map<string, number>();
         let nextPageToken: string | null = null;
         let globalIndex = 0;
 
-        // Paginate up to MAX_PAGES pages
+        // Step 1: YouTube Search API (paginated)
         for (let page = 0; page < MAX_PAGES; page++) {
           const params = new URLSearchParams({
             part: "snippet",
@@ -211,7 +205,11 @@ serve(async (req) => {
           continue;
         }
 
-        // Step 2: Get video details (in chunks of 50)
+        // Step 2: Get video details (in chunks of 50) and collect records for batch insert
+        const videoRecords: any[] = [];
+        const channelRecordsMap = new Map<string, any>();
+        const videoSnippets = new Map<string, any>(); // videoId -> snippet for link extraction
+
         for (let i = 0; i < allVideoIds.length; i += 50) {
           const chunk = allVideoIds.slice(i, i + 50);
           const detailKey = await getNextApiKey(supabase);
@@ -234,7 +232,7 @@ serve(async (req) => {
 
               if (snippet.channelId) allChannelIds.add(snippet.channelId);
 
-              const { data: insertedVideo } = await supabase.from("videos").upsert({
+              videoRecords.push({
                 video_id: video.id,
                 keyword_id: job.keyword_id || null,
                 channel_id: snippet.channelId || "",
@@ -246,38 +244,78 @@ serve(async (req) => {
                 view_count: parseInt(stats.viewCount || "0"),
                 like_count: parseInt(stats.likeCount || "0"),
                 comment_count: parseInt(stats.commentCount || "0"),
-              }, { onConflict: "video_id" }).select("id").single();
+              });
 
-              if (insertedVideo) {
-                if (job.keyword_id) {
-                  const rank = videoRankMap.get(video.id) || null;
-                  await supabase.from("video_keywords").upsert({
-                    video_id: insertedVideo.id,
-                    keyword_id: job.keyword_id,
-                    search_rank: rank,
-                  }, { onConflict: "video_id,keyword_id" });
-                }
+              videoSnippets.set(video.id, snippet);
 
-                const urls = extractUrls(snippet.description || "");
-                if (urls.length > 0) {
-                  for (const url of urls) {
-                    await supabase.from("video_links").upsert({
-                      video_id: insertedVideo.id,
-                      original_url: url,
-                    }, { onConflict: "video_id,original_url" });
-                  }
-                }
+              if (snippet.channelId && !channelRecordsMap.has(snippet.channelId)) {
+                channelRecordsMap.set(snippet.channelId, {
+                  channel_id: snippet.channelId,
+                  channel_name: snippet.channelTitle || "",
+                  channel_url: `https://www.youtube.com/channel/${snippet.channelId}`,
+                });
               }
-
-              await supabase.from("channels").upsert({
-                channel_id: snippet.channelId || "",
-                channel_name: snippet.channelTitle || "",
-                channel_url: `https://www.youtube.com/channel/${snippet.channelId}`,
-              }, { onConflict: "channel_id" });
             }
           }
         }
 
+        // Step 3: Batch upsert all videos
+        const { data: insertedVideos } = await supabase
+          .from("videos")
+          .upsert(videoRecords, { onConflict: "video_id" })
+          .select("id, video_id");
+
+        // Build a map from youtube video_id to internal UUID
+        const videoIdMap = new Map<string, string>();
+        if (insertedVideos) {
+          for (const v of insertedVideos) {
+            videoIdMap.set(v.video_id, v.id);
+          }
+        }
+
+        // Step 4: Batch upsert video_keywords
+        if (job.keyword_id && videoIdMap.size > 0) {
+          const keywordRecords: any[] = [];
+          for (const [ytVideoId, internalId] of videoIdMap) {
+            const rank = videoRankMap.get(ytVideoId) || null;
+            keywordRecords.push({
+              video_id: internalId,
+              keyword_id: job.keyword_id,
+              search_rank: rank,
+            });
+          }
+          if (keywordRecords.length > 0) {
+            await supabase.from("video_keywords").upsert(keywordRecords, { onConflict: "video_id,keyword_id" });
+          }
+        }
+
+        // Step 5: Batch upsert video_links
+        const linkRecords: any[] = [];
+        for (const [ytVideoId, snippet] of videoSnippets) {
+          const internalId = videoIdMap.get(ytVideoId);
+          if (!internalId) continue;
+          const urls = extractUrls(snippet.description || "");
+          for (const url of urls) {
+            linkRecords.push({
+              video_id: internalId,
+              original_url: url,
+            });
+          }
+        }
+        if (linkRecords.length > 0) {
+          // Upsert in chunks of 500 to avoid payload limits
+          for (let i = 0; i < linkRecords.length; i += 500) {
+            await supabase.from("video_links").upsert(linkRecords.slice(i, i + 500), { onConflict: "video_id,original_url" });
+          }
+        }
+
+        // Step 6: Batch upsert channels
+        const channelRecords = [...channelRecordsMap.values()];
+        if (channelRecords.length > 0) {
+          await supabase.from("channels").upsert(channelRecords, { onConflict: "channel_id" });
+        }
+
+        // Mark job completed
         await supabase.from("fetch_jobs").update({
           status: "completed",
           videos_found: allVideoIds.length,
@@ -314,18 +352,16 @@ serve(async (req) => {
       }
     }
 
-    // Fire-and-forget: trigger downstream functions without awaiting
+    // Fire-and-forget: trigger downstream functions
     const triggerHeaders = {
       "Authorization": `Bearer ${serviceKey}`,
       "Content-Type": "application/json",
     };
 
-    // process-video-links
     fetch(`${supabaseUrl}/functions/v1/process-video-links`, {
       method: "POST", headers: triggerHeaders,
     }).catch(e => console.error("Failed to trigger process-video-links:", e));
 
-    // compute-channel-stats
     if (allChannelIds.size > 0) {
       fetch(`${supabaseUrl}/functions/v1/compute-channel-stats`, {
         method: "POST", headers: triggerHeaders,
@@ -333,7 +369,6 @@ serve(async (req) => {
       }).catch(e => console.error("Failed to trigger compute-channel-stats:", e));
     }
 
-    // analyze-keyword-priority
     const keywordIds = [...new Set(pendingJobs.map(j => j.keyword_id).filter(Boolean))];
     if (keywordIds.length > 0) {
       supabase
@@ -351,7 +386,6 @@ serve(async (req) => {
         });
     }
 
-    // analyze-channel-relevance
     if (allChannelIds.size > 0) {
       fetch(`${supabaseUrl}/functions/v1/analyze-channel-relevance`, {
         method: "POST", headers: triggerHeaders,
