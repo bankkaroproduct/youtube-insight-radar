@@ -37,6 +37,7 @@ export default function Channels() {
       if (filters.relevance === "yes" && ch.is_relevant !== true) return false;
       if (filters.relevance === "no" && ch.is_relevant !== false) return false;
       if (filters.relevance === "unchecked" && ch.is_relevant !== null) return false;
+      if (filters.country && !(ch.country || "").toLowerCase().includes(filters.country.toLowerCase())) return false;
       return true;
     });
 
