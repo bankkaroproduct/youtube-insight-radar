@@ -122,11 +122,20 @@ function lookupRetailer(domain: string): { name: string; domain: string } | null
 async function fallbackUnshorten(url: string): Promise<string> {
   try {
     const resp = await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(5000) });
-    return resp.url || url;
+    let resolved = resp.url || url;
+    // If we landed on a JS-redirect domain, parse HTML for the real destination
+    if (isJsRedirectDomain(extractDomain(resolved))) {
+      resolved = await resolveJsRedirect(resolved);
+    }
+    return resolved;
   } catch {
     try {
       const resp = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(5000) });
-      return resp.url || url;
+      let resolved = resp.url || url;
+      if (isJsRedirectDomain(extractDomain(resolved))) {
+        resolved = await resolveJsRedirect(resolved);
+      }
+      return resolved;
     } catch {
       return url;
     }
@@ -143,7 +152,14 @@ async function unshortenUrl(url: string): Promise<string> {
     );
     if (resp.status === 401 || resp.status === 429) return fallbackUnshorten(url);
     const data = await resp.json();
-    if (data.success && data.unshortened_url) return data.unshortened_url;
+    if (data.success && data.unshortened_url) {
+      let resolved = data.unshortened_url;
+      // If unshorten.me resolved to a JS-redirect domain, parse HTML too
+      if (isJsRedirectDomain(extractDomain(resolved))) {
+        resolved = await resolveJsRedirect(resolved);
+      }
+      return resolved;
+    }
     return fallbackUnshorten(url);
   } catch {
     return fallbackUnshorten(url);
