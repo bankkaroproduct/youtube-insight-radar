@@ -202,7 +202,7 @@ export default function Links() {
                 </div>
                 <div>
                   <Label>Display Name</Label>
-                  <NameDropdown names={names} value={newName} onChange={setNewName} onAddNew={addName} />
+                  <NameDropdown names={uniqueNames} value={newName} onChange={setNewName} onAddNew={addName} />
                 </div>
                 <div>
                   <Label>Classification</Label>
