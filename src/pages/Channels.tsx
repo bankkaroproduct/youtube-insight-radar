@@ -51,6 +51,7 @@ export default function Channels() {
         case "status": return item.affiliate_status || "NEUTRAL";
         case "relevance": return item.is_relevant === true ? 1 : item.is_relevant === false ? 0 : -1;
         case "category": return item.youtube_category || "";
+        case "country": return item.country || "";
         default: return null;
       }
     });
