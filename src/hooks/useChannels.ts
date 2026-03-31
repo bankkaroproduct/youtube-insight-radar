@@ -22,6 +22,8 @@ export interface Channel {
   is_relevant: boolean | null;
   relevance_reasoning: string | null;
   last_relevance_check_at: string | null;
+  instagram_url: string | null;
+  country: string | null;
 }
 
 export function useChannels() {

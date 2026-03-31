@@ -1,0 +1,1 @@
+ALTER TABLE public.channels ADD COLUMN instagram_url text, ADD COLUMN country text;

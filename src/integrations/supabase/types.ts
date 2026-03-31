@@ -103,9 +103,11 @@ export type Database = {
           channel_name: string
           channel_url: string | null
           contact_email: string | null
+          country: string | null
           created_at: string
           description: string | null
           id: string
+          instagram_url: string | null
           is_relevant: boolean | null
           last_analyzed_at: string | null
           last_relevance_check_at: string | null
@@ -124,9 +126,11 @@ export type Database = {
           channel_name: string
           channel_url?: string | null
           contact_email?: string | null
+          country?: string | null
           created_at?: string
           description?: string | null
           id?: string
+          instagram_url?: string | null
           is_relevant?: boolean | null
           last_analyzed_at?: string | null
           last_relevance_check_at?: string | null
@@ -145,9 +149,11 @@ export type Database = {
           channel_name?: string
           channel_url?: string | null
           contact_email?: string | null
+          country?: string | null
           created_at?: string
           description?: string | null
           id?: string
+          instagram_url?: string | null
           is_relevant?: boolean | null
           last_analyzed_at?: string | null
           last_relevance_check_at?: string | null

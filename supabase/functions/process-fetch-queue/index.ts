@@ -90,6 +90,18 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
         updateData.contact_email = descEmails[0];
       }
 
+      // Extract Instagram URL from description
+      const igRegex = /https?:\/\/(?:www\.)?instagram\.com\/[^\s<>"')\]]+/gi;
+      const igMatches = (snippet.description || "").match(igRegex);
+      if (igMatches && igMatches.length > 0) {
+        updateData.instagram_url = igMatches[0];
+      }
+
+      // Extract country from snippet
+      if (snippet.country) {
+        updateData.country = snippet.country;
+      }
+
       await supabase.from("channels").update(updateData).eq("channel_id", ch.id);
     }
   } catch (e) {
