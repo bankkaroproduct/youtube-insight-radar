@@ -325,7 +325,7 @@ serve(async (req) => {
           retailerLookup = lookupRetailer(originalDomain);
         }
 
-        let linkType: string | null = null;
+        let linkType: string = "unknown";
         let resolvedRetailer: string | null = null;
         let resolvedRetailerDomain: string | null = null;
 
