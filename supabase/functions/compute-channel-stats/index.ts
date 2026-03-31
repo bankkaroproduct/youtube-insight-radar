@@ -35,7 +35,7 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   const videoIds = videos.map((v: any) => v.id);
   const { data: links } = await supabase
     .from("video_links")
-    .select("video_id, classification, matched_pattern_id, affiliate_platform_id, retailer_pattern_id")
+    .select("video_id, classification, affiliate_platform, resolved_retailer, link_type")
     .in("video_id", videoIds)
     .not("classification", "eq", "NEUTRAL");
 
@@ -47,69 +47,59 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   else if (hasOwn) affiliateStatus = "WITH_US";
   else if (hasCompetitor) affiliateStatus = "COMPETITOR";
 
-  // Collect all pattern IDs (legacy)
-  const allPatternIds = [...new Set(
-    (links || [])
-      .filter((l: any) => l.matched_pattern_id && l.classification !== "NEUTRAL")
-      .map((l: any) => l.matched_pattern_id)
-  )];
-
-  // Collect platform and retailer pattern IDs separately
-  const platformIds = [...new Set(
-    (links || []).map((l: any) => l.affiliate_platform_id).filter(Boolean)
-  )];
-  const retailerIds = [...new Set(
-    (links || []).map((l: any) => l.retailer_pattern_id).filter(Boolean)
-  )];
-
-  // Fetch all pattern names in one query
-  const allIds = [...new Set([...allPatternIds, ...platformIds, ...retailerIds])];
-  let patternsMap = new Map<string, { name: string; type: string }>();
-  if (allIds.length > 0) {
-    const { data: patternData } = await supabase
-      .from("affiliate_patterns")
-      .select("id, name, type")
-      .in("id", allIds);
-    for (const p of (patternData || [])) {
-      patternsMap.set(p.id, { name: p.name, type: p.type });
-    }
-  }
-
-  const affiliateNames = allPatternIds.map(id => patternsMap.get(id)?.name).filter(Boolean) as string[];
-  const affiliatePlatformNames = [...new Set(platformIds.map(id => patternsMap.get(id)?.name).filter(Boolean))] as string[];
-  const retailerNames = [...new Set(retailerIds.map(id => patternsMap.get(id)?.name).filter(Boolean))] as string[];
-
-  // Count distinct videos per platform and per retailer
-  const platformVideoCounts: Record<string, number> = {};
-  const retailerVideoCounts: Record<string, number> = {};
-
-  // Group by platform: count distinct video_ids per platform_id
+  // Group by text columns — naturally deduplicates multiple domains with same name
   const platformVideoSets = new Map<string, Set<string>>();
   const retailerVideoSets = new Map<string, Set<string>>();
+  const retailerViaAffiliateSets = new Map<string, Set<string>>();
+  const retailerDirectSets = new Map<string, Set<string>>();
 
-  for (const l of (links || [])) {
-    if (l.affiliate_platform_id) {
-      const name = patternsMap.get(l.affiliate_platform_id)?.name;
-      if (name) {
-        if (!platformVideoSets.has(name)) platformVideoSets.set(name, new Set());
-        platformVideoSets.get(name)!.add(l.video_id);
+  const allPlatformNames = new Set<string>();
+  const allRetailerNames = new Set<string>();
+
+  // Also count from ALL links (including NEUTRAL) for platform/retailer counts
+  const { data: allLinks } = await supabase
+    .from("video_links")
+    .select("video_id, affiliate_platform, resolved_retailer, link_type")
+    .in("video_id", videoIds);
+
+  for (const l of (allLinks || [])) {
+    if (l.affiliate_platform) {
+      allPlatformNames.add(l.affiliate_platform);
+      if (!platformVideoSets.has(l.affiliate_platform)) platformVideoSets.set(l.affiliate_platform, new Set());
+      platformVideoSets.get(l.affiliate_platform)!.add(l.video_id);
+    }
+    if (l.resolved_retailer) {
+      allRetailerNames.add(l.resolved_retailer);
+      if (!retailerVideoSets.has(l.resolved_retailer)) retailerVideoSets.set(l.resolved_retailer, new Set());
+      retailerVideoSets.get(l.resolved_retailer)!.add(l.video_id);
+
+      // Split by link_type
+      if (l.link_type === "both") {
+        if (!retailerViaAffiliateSets.has(l.resolved_retailer)) retailerViaAffiliateSets.set(l.resolved_retailer, new Set());
+        retailerViaAffiliateSets.get(l.resolved_retailer)!.add(l.video_id);
+      } else if (l.link_type === "retailer") {
+        if (!retailerDirectSets.has(l.resolved_retailer)) retailerDirectSets.set(l.resolved_retailer, new Set());
+        retailerDirectSets.get(l.resolved_retailer)!.add(l.video_id);
       }
     }
-    if (l.retailer_pattern_id) {
-      const name = patternsMap.get(l.retailer_pattern_id)?.name;
-      if (name) {
-        if (!retailerVideoSets.has(name)) retailerVideoSets.set(name, new Set());
-        retailerVideoSets.get(name)!.add(l.video_id);
-      }
-    }
   }
 
-  for (const [name, videoSet] of platformVideoSets) {
-    platformVideoCounts[name] = videoSet.size;
-  }
-  for (const [name, videoSet] of retailerVideoSets) {
-    retailerVideoCounts[name] = videoSet.size;
-  }
+  const platformVideoCounts: Record<string, number> = {};
+  const retailerVideoCounts: Record<string, number> = {};
+  const retailerViaAffiliateCounts: Record<string, number> = {};
+  const retailerDirectCounts: Record<string, number> = {};
+
+  for (const [name, videoSet] of platformVideoSets) platformVideoCounts[name] = videoSet.size;
+  for (const [name, videoSet] of retailerVideoSets) retailerVideoCounts[name] = videoSet.size;
+  for (const [name, videoSet] of retailerViaAffiliateSets) retailerViaAffiliateCounts[name] = videoSet.size;
+  for (const [name, videoSet] of retailerDirectSets) retailerDirectCounts[name] = videoSet.size;
+
+  // Legacy affiliate_names from non-NEUTRAL links
+  const affiliateNames = [...new Set(
+    (links || [])
+      .map((l: any) => l.affiliate_platform || l.resolved_retailer)
+      .filter(Boolean)
+  )];
 
   await supabase.from("channels").update({
     total_videos_fetched: videos.length,
@@ -118,10 +108,12 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
     median_comments: computeMedian(comments, 5),
     affiliate_status: affiliateStatus,
     affiliate_names: affiliateNames,
-    affiliate_platform_names: affiliatePlatformNames,
-    retailer_names: retailerNames,
+    affiliate_platform_names: [...allPlatformNames],
+    retailer_names: [...allRetailerNames],
     platform_video_counts: platformVideoCounts,
     retailer_video_counts: retailerVideoCounts,
+    retailer_via_affiliate_counts: retailerViaAffiliateCounts,
+    retailer_direct_counts: retailerDirectCounts,
     last_analyzed_at: new Date().toISOString(),
   }).eq("channel_id", chId);
 

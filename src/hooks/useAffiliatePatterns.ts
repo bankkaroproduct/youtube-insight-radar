@@ -35,14 +35,14 @@ export function useAffiliatePatterns() {
   }, []);
 
   const addPattern = async (pattern: string, name: string, classification: string, type: PatternType = "affiliate_platform") => {
-    const { error } = await supabase.from("affiliate_patterns").insert({
+    const { error } = await supabase.from("affiliate_patterns").upsert({
       pattern,
       name,
       classification,
       type,
       is_auto_discovered: false,
       is_confirmed: true,
-    } as any);
+    } as any, { onConflict: "pattern" });
     if (error) {
       toast.error("Failed to add pattern: " + error.message);
     } else {
