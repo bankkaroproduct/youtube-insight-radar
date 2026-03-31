@@ -10,6 +10,7 @@ const KNOWN_SHORTENERS = [
   "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd",
   "buff.ly", "adf.ly", "bl.ink", "lnkd.in", "rb.gy", "cutt.ly",
   "shorturl.at", "link.ck.page", "clk.ink",
+  "fkrt.it", "wsli.nk", "tiny.cc", "short.io", "amzn.to",
 ];
 
 const SKIP_DOMAINS = new Set([
