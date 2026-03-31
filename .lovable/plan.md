@@ -1,59 +1,38 @@
 
 
-# Auto-Trigger AI Analysis After Fetch Pipeline
+# Remove Manual Buttons, Add Instagram + Country to Channels
 
-## What's Changing
+## Summary
 
-Currently, keyword priority (P1-P5) and channel relevance (Yes/No) require manual button clicks. The user wants these to run **automatically** after the fetch pipeline completes — no manual intervention needed.
-
-Search rank in Videos is already stored automatically during fetch (no change needed).
+1. Remove "Check Relevance" manual button from Channels page — relevance is already auto-triggered in the fetch pipeline
+2. Add `instagram_url` and `country` columns to `channels` table
+3. Extract Instagram links from channel description during fetch
+4. Extract country from YouTube channel API during fetch
+5. Display Instagram link + Country in Channels UI
 
 ## Plan
 
-### 1. Auto-trigger keyword priority after fetch completes
+### 1. DB Migration
+Add two new columns to `channels`:
+- `instagram_url` (text, nullable) — extracted Instagram link
+- `country` (text, nullable) — channel country from YouTube API
 
-**File: `supabase/functions/process-fetch-queue/index.ts`**
+### 2. Update `fetchChannelDetails` in `process-fetch-queue/index.ts`
+- Extract Instagram URL from description using regex (`instagram.com/...`)
+- Extract country from `snippet.country` (YouTube API already returns this in the `snippet` part which is already requested)
+- Store both in the `channels` update
 
-After the existing auto-trigger chain (process-video-links → compute-channel-stats), add a new step:
-- Collect all `keyword_id`s from processed jobs
-- Fetch those keywords from `keywords_search_runs` where `priority IS NULL`
-- Call `analyze-keyword-priority` with those keywords
+### 3. Update Channels page (`src/pages/Channels.tsx`)
+- Remove the "Check Relevance" button (line 84-86)
+- Add Instagram link next to email in Contact column (show Instagram icon + link when available)
+- Add Country column with sortable header and filter
 
-This means every time videos are fetched for keywords, their P1-P5 priority is automatically assigned.
+### 4. Update `src/hooks/useChannels.ts`
+- Add `instagram_url` and `country` to Channel interface
 
-### 2. Auto-trigger channel relevance after fetch completes
-
-**File: `supabase/functions/process-fetch-queue/index.ts`**
-
-After keyword priority, add another step:
-- Call `analyze-channel-relevance` with the newly discovered `channel_ids`
-- The function already filters for `is_relevant IS NULL`, so only unchecked channels get analyzed
-
-### 3. Update model to gemini-2.5-flash (already correct)
-
-Both `analyze-keyword-priority` and `analyze-channel-relevance` already use `google/gemini-2.5-flash`. No model change needed — user said "Gemini 2.0 Flash" but the closest available model is `gemini-2.5-flash` which is already configured.
-
-## Technical Details
-
-### Changes to `process-fetch-queue/index.ts`
-
-Add two new auto-trigger blocks after the existing compute-channel-stats trigger (around line 332):
-
-```text
-Existing chain:
-  fetch videos → process-video-links → compute-channel-stats
-
-New chain:
-  fetch videos → process-video-links → compute-channel-stats
-                                      → analyze-keyword-priority (for fetched keywords)
-                                      → analyze-channel-relevance (for new channels)
-```
-
-The keyword priority call passes keyword IDs + keyword text from the processed jobs. The channel relevance call passes channel IDs from `allChannelIds`.
-
-### Files to modify
-
-1. `supabase/functions/process-fetch-queue/index.ts` — add auto-trigger calls to `analyze-keyword-priority` and `analyze-channel-relevance` at the end of the pipeline
-
-No other files need changes — the edge functions and UI columns already exist.
+## Files to modify
+1. **DB migration** — add `instagram_url`, `country` to `channels`
+2. `supabase/functions/process-fetch-queue/index.ts` — extract Instagram URL + country in `fetchChannelDetails`
+3. `src/pages/Channels.tsx` — remove Check Relevance button, add Instagram + Country display
+4. `src/hooks/useChannels.ts` — update interface
 
