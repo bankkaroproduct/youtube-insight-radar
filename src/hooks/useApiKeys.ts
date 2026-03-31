@@ -96,10 +96,10 @@ export function useApiKeys() {
     total: keys.length,
     healthy: keys.filter((k) => k.is_active && k.last_test_status !== "invalid" && k.last_test_status !== "quota_exceeded").length,
     invalid: keys.filter((k) => k.last_test_status === "invalid").length,
-    exhausted: keys.filter((k) => k.quota_used_today >= k.daily_quota_limit).length,
-    quotaRemaining: keys
+    exhausted: keys.filter((k) => k.daily_quota_limit > 0 && k.quota_used_today >= k.daily_quota_limit).length,
+    quotaUsed: keys
       .filter((k) => k.is_active)
-      .reduce((sum, k) => sum + (k.daily_quota_limit - k.quota_used_today), 0),
+      .reduce((sum, k) => sum + k.quota_used_today, 0),
   };
 
   return { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, updateLabel, testKeys };
