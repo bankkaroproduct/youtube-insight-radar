@@ -309,19 +309,23 @@ export default function Videos() {
                             ) : "—"}
                           </TableCell>
                           <TableCell>
-                            {platforms.length > 0 ? (
+                            {platformShares.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {platforms.map((name) => (
-                                  <Badge key={name} variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">{name}</Badge>
+                                {platformShares.map((e) => (
+                                  <Badge key={e.name} variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">
+                                    {e.name} {e.share}%
+                                  </Badge>
                                 ))}
                               </div>
                             ) : "—"}
                           </TableCell>
                           <TableCell>
-                            {retailers.length > 0 ? (
+                            {retailerShares.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {retailers.map((name) => (
-                                  <Badge key={name} variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">{name}</Badge>
+                                {retailerShares.map((e) => (
+                                  <Badge key={e.name} variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">
+                                    {e.name} {e.share}%
+                                  </Badge>
                                 ))}
                               </div>
                             ) : "—"}
