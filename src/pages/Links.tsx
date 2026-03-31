@@ -150,7 +150,7 @@ export default function Links() {
     platformPatterns, retailerPatterns, discoveredPatterns, isLoading,
     addPattern, confirmPattern, deletePattern, processLinks,
   } = useAffiliatePatterns();
-  const { names, addName } = useCompetitorNames();
+  
 
   const [open, setOpen] = useState(false);
   const [newPattern, setNewPattern] = useState("");
