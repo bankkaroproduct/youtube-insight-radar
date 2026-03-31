@@ -1,44 +1,59 @@
 
 
-# Add Channel Relevance Column & Keep P1-P5 Priority
+# Auto-Trigger AI Analysis After Fetch Pipeline
 
-## Summary
+## What's Changing
 
-Two changes based on user feedback:
+Currently, keyword priority (P1-P5) and channel relevance (Yes/No) require manual button clicks. The user wants these to run **automatically** after the fetch pipeline completes — no manual intervention needed.
 
-1. **Channels page**: Add a single "Relevance" column showing Yes/No (is this channel useful for Flipkart/Wishlink affiliate marketing). Uses AI to analyze channel description + category.
-2. **Keyword priority**: Keep existing P1-P5 tier system as-is (already implemented in `analyze-keyword-priority`). No changes needed.
+Search rank in Videos is already stored automatically during fetch (no change needed).
 
 ## Plan
 
-### 1. DB Migration
-Add to `channels` table:
-- `is_relevant` (boolean, nullable) — Yes/No relevance flag
-- `relevance_reasoning` (text, nullable) — AI explanation stored for reference
-- `last_relevance_check_at` (timestamptz, nullable)
+### 1. Auto-trigger keyword priority after fetch completes
 
-### 2. Create `analyze-channel-relevance` edge function
-New edge function: `supabase/functions/analyze-channel-relevance/index.ts`
-- Accepts `{ channels: [{ id, channel_name, description, youtube_category }] }`
-- Uses Lovable AI gateway (gemini-2.5-flash) with tool calling
-- For each channel, determines: is this channel useful for Flipkart/Wishlink affiliate marketing? (reviews, unboxing, comparisons, buying guides, hauls, shoppable products)
-- Returns `is_relevant` (boolean) + `reasoning` (one line)
-- Updates `channels` table with results
-- Batch up to 20 channels per AI call
+**File: `supabase/functions/process-fetch-queue/index.ts`**
 
-### 3. Update Channels page (`src/pages/Channels.tsx`)
-- Add "Relevance" column after Status showing Yes (green badge) / No (gray badge) / "—" (not checked)
-- Add "Check Relevance" button in header toolbar that triggers the edge function for all unchecked channels
-- Add sortable header and filter dropdown (All / Yes / No) for the Relevance column
+After the existing auto-trigger chain (process-video-links → compute-channel-stats), add a new step:
+- Collect all `keyword_id`s from processed jobs
+- Fetch those keywords from `keywords_search_runs` where `priority IS NULL`
+- Call `analyze-keyword-priority` with those keywords
 
-### 4. Update `src/hooks/useChannels.ts`
-- Include `is_relevant` in the Channel interface (already fetching `*`)
+This means every time videos are fetched for keywords, their P1-P5 priority is automatically assigned.
 
-## Files to create/modify
-1. **DB migration** — add `is_relevant`, `relevance_reasoning`, `last_relevance_check_at` to `channels`
-2. `supabase/functions/analyze-channel-relevance/index.ts` — new edge function
-3. `src/pages/Channels.tsx` — add Relevance column, filter, "Check Relevance" button
-4. `src/hooks/useChannels.ts` — add `is_relevant` to Channel interface
+### 2. Auto-trigger channel relevance after fetch completes
 
-Keyword priority stays P1-P5 — no changes needed, already implemented.
+**File: `supabase/functions/process-fetch-queue/index.ts`**
+
+After keyword priority, add another step:
+- Call `analyze-channel-relevance` with the newly discovered `channel_ids`
+- The function already filters for `is_relevant IS NULL`, so only unchecked channels get analyzed
+
+### 3. Update model to gemini-2.5-flash (already correct)
+
+Both `analyze-keyword-priority` and `analyze-channel-relevance` already use `google/gemini-2.5-flash`. No model change needed — user said "Gemini 2.0 Flash" but the closest available model is `gemini-2.5-flash` which is already configured.
+
+## Technical Details
+
+### Changes to `process-fetch-queue/index.ts`
+
+Add two new auto-trigger blocks after the existing compute-channel-stats trigger (around line 332):
+
+```text
+Existing chain:
+  fetch videos → process-video-links → compute-channel-stats
+
+New chain:
+  fetch videos → process-video-links → compute-channel-stats
+                                      → analyze-keyword-priority (for fetched keywords)
+                                      → analyze-channel-relevance (for new channels)
+```
+
+The keyword priority call passes keyword IDs + keyword text from the processed jobs. The channel relevance call passes channel IDs from `allChannelIds`.
+
+### Files to modify
+
+1. `supabase/functions/process-fetch-queue/index.ts` — add auto-trigger calls to `analyze-keyword-priority` and `analyze-channel-relevance` at the end of the pipeline
+
+No other files need changes — the edge functions and UI columns already exist.
 
