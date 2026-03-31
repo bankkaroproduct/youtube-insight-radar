@@ -51,9 +51,10 @@ export function useAffiliatePatterns() {
     }
   };
 
-  const confirmPattern = async (id: string, classification: string, name?: string) => {
+  const confirmPattern = async (id: string, classification: string, name?: string, type?: PatternType) => {
     const updates: Record<string, any> = { is_confirmed: true, classification };
     if (name) updates.name = name;
+    if (type) updates.type = type;
     const { error } = await supabase
       .from("affiliate_patterns")
       .update(updates)
