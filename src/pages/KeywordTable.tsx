@@ -40,14 +40,18 @@ export default function KeywordTable() {
 
   useEffect(() => {
     async function fetchStats() {
-      const { data, error } = await supabase.rpc("get_keyword_stats");
-      if (!error && data) {
+      const [statsRes, videoCountRes] = await Promise.all([
+        supabase.rpc("get_keyword_stats"),
+        supabase.from("videos").select("id", { count: "exact", head: true }),
+      ]);
+      if (!statsRes.error && statsRes.data) {
         const map = new Map<string, { video_count: number; link_count: number }>();
-        for (const row of data as any[]) {
+        for (const row of statsRes.data as any[]) {
           map.set(row.keyword_id, { video_count: Number(row.video_count), link_count: Number(row.link_count) });
         }
         setKeywordStats(map);
       }
+      setUniqueVideoCount(videoCountRes.count ?? 0);
     }
     fetchStats();
   }, [allKeywords]);
