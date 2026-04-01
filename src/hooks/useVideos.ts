@@ -42,6 +42,24 @@ export interface Video {
   best_rank: number | null;
 }
 
+const BATCH_SIZE = 1000;
+
+async function fetchAllRows<T>(
+  queryFn: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>
+): Promise<T[]> {
+  let allRows: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await queryFn(from, from + BATCH_SIZE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    allRows = allRows.concat(rows);
+    if (rows.length < BATCH_SIZE) break;
+    from += BATCH_SIZE;
+  }
+  return allRows;
+}
+
 export function useVideos() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -49,91 +67,92 @@ export function useVideos() {
   const fetchVideos = useCallback(async () => {
     setIsLoading(true);
 
-    const { data: videosData, error } = await supabase
-      .from("videos")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(999999999);
+    try {
+      const videoRows = await fetchAllRows<any>((from, to) =>
+        supabase
+          .from("videos")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      );
 
-    if (error) {
-      toast.error("Failed to load videos");
-      setIsLoading(false);
-      return;
-    }
-
-    const videoRows = (videosData as any[]) ?? [];
-
-    if (videoRows.length === 0) {
-      setVideos([]);
-      setIsLoading(false);
-      return;
-    }
-
-    const videoIds = videoRows.map((v) => v.id);
-
-    const [linksResult, vkResult] = await Promise.all([
-      supabase.from("video_links").select("*").in("video_id", videoIds).limit(999999999),
-      supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds).limit(999999999),
-    ]);
-
-    const linksData = (linksResult.data ?? []) as any[];
-    const vkData = (vkResult.data ?? []) as any[];
-
-
-    const keywordIds = [...new Set(vkData.map((vk) => vk.keyword_id).filter(Boolean))];
-    let keywordsMap = new Map<string, string>();
-    if (keywordIds.length > 0) {
-      const { data: kwData } = await supabase
-        .from("keywords_search_runs")
-        .select("id, keyword")
-        .in("id", keywordIds)
-        .limit(999999999);
-      for (const k of (kwData ?? []) as any[]) {
-        keywordsMap.set(k.id, k.keyword);
+      if (videoRows.length === 0) {
+        setVideos([]);
+        setIsLoading(false);
+        return;
       }
-    }
 
-    const linksByVideo = new Map<string, VideoLink[]>();
-    for (const link of linksData) {
-      const list = linksByVideo.get(link.video_id) || [];
-      list.push({
-        ...link,
-        affiliate_name: link.affiliate_platform || link.resolved_retailer || null,
-        platform_name: link.affiliate_platform || null,
-        retailer_name: link.resolved_retailer || null,
-      });
-      linksByVideo.set(link.video_id, list);
-    }
+      const videoIds = videoRows.map((v) => v.id);
 
-    const keywordsByVideo = new Map<string, VideoKeyword[]>();
-    const bestRankByVideo = new Map<string, number>();
-    for (const vk of vkData) {
-      const list = keywordsByVideo.get(vk.video_id) || [];
-      const kwName = keywordsMap.get(vk.keyword_id);
-      if (kwName) {
-        list.push({ id: vk.keyword_id, keyword: kwName, search_rank: vk.search_rank ?? null });
-      }
-      keywordsByVideo.set(vk.video_id, list);
+      // Fetch links and video_keywords in batches, parallelized
+      const [linksData, vkData] = await Promise.all([
+        fetchAllRows<any>((from, to) =>
+          supabase.from("video_links").select("*").in("video_id", videoIds).range(from, to)
+        ),
+        fetchAllRows<any>((from, to) =>
+          supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds).range(from, to)
+        ),
+      ]);
 
-      if (vk.search_rank != null) {
-        const current = bestRankByVideo.get(vk.video_id);
-        if (current == null || vk.search_rank < current) {
-          bestRankByVideo.set(vk.video_id, vk.search_rank);
+      const keywordIds = [...new Set(vkData.map((vk) => vk.keyword_id).filter(Boolean))];
+      let keywordsMap = new Map<string, string>();
+      if (keywordIds.length > 0) {
+        const kwRows = await fetchAllRows<any>((from, to) =>
+          supabase
+            .from("keywords_search_runs")
+            .select("id, keyword")
+            .in("id", keywordIds)
+            .range(from, to)
+        );
+        for (const k of kwRows) {
+          keywordsMap.set(k.id, k.keyword);
         }
       }
-    }
 
-    setVideos(
-      videoRows.map((v) => ({
-        ...v,
-        view_count: v.view_count ?? 0,
-        like_count: v.like_count ?? 0,
-        comment_count: v.comment_count ?? 0,
-        links: linksByVideo.get(v.id) || [],
-        keywords: keywordsByVideo.get(v.id) || [],
-        best_rank: bestRankByVideo.get(v.id) ?? null,
-      }))
-    );
+      const linksByVideo = new Map<string, VideoLink[]>();
+      for (const link of linksData) {
+        const list = linksByVideo.get(link.video_id) || [];
+        list.push({
+          ...link,
+          affiliate_name: link.affiliate_platform || link.resolved_retailer || null,
+          platform_name: link.affiliate_platform || null,
+          retailer_name: link.resolved_retailer || null,
+        });
+        linksByVideo.set(link.video_id, list);
+      }
+
+      const keywordsByVideo = new Map<string, VideoKeyword[]>();
+      const bestRankByVideo = new Map<string, number>();
+      for (const vk of vkData) {
+        const list = keywordsByVideo.get(vk.video_id) || [];
+        const kwName = keywordsMap.get(vk.keyword_id);
+        if (kwName) {
+          list.push({ id: vk.keyword_id, keyword: kwName, search_rank: vk.search_rank ?? null });
+        }
+        keywordsByVideo.set(vk.video_id, list);
+
+        if (vk.search_rank != null) {
+          const current = bestRankByVideo.get(vk.video_id);
+          if (current == null || vk.search_rank < current) {
+            bestRankByVideo.set(vk.video_id, vk.search_rank);
+          }
+        }
+      }
+
+      setVideos(
+        videoRows.map((v) => ({
+          ...v,
+          view_count: v.view_count ?? 0,
+          like_count: v.like_count ?? 0,
+          comment_count: v.comment_count ?? 0,
+          links: linksByVideo.get(v.id) || [],
+          keywords: keywordsByVideo.get(v.id) || [],
+          best_rank: bestRankByVideo.get(v.id) ?? null,
+        }))
+      );
+    } catch (error) {
+      toast.error("Failed to load videos");
+    }
     setIsLoading(false);
   }, []);
 
