@@ -35,18 +35,23 @@ export default function KeywordTable() {
   const navigate = useNavigate();
   const [tableFilters, setTableFilters] = useState({ keyword: "", category: "", source: "", priority: "", status: "", businessAim: "" });
   const [keywordStats, setKeywordStats] = useState<Map<string, { video_count: number; link_count: number }>>(new Map());
+  const [uniqueVideoCount, setUniqueVideoCount] = useState(0);
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   useEffect(() => {
     async function fetchStats() {
-      const { data, error } = await supabase.rpc("get_keyword_stats");
-      if (!error && data) {
+      const [statsRes, videoCountRes] = await Promise.all([
+        supabase.rpc("get_keyword_stats"),
+        supabase.from("videos").select("id", { count: "exact", head: true }),
+      ]);
+      if (!statsRes.error && statsRes.data) {
         const map = new Map<string, { video_count: number; link_count: number }>();
-        for (const row of data as any[]) {
+        for (const row of statsRes.data as any[]) {
           map.set(row.keyword_id, { video_count: Number(row.video_count), link_count: Number(row.link_count) });
         }
         setKeywordStats(map);
       }
+      setUniqueVideoCount(videoCountRes.count ?? 0);
     }
     fetchStats();
   }, [allKeywords]);
@@ -81,20 +86,18 @@ export default function KeywordTable() {
   }, [filtered, sortFn, keywordStats]);
 
   const stats = useMemo(() => {
-    let totalVideos = 0;
     let totalLinks = 0;
     for (const s of keywordStats.values()) {
-      totalVideos += s.video_count;
       totalLinks += s.link_count;
     }
     return {
       total: allKeywords.length,
       completed: allKeywords.filter((k) => k.status === "completed").length,
       pending: allKeywords.filter((k) => k.status === "pending").length,
-      videos: totalVideos,
+      videos: uniqueVideoCount,
       links: totalLinks,
     };
-  }, [allKeywords, keywordStats]);
+  }, [allKeywords, keywordStats, uniqueVideoCount]);
 
   const exportFiltered = () => {
     const data = filtered.map((k) => ({
