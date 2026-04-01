@@ -1,22 +1,23 @@
 
 
-# Fix 1000-Row Limit on Video Links & Keywords
+# Delete All Keyword Data & Discovered Patterns
 
-## Problem
-The `useVideos` hook fetches `video_links` and `video_keywords` without specifying a limit, so Supabase applies its default 1000-row cap. This truncates link counts in the stat cards.
+## What will be deleted
 
-## Solution (`src/hooks/useVideos.ts`)
+1. **Keyword-related data** (same as previous reset):
+   - `video_links` — all rows
+   - `video_keywords` — all rows
+   - `videos` — all rows
+   - `fetch_jobs` — all rows
+   - `keywords_search_runs` — all rows
 
-Add `.limit(999999999)` to both the `video_links` and `video_keywords` queries (lines 75-76):
+2. **Discovered patterns** (auto-discovered, unconfirmed):
+   - `affiliate_patterns` where `is_auto_discovered = true` and `is_confirmed = false`
 
-```typescript
-supabase.from("video_links").select("*").in("video_id", videoIds).limit(999999999),
-supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds).limit(999999999),
-```
+3. **Channel stats reset**:
+   - Reset `total_videos_fetched` to 0 and JSONB count fields to `'{}'` on the `channels` table
 
-Also add the same limit to the keywords lookup query (~line 88).
+## Technical Details
 
-| File | Change |
-|------|--------|
-| `src/hooks/useVideos.ts` | Add `.limit(999999999)` to video_links, video_keywords, and keywords_search_runs queries |
+All operations use the database insert tool (DELETE/UPDATE statements). Manually confirmed patterns are preserved.
 
