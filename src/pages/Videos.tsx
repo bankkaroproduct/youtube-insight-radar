@@ -244,7 +244,7 @@ export default function Videos() {
       for (const name of getUniqueRetailers(v)) uniqueRetailers.add(name);
     }
     return {
-      totalVideos: data.length,
+      totalVideos: dbTotalVideos ?? data.length,
       totalLinks: dbTotalLinks ?? data.flatMap((v) => v.links).length,
       uniqueChannels: uniqueChannels.size,
       uniquePlatforms: uniquePlatforms.size,
