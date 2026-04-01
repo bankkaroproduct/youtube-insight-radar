@@ -170,10 +170,7 @@ export default function Channels() {
           </p>
         </div>
         <div className="flex gap-2 items-center">
-          <div className="flex items-center gap-2 mr-4">
-            <Switch id="show-empty" checked={showEmpty} onCheckedChange={setShowEmpty} />
-            <Label htmlFor="show-empty" className="text-sm text-muted-foreground whitespace-nowrap">Include 0-video channels</Label>
-          </div>
+          
           <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted)}>
             <Download className="h-4 w-4 mr-2" /> Download CSV
           </Button>
