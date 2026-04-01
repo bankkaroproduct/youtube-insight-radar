@@ -158,9 +158,21 @@ async function fallbackUnshorten(url: string): Promise<string> {
   }
 }
 
+// Round-robin API key rotation for unshorten.me
+const unshortenKeys = [
+  Deno.env.get("UNSHORTEN_API_KEY"),
+  Deno.env.get("UNSHORTEN_API_KEY_2"),
+].filter(Boolean) as string[];
+let unshortenKeyIndex = 0;
+function getNextUnshortenKey(): string {
+  const key = unshortenKeys[unshortenKeyIndex % unshortenKeys.length];
+  unshortenKeyIndex++;
+  return key;
+}
+
 async function unshortenUrl(url: string): Promise<string> {
-  const apiKey = Deno.env.get("UNSHORTEN_API_KEY");
-  if (!apiKey) return fallbackUnshorten(url);
+  if (unshortenKeys.length === 0) return fallbackUnshorten(url);
+  const apiKey = getNextUnshortenKey();
   try {
     const resp = await fetch(
       `https://unshorten.me/api/v2/unshorten?url=${encodeURIComponent(url)}`,
@@ -170,7 +182,6 @@ async function unshortenUrl(url: string): Promise<string> {
     const data = await resp.json();
     if (data.success && data.unshortened_url) {
       let resolved = data.unshortened_url;
-      // If unshorten.me resolved to a JS-redirect domain, parse HTML too
       if (isJsRedirectDomain(extractDomain(resolved))) {
         resolved = await resolveJsRedirect(resolved);
       }
