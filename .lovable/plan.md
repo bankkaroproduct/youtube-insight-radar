@@ -1,42 +1,30 @@
 
 
-# Add Channel Stats to Videos CSV Export
+# Fix Total Videos Count Discrepancy Between Pages
 
 ## Problem
-The Videos CSV export doesn't include channel-level stats (subscriber count, median views, median likes) that exist in the `channels` table.
+The Keyword Table page sums per-keyword video counts from `get_keyword_stats()`, which double-counts videos that appear under multiple keywords. The Videos page shows unique videos (1000), while the Keyword Table shows the inflated sum (1551).
 
 ## Solution
-
-### 1. Fetch channel stats in `downloadVideosCSV` (`src/pages/Videos.tsx`)
-Before building the CSV, query the `channels` table for all unique `channel_id` values in the video list. Build a lookup map of `channel_id → { subscriber_count, median_views, median_likes }`.
-
-### 2. Add columns to CSV headers
-Insert three new columns after "Channel Name": **"Subscribers"**, **"Median Views"**, **"Median Likes"**.
-
-### 3. Populate rows
-For each video row, look up channel stats from the map and include them.
+Replace the Keyword Table's "Total Videos" stat with a count of unique videos from the `videos` table, and rename the current sum to a separate label or remove the ambiguity.
 
 ## Changes
 
-| File | Change |
-|------|--------|
-| `src/pages/Videos.tsx` | Make `downloadVideosCSV` async; query `channels` table for stats; add 3 new columns to CSV |
+### `src/pages/KeywordTable.tsx`
+- Add a separate query to get the actual unique video count: `supabase.from("videos").select("id", { count: "exact", head: true })`
+- Use this count for the "Total Videos" stat card
+- Optionally keep the per-keyword sum as "Total Video-Keyword Associations" or remove it
 
-### Updated export function (key changes)
+| Stat | Before | After |
+|------|--------|-------|
+| Total Videos | Sum of per-keyword counts (1551) | Unique video count from `videos` table (1000) |
+
+### Technical Detail
+Add a `useEffect` that runs:
 ```typescript
-async function downloadVideosCSV(videos: Video[]) {
-  // Fetch channel stats
-  const channelIds = [...new Set(videos.map(v => v.channel_id))];
-  const { data: channelData } = await supabase
-    .from("channels")
-    .select("channel_id, subscriber_count, median_views, median_likes")
-    .in("channel_id", channelIds);
-  const channelMap = new Map(
-    (channelData ?? []).map(c => [c.channel_id, c])
-  );
-
-  // Headers: add "Subscribers", "Median Views", "Median Likes" after "Channel Name"
-  // Rows: include ch.subscriber_count, ch.median_views, ch.median_likes
-}
+const { count } = await supabase
+  .from("videos")
+  .select("id", { count: "exact", head: true });
 ```
+Use this `count` for the "Total Videos" stat card value.
 
