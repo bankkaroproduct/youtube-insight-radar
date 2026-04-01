@@ -1,12 +1,16 @@
 
 
-# Increase Link Processing Batch Size to 1000
+# Add IP Address to Whitelist
 
-## Change
+## What
+Insert IP address `182.77.77.39` into the `ip_whitelist` table.
 
-| File | Line | Change |
-|------|------|--------|
-| `src/pages/Links.tsx` | 442 | Change `callEdgeFunction(500)` → `callEdgeFunction(1000)` |
+## How
+Single SQL insert statement:
+```sql
+INSERT INTO ip_whitelist (ip_address, description, is_active)
+VALUES ('182.77.77.39', NULL, true);
+```
 
-One-line change. The batch size parameter is passed directly to the edge function.
+Current whitelist has 3 entries. This will be the 4th.
 
