@@ -1,45 +1,42 @@
 
 
-# Fix Video Count Discrepancy & Quota Reset Error
+# Add Channel Stats to Videos CSV Export
 
-## Issue 1: Video counts differ between Keywords and Videos pages
+## Problem
+The Videos CSV export doesn't include channel-level stats (subscriber count, median views, median likes) that exist in the `channels` table.
 
-**Root cause**: This is expected behavior, not a bug. The Keywords table shows video counts *per keyword* via `get_keyword_stats()`. A single video can appear under multiple keywords (e.g., a video found via "best sneakers" AND "top shoes" counts once in each keyword row). The Videos page shows 1,224 unique videos, while the keyword-level sum is 1,544 because of these overlaps.
+## Solution
 
-**Fix**: No data change needed. Add a tooltip or note in the Keywords table header clarifying "Videos found for this keyword (a video may appear under multiple keywords)."
+### 1. Fetch channel stats in `downloadVideosCSV` (`src/pages/Videos.tsx`)
+Before building the CSV, query the `channels` table for all unique `channel_id` values in the video list. Build a lookup map of `channel_id → { subscriber_count, median_views, median_likes }`.
+
+### 2. Add columns to CSV headers
+Insert three new columns after "Channel Name": **"Subscribers"**, **"Median Views"**, **"Median Likes"**.
+
+### 3. Populate rows
+For each video row, look up channel stats from the map and include them.
+
+## Changes
 
 | File | Change |
 |------|--------|
-| `src/components/keywords/KeywordsTable.tsx` | Add tooltip to the "Videos" column header explaining per-keyword counting |
+| `src/pages/Videos.tsx` | Make `downloadVideosCSV` async; query `channels` table for stats; add 3 new columns to CSV |
 
-## Issue 2: Quota Reset fails with "UPDATE requires a WHERE clause"
-
-**Root cause**: In `useApiKeys.ts` (line 80-83), after calling `reset_daily_quotas` RPC, a second client-side UPDATE attempts to re-activate all keys using `.neq("id", "00000000-...")` as a fake WHERE clause. PostgREST rejects this pattern in newer versions.
-
-**Fix**: Move the re-activation logic into the `reset_daily_quotas` SQL function itself. This eliminates the client-side UPDATE entirely and runs everything in a single server-side call with SECURITY DEFINER privileges.
-
-| Component | Change |
-|-----------|--------|
-| Database migration | Update `reset_daily_quotas` function to also set `is_active = true` and `last_test_status = null` |
-| `src/hooks/useApiKeys.ts` | Remove the second `.update()` call from `resetQuota` mutation — the RPC now handles everything |
-
-### Updated SQL function
-```sql
-CREATE OR REPLACE FUNCTION public.reset_daily_quotas()
-RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path TO 'public' AS $$
-  UPDATE public.youtube_api_keys 
-  SET quota_used_today = 0, is_active = true, last_test_status = null;
-$$;
-```
-
-### Updated hook code
+### Updated export function (key changes)
 ```typescript
-resetQuota: useMutation({
-  mutationFn: async () => {
-    const { error } = await supabase.rpc("reset_daily_quotas" as any);
-    if (error) throw error;
-  },
-  // ... success/error handlers unchanged
-})
+async function downloadVideosCSV(videos: Video[]) {
+  // Fetch channel stats
+  const channelIds = [...new Set(videos.map(v => v.channel_id))];
+  const { data: channelData } = await supabase
+    .from("channels")
+    .select("channel_id, subscriber_count, median_views, median_likes")
+    .in("channel_id", channelIds);
+  const channelMap = new Map(
+    (channelData ?? []).map(c => [c.channel_id, c])
+  );
+
+  // Headers: add "Subscribers", "Median Views", "Median Likes" after "Channel Name"
+  // Rows: include ch.subscriber_count, ch.median_views, ch.median_likes
+}
 ```
 
