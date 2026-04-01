@@ -76,12 +76,6 @@ export function useApiKeys() {
     mutationFn: async () => {
       const { error } = await supabase.rpc("reset_daily_quotas" as any);
       if (error) throw error;
-      // Re-activate all keys
-      const { error: err2 } = await supabase
-        .from("youtube_api_keys" as any)
-        .update({ is_active: true, last_test_status: null } as any)
-        .neq("id", "00000000-0000-0000-0000-000000000000");
-      if (err2) throw err2;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });
