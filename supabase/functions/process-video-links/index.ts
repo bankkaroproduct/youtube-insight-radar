@@ -11,6 +11,8 @@ const KNOWN_SHORTENERS = [
   "buff.ly", "adf.ly", "bl.ink", "lnkd.in", "rb.gy", "cutt.ly",
   "shorturl.at", "link.ck.page", "clk.ink",
   "fkrt.it", "wsli.nk", "tiny.cc", "short.io", "amzn.to",
+  "geni.us", "urlgeni.us", "bitli.in", "fktr.in", "fkrt.to",
+  "amzlink.to", "amzn.eu", "linktw.in",
 ];
 
 // Known affiliate redirect domains that MUST always be unshortened to reveal retailer
