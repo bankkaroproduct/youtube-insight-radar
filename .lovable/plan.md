@@ -1,19 +1,35 @@
 
 
-# Remove Zero-Video Channels from Database
+# Fix Channel Stats Missing in Video CSV Export
 
-## What We'll Do
+## Problem
+The `downloadVideosCSV` function (line 70-73 in `src/pages/Videos.tsx`) fetches channel stats with a single `.in("channel_id", channelIds)` query. When there are 1,289+ unique channels, the query URL exceeds the ~8KB HTTP limit, causing it to silently return partial or no data. This is why Subscribers, Median Views, and Median Likes columns are empty in the downloaded CSV.
 
-Delete all rows from the `channels` table where `total_videos_fetched = 0` (the ~862 empty channels causing the count mismatch). After deletion, the Channels page count will match the Videos page unique channels count.
+## Fix
 
-Additionally, remove the "Include 0-video channels" toggle from the Channels page since there won't be any empty channels left.
+### `src/pages/Videos.tsx` — Chunk the channel stats query
+Apply the same ID-chunking pattern used in `useVideos.ts`:
 
-## Technical Details
+```typescript
+const ID_CHUNK = 200;
+const channelChunks: string[][] = [];
+for (let i = 0; i < channelIds.length; i += ID_CHUNK) {
+  channelChunks.push(channelIds.slice(i, i + ID_CHUNK));
+}
+const channelData = (await Promise.all(
+  channelChunks.map(chunk =>
+    supabase
+      .from("channels")
+      .select("channel_id, subscriber_count, median_views, median_likes")
+      .in("channel_id", chunk)
+      .then(({ data }) => data ?? [])
+  )
+)).flat();
+```
 
-| Step | Detail |
+This splits the channel IDs into groups of 200, fetches them in parallel, and merges the results. No other changes needed — the rest of the export logic already works correctly.
+
+| File | Change |
 |------|--------|
-| **1. Delete empty channels** | `DELETE FROM channels WHERE total_videos_fetched = 0` via the insert tool |
-| **2. Clean up UI** | Remove `showEmpty`/`setShowEmpty` toggle from `src/pages/Channels.tsx` |
-| **3. Simplify hook** | Remove `showEmpty` state and filter logic from `src/hooks/useChannels.ts` |
-| **4. Fix Channels DB count** | Remove the `showEmpty` conditional from the DB count query in `src/pages/Channels.tsx` — just count all channels |
+| `src/pages/Videos.tsx` | Replace single `.in()` channel query with chunked parallel queries |
 
