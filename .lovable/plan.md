@@ -1,30 +1,45 @@
 
 
-# Fix Total Videos Count Discrepancy Between Pages
+# Fix Videos Page Showing Only 1000 Videos
 
 ## Problem
-The Keyword Table page sums per-keyword video counts from `get_keyword_stats()`, which double-counts videos that appear under multiple keywords. The Videos page shows unique videos (1000), while the Keyword Table shows the inflated sum (1551).
+The Videos page shows "Total Videos: 1000" because PostgREST enforces a default maximum of 1000 rows per query, regardless of the `.limit(999999999)` set in `useVideos.ts`. The stat `totalVideos: data.length` simply counts the client-side array, which is capped at 1000.
 
 ## Solution
-Replace the Keyword Table's "Total Videos" stat with a count of unique videos from the `videos` table, and rename the current sum to a separate label or remove the ambiguity.
+Two changes needed:
 
-## Changes
-
-### `src/pages/KeywordTable.tsx`
-- Add a separate query to get the actual unique video count: `supabase.from("videos").select("id", { count: "exact", head: true })`
-- Use this count for the "Total Videos" stat card
-- Optionally keep the per-keyword sum as "Total Video-Keyword Associations" or remove it
-
-| Stat | Before | After |
-|------|--------|-------|
-| Total Videos | Sum of per-keyword counts (1551) | Unique video count from `videos` table (1000) |
-
-### Technical Detail
-Add a `useEffect` that runs:
+### 1. `src/pages/Videos.tsx` — Fetch true video count from DB
+Add a direct count query (same approach used in KeywordTable fix):
 ```typescript
-const { count } = await supabase
-  .from("videos")
-  .select("id", { count: "exact", head: true });
+const [dbTotalVideos, setDbTotalVideos] = useState<number | null>(null);
+useEffect(() => {
+  supabase.from("videos").select("id", { count: "exact", head: true })
+    .then(({ count }) => setDbTotalVideos(count));
+}, [videos]);
 ```
-Use this `count` for the "Total Videos" stat card value.
+Use `dbTotalVideos ?? data.length` for the "Total Videos" stat.
+
+### 2. `src/hooks/useVideos.ts` — Paginate to fetch all videos
+The `.limit(999999999)` doesn't bypass the 1000-row PostgREST cap. Replace with a pagination loop using `.range()` to fetch all rows in batches of 1000:
+```typescript
+let allRows: any[] = [];
+let from = 0;
+const batchSize = 1000;
+while (true) {
+  const { data, error } = await supabase
+    .from("videos").select("*")
+    .order("created_at", { ascending: false })
+    .range(from, from + batchSize - 1);
+  if (error) { /* handle */ break; }
+  allRows = allRows.concat(data);
+  if (data.length < batchSize) break;
+  from += batchSize;
+}
+```
+Same pagination for `video_links` and `video_keywords` queries.
+
+| File | Change |
+|------|--------|
+| `src/hooks/useVideos.ts` | Replace single query with paginated fetch loop for videos, video_links, video_keywords |
+| `src/pages/Videos.tsx` | Add DB count query for accurate "Total Videos" stat |
 
