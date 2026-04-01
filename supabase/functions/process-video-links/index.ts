@@ -118,6 +118,7 @@ const SKIP_DOMAINS = new Set([
   "wikipedia.org", "github.com", "discord.gg", "discord.com", "t.me",
   "telegram.org", "wa.me", "whatsapp.com", "apple.com", "play.google.com",
   "apps.apple.com", "medium.com", "blogspot.com", "wordpress.com",
+  "mobile.twitter.com", "wa.link", "x.com",
 ]);
 
 function lookupAffiliatePlatform(domain: string): string | null {
