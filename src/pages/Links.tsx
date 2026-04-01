@@ -439,7 +439,7 @@ function ProcessingTab() {
       const batchNum = batchNumRef.current;
       try {
         addLog(`⏳ Batch #${batchNum}: processing...`);
-        const result = await callEdgeFunction(100);
+        const result = await callEdgeFunction(500);
         if (!result.success) {
           addLog(`❌ Batch #${batchNum} failed: ${result.error || "Unknown error"}`);
           autoRunRef.current = false;
