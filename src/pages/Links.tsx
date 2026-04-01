@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useAffiliatePatterns, PatternType } from "@/hooks/useAffiliatePatterns";
+import { supabase } from "@/integrations/supabase/client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -11,9 +12,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
-import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe, Play, RotateCcw, Loader2 } from "lucide-react";
 import { BulkUploadDialog } from "@/components/links/BulkUploadDialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "@/hooks/use-toast";
 
 const classColors: Record<string, string> = {
   OWN: "bg-green-500/15 text-green-700 border-green-500/30",
