@@ -238,8 +238,8 @@ serve(async (req) => {
 
     const affectedChannels = new Set<string>();
     let totalProcessed = 0;
-    const MAX_TOTAL = 100;
-    const BATCH_SIZE = 25;
+    const MAX_TOTAL = 500;
+    const BATCH_SIZE = 50;
     const videoChannelCache = new Map<string, string>();
 
     // Step 0: Fast-path skip-domain links (youtube, social, etc.) — no unshortening needed

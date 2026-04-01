@@ -84,14 +84,29 @@ export function useVideos() {
 
       const videoIds = videoRows.map((v) => v.id);
 
-      // Fetch links and video_keywords in batches, parallelized
+      // Chunk videoIds into groups of 200 to avoid URL length limits on .in() queries
+      const ID_CHUNK = 200;
+      const idChunks: string[][] = [];
+      for (let i = 0; i < videoIds.length; i += ID_CHUNK) {
+        idChunks.push(videoIds.slice(i, i + ID_CHUNK));
+      }
+
+      // Fetch links and video_keywords in chunked batches, parallelized
       const [linksData, vkData] = await Promise.all([
-        fetchAllRows<any>((from, to) =>
-          supabase.from("video_links").select("*").in("video_id", videoIds).range(from, to)
-        ),
-        fetchAllRows<any>((from, to) =>
-          supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds).range(from, to)
-        ),
+        Promise.all(
+          idChunks.map((chunk) =>
+            fetchAllRows<any>((from, to) =>
+              supabase.from("video_links").select("*").in("video_id", chunk).range(from, to)
+            )
+          )
+        ).then((results) => results.flat()),
+        Promise.all(
+          idChunks.map((chunk) =>
+            fetchAllRows<any>((from, to) =>
+              supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", chunk).range(from, to)
+            )
+          )
+        ).then((results) => results.flat()),
       ]);
 
       const keywordIds = [...new Set(vkData.map((vk) => vk.keyword_id).filter(Boolean))];
