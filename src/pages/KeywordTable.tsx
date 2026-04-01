@@ -35,6 +35,7 @@ export default function KeywordTable() {
   const navigate = useNavigate();
   const [tableFilters, setTableFilters] = useState({ keyword: "", category: "", source: "", priority: "", status: "", businessAim: "" });
   const [keywordStats, setKeywordStats] = useState<Map<string, { video_count: number; link_count: number }>>(new Map());
+  const [uniqueVideoCount, setUniqueVideoCount] = useState(0);
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   useEffect(() => {
