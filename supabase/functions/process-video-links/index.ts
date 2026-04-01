@@ -658,13 +658,13 @@ serve(async (req) => {
       }
     }
 
-    // Self-re-trigger if more unprocessed links remain
+    // Self-re-trigger if more unprocessed links remain (only for automatic runs)
     const { count: remaining } = await supabase
       .from("video_links")
       .select("id", { count: "exact", head: true })
       .is("unshortened_url", null);
 
-    if (remaining && remaining > 0) {
+    if (!isManualBatch && remaining && remaining > 0) {
       console.log(`Re-triggering: ${remaining} links still unprocessed`);
       try {
         const fnUrl = `${supabaseUrl}/functions/v1/process-video-links`;

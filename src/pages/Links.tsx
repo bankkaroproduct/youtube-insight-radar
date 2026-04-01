@@ -351,7 +351,181 @@ export default function Links() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="processing">
+          <ProcessingTab />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function ProcessingTab() {
+  const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0 });
+  const [loading, setLoading] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [lastResult, setLastResult] = useState<{ processed: number; remaining: number } | null>(null);
+
+  const fetchStats = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [totalRes, processedRes, platformRes, retailerRes] = await Promise.all([
+        supabase.from("video_links").select("id", { count: "exact", head: true }),
+        supabase.from("video_links").select("id", { count: "exact", head: true }).not("unshortened_url", "is", null),
+        supabase.from("video_links").select("id", { count: "exact", head: true }).not("affiliate_platform", "is", null),
+        supabase.from("video_links").select("id", { count: "exact", head: true }).not("resolved_retailer", "is", null),
+      ]);
+      const total = totalRes.count || 0;
+      const processed = processedRes.count || 0;
+      setStats({
+        total,
+        processed,
+        unprocessed: total - processed,
+        withPlatform: platformRes.count || 0,
+        withRetailer: retailerRes.count || 0,
+      });
+    } catch (e) {
+      console.error("Failed to fetch stats", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchStats(); }, [fetchStats]);
+
+  const handleProcessBatch = async () => {
+    setProcessing(true);
+    setLastResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+      const resp = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/process-video-links`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ batch_size: 100 }),
+        }
+      );
+      const result = await resp.json();
+      if (result.success) {
+        setLastResult({ processed: result.processed, remaining: result.remaining });
+        toast({ title: "Batch processed", description: `${result.processed} links processed, ${result.remaining} remaining` });
+      } else {
+        toast({ title: "Error", description: result.error || "Processing failed", variant: "destructive" });
+      }
+      await fetchStats();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      // Use an edge function or RPC to reset — we'll use direct update via supabase client
+      // Since RLS allows admins to update, this should work
+      const { error } = await supabase.from("video_links").update({
+        unshortened_url: null,
+        domain: null,
+        original_domain: null,
+        classification: "NEUTRAL",
+        matched_pattern_id: null,
+        affiliate_platform_id: null,
+        retailer_pattern_id: null,
+        is_shortened: null,
+        link_type: null,
+        affiliate_platform: null,
+        affiliate_domain: null,
+        resolved_retailer: null,
+        resolved_retailer_domain: null,
+      }).not("id", "is", null); // match all rows
+
+      if (error) throw error;
+      toast({ title: "Reset complete", description: "All links have been reset to unprocessed state." });
+      setLastResult(null);
+      await fetchStats();
+    } catch (e: any) {
+      toast({ title: "Reset failed", description: e.message, variant: "destructive" });
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const pct = stats.total > 0 ? Math.round((stats.processed / stats.total) * 100) : 0;
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {[
+          { label: "Total Links", value: stats.total },
+          { label: "Processed", value: stats.processed },
+          { label: "Unprocessed", value: stats.unprocessed },
+          { label: "With Platform", value: stats.withPlatform },
+          { label: "With Retailer", value: stats.withRetailer },
+        ].map((s) => (
+          <Card key={s.label}>
+            <CardContent className="pt-4 pb-3 px-4">
+              <p className="text-sm text-muted-foreground">{s.label}</p>
+              <p className="text-2xl font-bold">{loading ? "..." : s.value.toLocaleString()}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="w-full bg-muted rounded-full h-3">
+        <div className="bg-primary h-3 rounded-full transition-all" style={{ width: `${pct}%` }} />
+      </div>
+      <p className="text-sm text-muted-foreground text-center">{pct}% processed</p>
+
+      {lastResult && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="pt-4 pb-3 px-4">
+            <p className="text-sm">
+              Last batch: <strong>{lastResult.processed}</strong> processed · <strong>{lastResult.remaining.toLocaleString()}</strong> remaining
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="flex gap-3">
+        <Button onClick={handleProcessBatch} disabled={processing || stats.unprocessed === 0} size="lg">
+          {processing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Play className="h-4 w-4 mr-2" />}
+          Process Next 100
+        </Button>
+        <Button variant="outline" onClick={fetchStats} disabled={loading} size="lg">
+          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} /> Refresh Stats
+        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="destructive" size="lg" disabled={resetting}>
+              <RotateCcw className="h-4 w-4 mr-2" /> Reset All Links
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reset all links?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will clear all processing data for {stats.total.toLocaleString()} links. They will need to be re-processed from scratch. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleReset}>Yes, Reset All</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </div>
   );
 }
