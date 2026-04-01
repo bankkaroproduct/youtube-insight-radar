@@ -19,6 +19,7 @@ const KNOWN_SHORTENERS = [
 const AFFILIATE_REDIRECT_DOMAINS = [
   "wishlink.com", "lehlah.club", "haulpack.com",
   "earnkaro.com", "cuelinks.com", "magicpin.in",
+  "openinapp.co", "shopmy.us", "geni.us",
 ];
 
 // Domains that use JS-based redirects (not HTTP 3xx) — need HTML parsing
