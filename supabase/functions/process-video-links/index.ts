@@ -83,6 +83,18 @@ const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "wsli.nk": "Wishlink",
   "fkrt.it": "Flipkart Affiliate",
   "amzn.to": "Amazon Associates",
+  "geni.us": "Genius Link",
+  "urlgeni.us": "Genius Link",
+  "go.shopmy.us": "ShopMy",
+  "shopmy.us": "ShopMy",
+  "rstyle.me": "LTK (RewardStyle)",
+  "howl.link": "Howl",
+  "linktw.in": "LinkTwin",
+  "amzlink.to": "Amazon Associates",
+  "amzn.eu": "Amazon Associates",
+  "fktr.in": "Flipkart Affiliate",
+  "fkrt.to": "Flipkart Affiliate",
+  "bitli.in": "Bitli",
 };
 
 // Retailer domains → retailer name
