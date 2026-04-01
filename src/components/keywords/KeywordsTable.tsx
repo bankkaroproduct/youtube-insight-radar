@@ -57,7 +57,16 @@ export function KeywordsTable({ keywords, selectedIds, onToggleSelect, onSelectA
             <TableHead>Category</TableHead>
             <TableHead>Last Fetched</TableHead>
             <TableHead>Variations</TableHead>
-            <TableHead className="text-right">Videos</TableHead>
+            <TableHead className="text-right">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help underline decoration-dotted underline-offset-4">Videos</span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[220px] text-xs">
+                  Videos found for this keyword. A video may appear under multiple keywords.
+                </TooltipContent>
+              </Tooltip>
+            </TableHead>
             <TableHead className="text-right">Links</TableHead>
             <TableHead>Source</TableHead>
             <TableHead>Status</TableHead>
