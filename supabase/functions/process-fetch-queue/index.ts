@@ -8,7 +8,7 @@ const corsHeaders = {
 
 const MAX_PAGES = 2;
 const MAX_VIDEOS_PER_KEYWORD = 30;
-const MAX_PARALLEL_JOBS = 20;
+const MAX_PARALLEL_JOBS = 10;
 
 async function getAvailableApiKeys(supabase: any, count: number) {
   const { data, error } = await supabase

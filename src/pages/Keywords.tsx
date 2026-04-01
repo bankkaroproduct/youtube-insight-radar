@@ -79,16 +79,6 @@ export default function Keywords() {
       if (!response.ok) throw new Error(result.error || "Failed");
       toast.success(`Queued ${selected.length} fetch job(s)`);
       setSelectedIds(new Set());
-      // Trigger processing
-      fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-fetch-queue`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-        },
-        body: JSON.stringify({}),
-      }).catch(() => {});
     } catch (err: any) {
       toast.error(err.message || "Failed to queue fetch jobs");
     }
