@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { FlaskConical, Trash2, Download } from "lucide-react";
+import { FlaskConical, Trash2, Download, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useApiKeys } from "@/hooks/useApiKeys";
 import { AddKeysDialog } from "@/components/api-keys/AddKeysDialog";
