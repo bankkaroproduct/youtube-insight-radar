@@ -424,6 +424,21 @@ serve(async (req) => {
       }).catch(e => console.error("Failed to trigger analyze-channel-relevance:", e));
     }
 
+    // Self-re-trigger if more pending jobs remain
+    const { data: remaining } = await supabase
+      .from("fetch_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending")
+      .limit(1);
+
+    if (remaining && remaining.length > 0) {
+      fetch(`${supabaseUrl}/functions/v1/process-fetch-queue`, {
+        method: "POST",
+        headers: triggerHeaders,
+        body: JSON.stringify({}),
+      }).catch(e => console.error("Failed to self-re-trigger:", e));
+    }
+
     const succeeded = results.filter(r => r.success).length;
     return new Response(JSON.stringify({ success: true, processed: pendingJobs.length, succeeded, parallel_keys: availableKeys.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
