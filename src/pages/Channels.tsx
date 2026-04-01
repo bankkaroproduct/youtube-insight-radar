@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
@@ -101,7 +103,7 @@ function downloadCSV(channels: any[]) {
 }
 
 export default function Channels() {
-  const { channels, isLoading, refresh, recomputeStats } = useChannels();
+  const { channels, isLoading, refresh, recomputeStats, showEmpty, setShowEmpty } = useChannels();
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
@@ -159,7 +161,11 @@ export default function Channels() {
             {channels.length} channels discovered. Median stats skip top/bottom 5 videos.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <div className="flex items-center gap-2 mr-4">
+            <Switch id="show-empty" checked={showEmpty} onCheckedChange={setShowEmpty} />
+            <Label htmlFor="show-empty" className="text-sm text-muted-foreground whitespace-nowrap">Include 0-video channels</Label>
+          </div>
           <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted)}>
             <Download className="h-4 w-4 mr-2" /> Download CSV
           </Button>
