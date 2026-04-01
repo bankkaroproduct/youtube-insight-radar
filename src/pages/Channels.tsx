@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { useChannels } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -107,6 +108,12 @@ export default function Channels() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
+  const [dbTotalChannels, setDbTotalChannels] = useState<number | null>(null);
+
+  useEffect(() => {
+    supabase.from("channels").select("id", { count: "exact", head: true })
+      .then(({ count }) => setDbTotalChannels(count));
+  }, [channels]);
 
   const filteredAndSorted = useMemo(() => {
     let result = channels.filter((ch: any) => {
@@ -137,12 +144,12 @@ export default function Channels() {
   }, [channels, filters, sortFn]);
 
   const stats = useMemo(() => ({
-    total: channels.length,
+    total: dbTotalChannels ?? channels.length,
     withUs: channels.filter((c: any) => c.affiliate_status === "WITH_US").length,
     competitor: channels.filter((c: any) => c.affiliate_status === "COMPETITOR").length,
     mixed: channels.filter((c: any) => c.affiliate_status === "MIXED").length,
     neutral: channels.filter((c: any) => !c.affiliate_status || c.affiliate_status === "NEUTRAL").length,
-  }), [channels]);
+  }), [channels, dbTotalChannels]);
 
   const statCards = [
     { label: "Total Channels", value: stats.total, icon: Users, color: "text-primary" },
