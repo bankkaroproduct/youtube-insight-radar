@@ -1,12 +1,12 @@
 
 
-# Increase Link Processing Batch Size to 500
+# Increase Link Processing Batch Size to 1000
 
 ## Change
 
 | File | Line | Change |
 |------|------|--------|
-| `src/pages/Links.tsx` | 442 | Change `callEdgeFunction(100)` → `callEdgeFunction(500)` |
+| `src/pages/Links.tsx` | 442 | Change `callEdgeFunction(500)` → `callEdgeFunction(1000)` |
 
-One-line change. The edge function already supports up to 500. With two Unshorten API keys now rotating, the larger batch will process faster without hitting rate limits.
+One-line change. The batch size parameter is passed directly to the edge function.
 
