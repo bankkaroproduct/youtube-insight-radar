@@ -8,7 +8,7 @@ const corsHeaders = {
 
 const MAX_PAGES = 2;
 const MAX_VIDEOS_PER_KEYWORD = 30;
-const MAX_PARALLEL_JOBS = 20;
+const MAX_PARALLEL_JOBS = 10;
 
 async function getAvailableApiKeys(supabase: any, count: number) {
   const { data, error } = await supabase
@@ -189,9 +189,13 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
   const channelRecordsMap = new Map<string, any>();
   const videoSnippets = new Map<string, any>();
 
+  // Fetch video details in parallel chunks
+  const detailChunks: string[][] = [];
   for (let i = 0; i < allVideoIds.length; i += 50) {
-    const chunk = allVideoIds.slice(i, i + 50);
+    detailChunks.push(allVideoIds.slice(i, i + 50));
+  }
 
+  const chunkResults = await Promise.all(detailChunks.map(async (chunk) => {
     const detailParams = new URLSearchParams({
       part: "snippet,statistics,contentDetails",
       id: chunk.join(","),
@@ -199,51 +203,52 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
     });
 
     const detailResp = await fetch(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`);
-    if (detailResp.ok) {
-      await incrementQuota(supabase, currentKey.id, 1, quotaCache);
-      const detailData = await detailResp.json();
+    if (!detailResp.ok) return [];
+    await incrementQuota(supabase, currentKey.id, 1, quotaCache);
+    const detailData = await detailResp.json();
+    return detailData.items || [];
+  }));
 
-      for (const video of (detailData.items || [])) {
-        // Cap at MAX_VIDEOS_PER_KEYWORD after filtering
-        if (videoRecords.length >= MAX_VIDEOS_PER_KEYWORD) break;
+  for (const items of chunkResults) {
+    for (const video of items) {
+      if (videoRecords.length >= MAX_VIDEOS_PER_KEYWORD) break;
 
-        const snippet = video.snippet || {};
-        const stats = video.statistics || {};
-        const contentDetails = video.contentDetails || {};
+      const snippet = video.snippet || {};
+      const stats = video.statistics || {};
+      const contentDetails = video.contentDetails || {};
 
-        const duration = contentDetails.duration || "";
-        const durationMatch = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-        const totalSeconds = durationMatch
-          ? (parseInt(durationMatch[1] || "0") * 3600) + (parseInt(durationMatch[2] || "0") * 60) + parseInt(durationMatch[3] || "0")
-          : 0;
-        if (totalSeconds > 0 && totalSeconds < 60) continue;
-        if ((snippet.title || "").toLowerCase().includes("#shorts")) continue;
+      const duration = contentDetails.duration || "";
+      const durationMatch = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+      const totalSeconds = durationMatch
+        ? (parseInt(durationMatch[1] || "0") * 3600) + (parseInt(durationMatch[2] || "0") * 60) + parseInt(durationMatch[3] || "0")
+        : 0;
+      if (totalSeconds > 0 && totalSeconds < 60) continue;
+      if ((snippet.title || "").toLowerCase().includes("#shorts")) continue;
 
-        if (snippet.channelId) allChannelIds.add(snippet.channelId);
+      if (snippet.channelId) allChannelIds.add(snippet.channelId);
 
-        videoRecords.push({
-          video_id: video.id,
-          keyword_id: job.keyword_id || null,
-          channel_id: snippet.channelId || "",
+      videoRecords.push({
+        video_id: video.id,
+        keyword_id: job.keyword_id || null,
+        channel_id: snippet.channelId || "",
+        channel_name: snippet.channelTitle || "",
+        title: snippet.title || "",
+        description: snippet.description || "",
+        thumbnail_url: snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || "",
+        published_at: snippet.publishedAt || null,
+        view_count: parseInt(stats.viewCount || "0"),
+        like_count: parseInt(stats.likeCount || "0"),
+        comment_count: parseInt(stats.commentCount || "0"),
+      });
+
+      videoSnippets.set(video.id, snippet);
+
+      if (snippet.channelId && !channelRecordsMap.has(snippet.channelId)) {
+        channelRecordsMap.set(snippet.channelId, {
+          channel_id: snippet.channelId,
           channel_name: snippet.channelTitle || "",
-          title: snippet.title || "",
-          description: snippet.description || "",
-          thumbnail_url: snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || "",
-          published_at: snippet.publishedAt || null,
-          view_count: parseInt(stats.viewCount || "0"),
-          like_count: parseInt(stats.likeCount || "0"),
-          comment_count: parseInt(stats.commentCount || "0"),
+          channel_url: `https://www.youtube.com/channel/${snippet.channelId}`,
         });
-
-        videoSnippets.set(video.id, snippet);
-
-        if (snippet.channelId && !channelRecordsMap.has(snippet.channelId)) {
-          channelRecordsMap.set(snippet.channelId, {
-            channel_id: snippet.channelId,
-            channel_name: snippet.channelTitle || "",
-            channel_url: `https://www.youtube.com/channel/${snippet.channelId}`,
-          });
-        }
       }
     }
   }
@@ -417,6 +422,21 @@ serve(async (req) => {
         method: "POST", headers: triggerHeaders,
         body: JSON.stringify({ channel_ids: [...allChannelIds] }),
       }).catch(e => console.error("Failed to trigger analyze-channel-relevance:", e));
+    }
+
+    // Self-re-trigger if more pending jobs remain
+    const { data: remaining } = await supabase
+      .from("fetch_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending")
+      .limit(1);
+
+    if (remaining && remaining.length > 0) {
+      fetch(`${supabaseUrl}/functions/v1/process-fetch-queue`, {
+        method: "POST",
+        headers: triggerHeaders,
+        body: JSON.stringify({}),
+      }).catch(e => console.error("Failed to self-re-trigger:", e));
     }
 
     const succeeded = results.filter(r => r.success).length;
