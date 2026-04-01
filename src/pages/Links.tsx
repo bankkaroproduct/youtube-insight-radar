@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useAffiliatePatterns, PatternType } from "@/hooks/useAffiliatePatterns";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -363,9 +363,21 @@ export default function Links() {
 function ProcessingTab() {
   const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0 });
   const [loading, setLoading] = useState(false);
-  const [processing, setProcessing] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [lastResult, setLastResult] = useState<{ processed: number; remaining: number } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const autoRunRef = useRef(false);
+  const batchNumRef = useRef(0);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  const addLog = useCallback((msg: string) => {
+    const time = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setLogs((prev) => [...prev, `[${time}] ${msg}`]);
+  }, []);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
 
   const fetchStats = useCallback(async () => {
     setLoading(true);
@@ -378,15 +390,18 @@ function ProcessingTab() {
       ]);
       const total = totalRes.count || 0;
       const processed = processedRes.count || 0;
-      setStats({
+      const result = {
         total,
         processed,
         unprocessed: total - processed,
         withPlatform: platformRes.count || 0,
         withRetailer: retailerRes.count || 0,
-      });
+      };
+      setStats(result);
+      return result;
     } catch (e) {
       console.error("Failed to fetch stats", e);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -394,47 +409,68 @@ function ProcessingTab() {
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
-  const handleProcessBatch = async () => {
-    setProcessing(true);
-    setLastResult(null);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const resp = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/process-video-links`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
-          body: JSON.stringify({ batch_size: 100 }),
-        }
-      );
-      const result = await resp.json();
-      if (result.success) {
-        setLastResult({ processed: result.processed, remaining: result.remaining });
-        toast({ title: "Batch processed", description: `${result.processed} links processed, ${result.remaining} remaining` });
-      } else {
-        toast({ title: "Error", description: result.error || "Processing failed", variant: "destructive" });
+  const callEdgeFunction = async (batchSize: number) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const accessToken = session?.access_token;
+    const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+    const resp = await fetch(
+      `https://${projectId}.supabase.co/functions/v1/process-video-links`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ batch_size: batchSize }),
       }
-      await fetchStats();
-    } catch (e: any) {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
-    } finally {
-      setProcessing(false);
+    );
+    return await resp.json();
+  };
+
+  const startProcessing = async () => {
+    autoRunRef.current = true;
+    setRunning(true);
+    batchNumRef.current = 0;
+    addLog("🚀 Auto-processing started...");
+
+    while (autoRunRef.current) {
+      batchNumRef.current++;
+      const batchNum = batchNumRef.current;
+      try {
+        addLog(`⏳ Batch #${batchNum}: processing...`);
+        const result = await callEdgeFunction(100);
+        if (!result.success) {
+          addLog(`❌ Batch #${batchNum} failed: ${result.error || "Unknown error"}`);
+          autoRunRef.current = false;
+          break;
+        }
+        addLog(`✅ Batch #${batchNum}: ${result.processed} processed, ${result.remaining?.toLocaleString()} remaining`);
+        await fetchStats();
+        if (result.remaining === 0) {
+          addLog("🎉 All links processed!");
+          autoRunRef.current = false;
+          break;
+        }
+      } catch (e: any) {
+        addLog(`❌ Batch #${batchNum} error: ${e.message}`);
+        autoRunRef.current = false;
+        break;
+      }
     }
+
+    setRunning(false);
+    addLog("⏹ Processing stopped.");
+  };
+
+  const stopProcessing = () => {
+    autoRunRef.current = false;
+    addLog("🛑 Stopping after current batch...");
   };
 
   const handleReset = async () => {
     setResetting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
-      // Use an edge function or RPC to reset — we'll use direct update via supabase client
-      // Since RLS allows admins to update, this should work
       const { error } = await supabase.from("video_links").update({
         unshortened_url: null,
         domain: null,
@@ -449,11 +485,11 @@ function ProcessingTab() {
         affiliate_domain: null,
         resolved_retailer: null,
         resolved_retailer_domain: null,
-      }).not("id", "is", null); // match all rows
+      }).not("id", "is", null);
 
       if (error) throw error;
       toast({ title: "Reset complete", description: "All links have been reset to unprocessed state." });
-      setLastResult(null);
+      setLogs([]);
       await fetchStats();
     } catch (e: any) {
       toast({ title: "Reset failed", description: e.message, variant: "destructive" });
@@ -488,27 +524,22 @@ function ProcessingTab() {
       </div>
       <p className="text-sm text-muted-foreground text-center">{pct}% processed</p>
 
-      {lastResult && (
-        <Card className="border-primary/30 bg-primary/5">
-          <CardContent className="pt-4 pb-3 px-4">
-            <p className="text-sm">
-              Last batch: <strong>{lastResult.processed}</strong> processed · <strong>{lastResult.remaining.toLocaleString()}</strong> remaining
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
       <div className="flex gap-3">
-        <Button onClick={handleProcessBatch} disabled={processing || stats.unprocessed === 0} size="lg">
-          {processing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Play className="h-4 w-4 mr-2" />}
-          Process Next 100
-        </Button>
+        {running ? (
+          <Button onClick={stopProcessing} variant="destructive" size="lg">
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Stop Processing
+          </Button>
+        ) : (
+          <Button onClick={startProcessing} disabled={stats.unprocessed === 0} size="lg">
+            <Play className="h-4 w-4 mr-2" /> {logs.length > 0 ? "Resume Processing" : "Start Processing"}
+          </Button>
+        )}
         <Button variant="outline" onClick={fetchStats} disabled={loading} size="lg">
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} /> Refresh Stats
         </Button>
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button variant="destructive" size="lg" disabled={resetting}>
+            <Button variant="destructive" size="lg" disabled={resetting || running}>
               <RotateCcw className="h-4 w-4 mr-2" /> Reset All Links
             </Button>
           </AlertDialogTrigger>
@@ -526,6 +557,27 @@ function ProcessingTab() {
           </AlertDialogContent>
         </AlertDialog>
       </div>
+
+      {/* Live Log */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Processing Log</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="bg-muted/50 rounded-md p-3 h-64 overflow-y-auto font-mono text-xs space-y-1">
+            {logs.length === 0 ? (
+              <p className="text-muted-foreground">Click "Start Processing" to begin...</p>
+            ) : (
+              logs.map((log, i) => (
+                <p key={i} className={log.includes("❌") ? "text-destructive" : log.includes("✅") ? "text-green-600" : "text-foreground"}>
+                  {log}
+                </p>
+              ))
+            )}
+            <div ref={logEndRef} />
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
