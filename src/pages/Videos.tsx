@@ -222,6 +222,7 @@ export default function Videos() {
   }, [videos, filters, sortFn]);
 
   const [dbTotalLinks, setDbTotalLinks] = useState<number | null>(null);
+  const [dbTotalVideos, setDbTotalVideos] = useState<number | null>(null);
   useEffect(() => {
     supabase.rpc("get_keyword_stats").then(({ data }) => {
       if (data) {
@@ -229,6 +230,8 @@ export default function Videos() {
         setDbTotalLinks(total);
       }
     });
+    supabase.from("videos").select("id", { count: "exact", head: true })
+      .then(({ count }) => setDbTotalVideos(count));
   }, [videos]);
 
   const stats = useMemo(() => {
