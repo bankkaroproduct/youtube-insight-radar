@@ -252,9 +252,22 @@ serve(async (req) => {
       return false;
     }
 
+    // Parse optional batch_size from request body
+    let requestedBatchSize: number | null = null;
+    let isManualBatch = false;
+    try {
+      const body = await req.json();
+      if (body?.batch_size && typeof body.batch_size === "number") {
+        requestedBatchSize = Math.min(Math.max(body.batch_size, 1), 500);
+        isManualBatch = true;
+      }
+    } catch {
+      // No body or invalid JSON — use defaults
+    }
+
     const affectedChannels = new Set<string>();
     let totalProcessed = 0;
-    const MAX_TOTAL = 500;
+    const MAX_TOTAL = requestedBatchSize || 500;
     const BATCH_SIZE = 50;
     const videoChannelCache = new Map<string, string>();
 
@@ -645,13 +658,13 @@ serve(async (req) => {
       }
     }
 
-    // Self-re-trigger if more unprocessed links remain
+    // Self-re-trigger if more unprocessed links remain (only for automatic runs)
     const { count: remaining } = await supabase
       .from("video_links")
       .select("id", { count: "exact", head: true })
       .is("unshortened_url", null);
 
-    if (remaining && remaining > 0) {
+    if (!isManualBatch && remaining && remaining > 0) {
       console.log(`Re-triggering: ${remaining} links still unprocessed`);
       try {
         const fnUrl = `${supabaseUrl}/functions/v1/process-video-links`;
