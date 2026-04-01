@@ -120,5 +120,5 @@ export function useApiKeys() {
       .reduce((sum, k) => sum + k.quota_used_today, 0),
   };
 
-  return { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, updateLabel, testKeys };
+  return { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, updateLabel, testKeys, resetQuota };
 }

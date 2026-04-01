@@ -206,9 +206,18 @@ export default function Videos() {
     });
   }, [videos, filters, sortFn]);
 
+  const [dbTotalLinks, setDbTotalLinks] = useState<number | null>(null);
+  useEffect(() => {
+    supabase.rpc("get_keyword_stats").then(({ data }) => {
+      if (data) {
+        const total = (data as any[]).reduce((sum: number, r: any) => sum + Number(r.link_count || 0), 0);
+        setDbTotalLinks(total);
+      }
+    });
+  }, [videos]);
+
   const stats = useMemo(() => {
     const data = filteredAndSorted;
-    const allLinks = data.flatMap((v) => v.links);
     const uniqueChannels = new Set(data.map((v) => v.channel_id));
     const uniquePlatforms = new Set<string>();
     const uniqueRetailers = new Set<string>();
@@ -218,12 +227,12 @@ export default function Videos() {
     }
     return {
       totalVideos: data.length,
-      totalLinks: allLinks.length,
+      totalLinks: dbTotalLinks ?? data.flatMap((v) => v.links).length,
       uniqueChannels: uniqueChannels.size,
       uniquePlatforms: uniquePlatforms.size,
       uniqueRetailers: uniqueRetailers.size,
     };
-  }, [filteredAndSorted]);
+  }, [filteredAndSorted, dbTotalLinks]);
 
   const statCards = [
     { label: "Total Videos", value: stats.totalVideos, icon: VideoIcon, color: "text-primary" },

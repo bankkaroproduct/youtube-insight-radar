@@ -63,6 +63,14 @@ export default function ApiKeys() {
           <FlaskConical className="h-4 w-4 mr-2" />
           Test All Keys
         </Button>
+        <Button
+          variant="outline"
+          onClick={() => resetQuota.mutate()}
+          disabled={keys.length === 0 || resetQuota.isPending}
+        >
+          <RotateCcw className="h-4 w-4 mr-2" />
+          Reset Quota
+        </Button>
         <Button variant="outline" onClick={handleExport} disabled={keys.length === 0}>
           <Download className="h-4 w-4 mr-2" /> Export
         </Button>
