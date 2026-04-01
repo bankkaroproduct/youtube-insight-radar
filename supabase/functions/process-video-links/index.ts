@@ -238,9 +238,45 @@ serve(async (req) => {
 
     const affectedChannels = new Set<string>();
     let totalProcessed = 0;
-    const MAX_TOTAL = 500;
-    const BATCH_SIZE = 50;
+    const MAX_TOTAL = 100;
+    const BATCH_SIZE = 25;
     const videoChannelCache = new Map<string, string>();
+
+    // Step 0: Fast-path skip-domain links (youtube, social, etc.) — no unshortening needed
+    {
+      const { data: skipLinks } = await supabase
+        .from("video_links")
+        .select("id, original_url, video_id")
+        .is("unshortened_url", null)
+        .limit(1000);
+
+      if (skipLinks && skipLinks.length > 0) {
+        const skipUpdates: { id: string; original_url: string; video_id: string }[] = [];
+        for (const link of skipLinks) {
+          const domain = extractDomain(link.original_url);
+          if (SKIP_DOMAINS.has(domain)) {
+            skipUpdates.push(link);
+          }
+        }
+        if (skipUpdates.length > 0) {
+          console.log(`Fast-pathing ${skipUpdates.length} skip-domain links`);
+          await Promise.all(
+            skipUpdates.map(link => {
+              const domain = extractDomain(link.original_url);
+              return supabase.from("video_links").update({
+                unshortened_url: link.original_url,
+                domain: domain,
+                original_domain: domain,
+                classification: "NEUTRAL",
+                is_shortened: false,
+                link_type: "unknown",
+              }).eq("id", link.id);
+            })
+          );
+          totalProcessed += skipUpdates.length;
+        }
+      }
+    }
 
     while (totalProcessed < MAX_TOTAL) {
       const { data: links, error } = await supabase
@@ -572,8 +608,26 @@ serve(async (req) => {
       }
     }
 
+    // Self-re-trigger if more unprocessed links remain
+    const { count: remaining } = await supabase
+      .from("video_links")
+      .select("id", { count: "exact", head: true })
+      .is("unshortened_url", null);
+
+    if (remaining && remaining > 0) {
+      console.log(`Re-triggering: ${remaining} links still unprocessed`);
+      try {
+        const fnUrl = `${supabaseUrl}/functions/v1/process-video-links`;
+        fetch(fnUrl, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }).catch(() => {}); // fire-and-forget
+      } catch {}
+    }
+
     return new Response(JSON.stringify({
-      success: true, processed: totalProcessed, affected_channels: [...affectedChannels],
+      success: true, processed: totalProcessed, remaining: remaining || 0, affected_channels: [...affectedChannels],
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), {
