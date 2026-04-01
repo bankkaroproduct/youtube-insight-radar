@@ -248,7 +248,7 @@ serve(async (req) => {
         .from("video_links")
         .select("id, original_url, video_id")
         .is("unshortened_url", null)
-        .limit(1000);
+        .limit(5000);
 
       if (skipLinks && skipLinks.length > 0) {
         const skipUpdates: { id: string; original_url: string; video_id: string }[] = [];
