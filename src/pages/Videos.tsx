@@ -64,7 +64,17 @@ function getUniqueRetailers(video: Video): string[] {
   return getRetailerShares(video).map(e => e.name);
 }
 
-function downloadVideosCSV(videos: Video[]) {
+async function downloadVideosCSV(videos: Video[]) {
+  // Fetch channel stats
+  const channelIds = [...new Set(videos.map(v => v.channel_id))];
+  const { data: channelData } = await supabase
+    .from("channels")
+    .select("channel_id, subscriber_count, median_views, median_likes")
+    .in("channel_id", channelIds);
+  const channelMap = new Map(
+    (channelData ?? []).map((c: any) => [c.channel_id, c])
+  );
+
   const allPlatforms = new Set<string>();
   const allRetailers = new Set<string>();
   for (const v of videos) {
@@ -75,7 +85,8 @@ function downloadVideosCSV(videos: Video[]) {
   const retailerList = [...allRetailers].sort();
 
   const headers = [
-    "Video ID", "Title", "Channel Name", "Keywords", "Best Rank", "Views", "Likes", "Comments", "Published Date", "Total Links",
+    "Video ID", "Title", "Channel Name", "Subscribers", "Median Views", "Median Likes",
+    "Keywords", "Best Rank", "Views", "Likes", "Comments", "Published Date", "Total Links",
     ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
     ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
   ];
@@ -85,8 +96,12 @@ function downloadVideosCSV(videos: Video[]) {
     const rShares = getRetailerShares(v);
     const pMap = new Map(pShares.map(e => [e.name, e]));
     const rMap = new Map(rShares.map(e => [e.name, e]));
+    const ch = channelMap.get(v.channel_id);
     return [
       v.video_id, v.title, v.channel_name,
+      ch?.subscriber_count ?? "",
+      ch?.median_views ?? "",
+      ch?.median_likes ?? "",
       v.keywords.map(k => k.keyword).join("; "),
       v.best_rank ?? "",
       v.view_count, v.like_count, v.comment_count,
