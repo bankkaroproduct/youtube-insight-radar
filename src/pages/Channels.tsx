@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
 
