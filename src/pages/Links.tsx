@@ -244,6 +244,9 @@ export default function Links() {
           <TabsTrigger value="discovered">
             <RefreshCw className="h-4 w-4 mr-1" /> Discovered ({discoveredPatterns.length})
           </TabsTrigger>
+          <TabsTrigger value="processing">
+            <Play className="h-4 w-4 mr-1" /> Processing
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="platforms">
