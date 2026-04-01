@@ -34,8 +34,6 @@ export function useChannels() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const [showEmpty, setShowEmpty] = useState(false);
-
   const fetchChannels = useCallback(async () => {
     setIsLoading(true);
     const BATCH = 1000;
@@ -43,17 +41,13 @@ export function useChannels() {
     let from = 0;
     try {
       while (true) {
-        let query = supabase
+        const { data, error } = await supabase
           .from("channels")
           .select("*")
+          .gt("total_videos_fetched", 0)
           .order("total_videos_fetched", { ascending: false })
           .range(from, from + BATCH - 1);
 
-        if (!showEmpty) {
-          query = query.gt("total_videos_fetched", 0);
-        }
-
-        const { data, error } = await query;
         if (error) throw error;
         const rows = data ?? [];
         allRows = allRows.concat(rows);
@@ -65,7 +59,7 @@ export function useChannels() {
       toast.error("Failed to load channels");
     }
     setIsLoading(false);
-  }, [showEmpty]);
+  }, []);
 
   const recomputeStats = useCallback(async (channelIds?: string[]) => {
     try {
@@ -84,5 +78,5 @@ export function useChannels() {
     fetchChannels();
   }, [fetchChannels]);
 
-  return { channels, isLoading, refresh: fetchChannels, recomputeStats, showEmpty, setShowEmpty };
+  return { channels, isLoading, refresh: fetchChannels, recomputeStats };
 }
