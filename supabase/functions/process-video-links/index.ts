@@ -313,13 +313,34 @@ serve(async (req) => {
 
       const shortenedLinks: typeof links = [];
       const normalLinks: typeof links = [];
+      const skipLinks: typeof links = [];
       for (const link of links) {
         const domain = extractDomain(link.original_url);
-        if (needsUnshortening(domain)) {
+        if (SKIP_DOMAINS.has(domain)) {
+          skipLinks.push(link);
+        } else if (needsUnshortening(domain)) {
           shortenedLinks.push(link);
         } else {
           normalLinks.push(link);
         }
+      }
+
+      // Fast-path skip-domain links found in main loop
+      if (skipLinks.length > 0) {
+        await Promise.all(
+          skipLinks.map(link => {
+            const domain = extractDomain(link.original_url);
+            return supabase.from("video_links").update({
+              unshortened_url: link.original_url,
+              domain: domain,
+              original_domain: domain,
+              classification: "NEUTRAL",
+              is_shortened: false,
+              link_type: "unknown",
+            }).eq("id", link.id);
+          })
+        );
+        totalProcessed += skipLinks.length;
       }
 
       const unshortenResults = await parallelMap(
