@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { useChannels } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

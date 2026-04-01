@@ -38,22 +38,31 @@ export function useChannels() {
 
   const fetchChannels = useCallback(async () => {
     setIsLoading(true);
-    let query = supabase
-      .from("channels")
-      .select("*")
-      .order("total_videos_fetched", { ascending: false })
-      .limit(999999999);
+    const BATCH = 1000;
+    let allRows: any[] = [];
+    let from = 0;
+    try {
+      while (true) {
+        let query = supabase
+          .from("channels")
+          .select("*")
+          .order("total_videos_fetched", { ascending: false })
+          .range(from, from + BATCH - 1);
 
-    if (!showEmpty) {
-      query = query.gt("total_videos_fetched", 0);
-    }
+        if (!showEmpty) {
+          query = query.gt("total_videos_fetched", 0);
+        }
 
-    const { data, error } = await query;
-
-    if (error) {
+        const { data, error } = await query;
+        if (error) throw error;
+        const rows = data ?? [];
+        allRows = allRows.concat(rows);
+        if (rows.length < BATCH) break;
+        from += BATCH;
+      }
+      setChannels(allRows as any[]);
+    } catch {
       toast.error("Failed to load channels");
-    } else {
-      setChannels((data as any[]) ?? []);
     }
     setIsLoading(false);
   }, [showEmpty]);
