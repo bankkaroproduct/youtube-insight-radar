@@ -75,5 +75,5 @@ export function useChannels() {
     fetchChannels();
   }, [fetchChannels]);
 
-  return { channels, isLoading, refresh: fetchChannels, recomputeStats };
+  return { channels, isLoading, refresh: fetchChannels, recomputeStats, showEmpty, setShowEmpty };
 }
