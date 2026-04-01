@@ -56,7 +56,7 @@ export function useChannels() {
       setChannels((data as any[]) ?? []);
     }
     setIsLoading(false);
-  }, []);
+  }, [showEmpty]);
 
   const recomputeStats = useCallback(async (channelIds?: string[]) => {
     try {
