@@ -1,29 +1,45 @@
 
 
-# Fix Link Processing Timeout
+# Fix Video Count Discrepancy & Quota Reset Error
 
-## Problem
-The `process-video-links` edge function is timing out (confirmed by "connection closed before message completed" error in logs). There are 549 unprocessed links. The function tries to process up to 500 links per invocation, but URL unshortening (amzn.to, wsli.nk, etc.) takes 5-8 seconds per URL, causing the function to exceed the ~60s edge function limit.
+## Issue 1: Video counts differ between Keywords and Videos pages
 
-## Root Causes
-1. **Batch too large**: `MAX_TOTAL = 500` and `BATCH_SIZE = 50` — even with concurrency of 10, unshortening 50 URLs can take 40+ seconds per batch
-2. **No self-re-triggering**: Unlike `process-fetch-queue`, this function doesn't chain itself for remaining unprocessed links
-3. **Skip-domain links waste slots**: YouTube, Facebook, Instagram links (549 unprocessed) don't need unshortening but still occupy batch slots
+**Root cause**: This is expected behavior, not a bug. The Keywords table shows video counts *per keyword* via `get_keyword_stats()`. A single video can appear under multiple keywords (e.g., a video found via "best sneakers" AND "top shoes" counts once in each keyword row). The Videos page shows 1,224 unique videos, while the keyword-level sum is 1,544 because of these overlaps.
 
-## Changes
+**Fix**: No data change needed. Add a tooltip or note in the Keywords table header clarifying "Videos found for this keyword (a video may appear under multiple keywords)."
 
-### `supabase/functions/process-video-links/index.ts`
+| File | Change |
+|------|--------|
+| `src/components/keywords/KeywordsTable.tsx` | Add tooltip to the "Videos" column header explaining per-keyword counting |
 
-| Change | Detail |
-|--------|--------|
-| Reduce `MAX_TOTAL` | From 500 → 100 to stay within timeout |
-| Reduce `BATCH_SIZE` | From 50 → 25 for faster per-batch completion |
-| Skip social/skip-domain links early | For links whose domain is in `SKIP_DOMAINS`, immediately set `unshortened_url = original_url` without fetching — they don't need processing |
-| Add self-re-triggering | After completing a batch cycle, check if more unprocessed links remain. If yes, fire-and-forget a new invocation of itself (same pattern as `process-fetch-queue`) |
+## Issue 2: Quota Reset fails with "UPDATE requires a WHERE clause"
 
-## Technical Detail
+**Root cause**: In `useApiKeys.ts` (line 80-83), after calling `reset_daily_quotas` RPC, a second client-side UPDATE attempts to re-activate all keys using `.neq("id", "00000000-...")` as a fake WHERE clause. PostgREST rejects this pattern in newer versions.
 
-**Skip-domain optimization**: Currently YouTube, Facebook, Instagram links go through the full unshorten pipeline. These should be fast-pathed: set `unshortened_url = original_url`, `domain = original_domain`, `classification = NEUTRAL`, and move on. This alone clears ~80% of the 549 backlog instantly.
+**Fix**: Move the re-activation logic into the `reset_daily_quotas` SQL function itself. This eliminates the client-side UPDATE entirely and runs everything in a single server-side call with SECURITY DEFINER privileges.
 
-**Self-re-trigger**: After the processing loop, query for remaining `unshortened_url IS NULL` links. If any exist, POST to itself fire-and-forget before returning.
+| Component | Change |
+|-----------|--------|
+| Database migration | Update `reset_daily_quotas` function to also set `is_active = true` and `last_test_status = null` |
+| `src/hooks/useApiKeys.ts` | Remove the second `.update()` call from `resetQuota` mutation — the RPC now handles everything |
+
+### Updated SQL function
+```sql
+CREATE OR REPLACE FUNCTION public.reset_daily_quotas()
+RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path TO 'public' AS $$
+  UPDATE public.youtube_api_keys 
+  SET quota_used_today = 0, is_active = true, last_test_status = null;
+$$;
+```
+
+### Updated hook code
+```typescript
+resetQuota: useMutation({
+  mutationFn: async () => {
+    const { error } = await supabase.rpc("reset_daily_quotas" as any);
+    if (error) throw error;
+  },
+  // ... success/error handlers unchanged
+})
+```
 
