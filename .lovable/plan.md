@@ -1,55 +1,70 @@
 
 
-# Fix Blank Videos Page & Optimize Link Processing
+# Fix Unidentified Links — Root Cause & Solution
 
 ## Problem Analysis
 
-**Blank Videos Page**: The network requests show "Failed to fetch" errors on `video_links` and `video_keywords` queries. After the pagination fix, `useVideos.ts` now fetches 2000+ videos, then passes all 2000+ UUIDs into a single `.in("video_id", videoIds)` filter. This creates a URL that exceeds the HTTP URL length limit (~8KB), causing the request to fail silently and the page to render blank.
+Querying the database reveals:
+- **21,814 total links**; **5,998 still unprocessed** (unshortened_url IS NULL)
+- **5,521 processed but unmatched** (have unshortened_url but no matched_pattern_id)
+- **12,492 links with link_type = 'unknown'**
 
-**Link Processing**: The edge function currently processes only 100 links per invocation (MAX_TOTAL = 100) with batches of 25. For 32,115 links this means ~321 self-re-trigger cycles, which is very slow.
+The top unmatched domains fall into two categories:
 
-## Changes
+**Social domains that should be NEUTRAL but weren't caught:**
+instagram.com (1,071), youtu.be (946), youtube.com (635), facebook.com (468), twitter.com (356), t.me (167), whatsapp.com (91), tiktok.com (38), mobile.twitter.com (16), discord.gg (15), wa.me (25), wa.link (15)
+→ ~3,800 links. These ARE in SKIP_DOMAINS but were processed in the main loop before the fast-path could catch them. They got `link_type: 'unknown'` instead of being skipped.
 
-### 1. Fix blank page (`src/hooks/useVideos.ts`)
-- Chunk the `videoIds` array into groups of 200 before passing to `.in()` queries for `video_links` and `video_keywords`
-- Run each chunk through `fetchAllRows`, then merge results
-- This keeps each URL within safe limits
+**Real affiliate/shortener domains not in lookup tables:**
+geni.us (124), go.shopmy.us/shopmy.us (134), amzn.openinapp.co (81), fktr.in (66), amzlink.to (44), bitli.in (41), rstyle.me (20), fkrt.to (15), fkart.openinapp.co (14), howl.link (13), linktw.in (21), urlgeni.us (23), amzn.eu (17)
+→ ~600+ links from affiliate platforms not in KNOWN_SHORTENERS or AFFILIATE_SHORT_DOMAINS.
 
-### 2. Optimize edge function (`supabase/functions/process-video-links/index.ts`)
-- Increase `MAX_TOTAL` from 100 to 500 (process more per invocation)
-- Increase `BATCH_SIZE` from 25 to 50
-- Increase fast-path skip-domain limit from 1000 to 5000
-- Chunk the `.in()` queries in Step 3 (unmatched links) to avoid URL length issues there too
-- Keep the self-re-trigger loop for the remaining links
+## Solution — Two Changes
 
-### 3. Pattern matching logic (already correct)
-The existing edge function already matches:
-- Original URL domain against platform patterns (affiliate_platform type)
-- Unshortened URL domain against retailer patterns (retailer type)
-- Unmatched domains get auto-discovered into affiliate_patterns with `is_confirmed: false`
+### 1. Edge Function Updates (`supabase/functions/process-video-links/index.ts`)
 
-This matches what you described. No logic changes needed, just performance improvements.
+**Expand SKIP_DOMAINS** — add: `mobile.twitter.com`, `wa.link`, `x.com`
 
-## Technical Details
+**Expand KNOWN_SHORTENERS** — add: `geni.us`, `urlgeni.us`, `bitli.in`, `fktr.in`, `fkrt.to`, `amzlink.to`, `amzn.eu`, `linktw.in`, `goo.gl` (already listed but not working because domain check differs)
 
-**Chunked `.in()` helper** for useVideos.ts:
-```typescript
-async function fetchWithChunkedIn<T>(
-  ids: string[],
-  queryFn: (chunk: string[]) => (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>
-): Promise<T[]> {
-  const CHUNK = 200;
-  const chunks = [];
-  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
-  const results = await Promise.all(
-    chunks.map(chunk => fetchAllRows(queryFn(chunk)))
-  );
-  return results.flat();
-}
+**Expand AFFILIATE_SHORT_DOMAINS** (platform name mapping):
+| Domain | Platform |
+|--------|----------|
+| `geni.us` / `urlgeni.us` | Genius Link |
+| `go.shopmy.us` / `shopmy.us` | ShopMy |
+| `rstyle.me` | LTK (RewardStyle) |
+| `howl.link` | Howl |
+| `linktw.in` | LinkTwin |
+| `amzlink.to` / `amzn.eu` | Amazon Associates |
+| `fktr.in` / `fkrt.to` | Flipkart Affiliate |
+| `bitli.in` | Bitli |
+
+**Expand AFFILIATE_REDIRECT_DOMAINS** — add: `openinapp.co`, `shopmy.us`, `geni.us`
+
+**Fix main loop skip-domain handling** — In the main processing loop, after determining `originalDomain`, check SKIP_DOMAINS early and mark as NEUTRAL (same as fast-path) instead of trying to unshorten/match. This prevents social links from getting `link_type: 'unknown'`.
+
+### 2. Database Migration — Fix already-processed social links
+
+Run a migration to retroactively fix the ~3,800 social-domain links that were already processed with wrong classification:
+
+```sql
+UPDATE video_links 
+SET link_type = 'unknown', classification = 'NEUTRAL'
+WHERE original_domain IN (
+  'instagram.com','youtu.be','youtube.com','facebook.com',
+  'twitter.com','t.me','whatsapp.com','tiktok.com',
+  'mobile.twitter.com','discord.gg','wa.me','wa.link',
+  'reddit.com','linkedin.com','pinterest.com','x.com'
+)
+AND matched_pattern_id IS NULL;
 ```
+
+After deploying the updated function, trigger `process-video-links` to:
+1. Process the remaining 5,998 unprocessed links with the new shortener/platform mappings
+2. Re-match the 600+ affiliate links that were previously unrecognized
 
 | File | Change |
 |------|--------|
-| `src/hooks/useVideos.ts` | Chunk `.in()` queries into groups of 200 IDs |
-| `supabase/functions/process-video-links/index.ts` | Increase MAX_TOTAL to 500, BATCH_SIZE to 50, skip-domain limit to 5000 |
+| `supabase/functions/process-video-links/index.ts` | Add ~15 new shortener/platform domains, add skip-domain early-exit in main loop |
+| Database migration | Fix ~3,800 social-domain links to NEUTRAL classification |
 
