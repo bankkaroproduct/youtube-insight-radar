@@ -11,12 +11,15 @@ const KNOWN_SHORTENERS = [
   "buff.ly", "adf.ly", "bl.ink", "lnkd.in", "rb.gy", "cutt.ly",
   "shorturl.at", "link.ck.page", "clk.ink",
   "fkrt.it", "wsli.nk", "tiny.cc", "short.io", "amzn.to",
+  "geni.us", "urlgeni.us", "bitli.in", "fktr.in", "fkrt.to",
+  "amzlink.to", "amzn.eu", "linktw.in",
 ];
 
 // Known affiliate redirect domains that MUST always be unshortened to reveal retailer
 const AFFILIATE_REDIRECT_DOMAINS = [
   "wishlink.com", "lehlah.club", "haulpack.com",
   "earnkaro.com", "cuelinks.com", "magicpin.in",
+  "openinapp.co", "shopmy.us", "geni.us",
 ];
 
 // Domains that use JS-based redirects (not HTTP 3xx) — need HTML parsing
@@ -80,6 +83,18 @@ const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "wsli.nk": "Wishlink",
   "fkrt.it": "Flipkart Affiliate",
   "amzn.to": "Amazon Associates",
+  "geni.us": "Genius Link",
+  "urlgeni.us": "Genius Link",
+  "go.shopmy.us": "ShopMy",
+  "shopmy.us": "ShopMy",
+  "rstyle.me": "LTK (RewardStyle)",
+  "howl.link": "Howl",
+  "linktw.in": "LinkTwin",
+  "amzlink.to": "Amazon Associates",
+  "amzn.eu": "Amazon Associates",
+  "fktr.in": "Flipkart Affiliate",
+  "fkrt.to": "Flipkart Affiliate",
+  "bitli.in": "Bitli",
 };
 
 // Retailer domains → retailer name
@@ -103,6 +118,7 @@ const SKIP_DOMAINS = new Set([
   "wikipedia.org", "github.com", "discord.gg", "discord.com", "t.me",
   "telegram.org", "wa.me", "whatsapp.com", "apple.com", "play.google.com",
   "apps.apple.com", "medium.com", "blogspot.com", "wordpress.com",
+  "mobile.twitter.com", "wa.link", "x.com",
 ]);
 
 function lookupAffiliatePlatform(domain: string): string | null {
@@ -297,13 +313,34 @@ serve(async (req) => {
 
       const shortenedLinks: typeof links = [];
       const normalLinks: typeof links = [];
+      const skipLinks: typeof links = [];
       for (const link of links) {
         const domain = extractDomain(link.original_url);
-        if (needsUnshortening(domain)) {
+        if (SKIP_DOMAINS.has(domain)) {
+          skipLinks.push(link);
+        } else if (needsUnshortening(domain)) {
           shortenedLinks.push(link);
         } else {
           normalLinks.push(link);
         }
+      }
+
+      // Fast-path skip-domain links found in main loop
+      if (skipLinks.length > 0) {
+        await Promise.all(
+          skipLinks.map(link => {
+            const domain = extractDomain(link.original_url);
+            return supabase.from("video_links").update({
+              unshortened_url: link.original_url,
+              domain: domain,
+              original_domain: domain,
+              classification: "NEUTRAL",
+              is_shortened: false,
+              link_type: "unknown",
+            }).eq("id", link.id);
+          })
+        );
+        totalProcessed += skipLinks.length;
       }
 
       const unshortenResults = await parallelMap(
