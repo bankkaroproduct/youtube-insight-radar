@@ -45,7 +45,7 @@ export interface Video {
 const BATCH_SIZE = 1000;
 
 async function fetchAllRows<T>(
-  queryFn: (from: number, to: number) => Promise<{ data: T[] | null; error: any }>
+  queryFn: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>
 ): Promise<T[]> {
   let allRows: T[] = [];
   let from = 0;
