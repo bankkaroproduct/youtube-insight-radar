@@ -72,6 +72,24 @@ export function useApiKeys() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const resetQuota = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("reset_daily_quotas" as any);
+      if (error) throw error;
+      // Re-activate all keys
+      const { error: err2 } = await supabase
+        .from("youtube_api_keys" as any)
+        .update({ is_active: true, last_test_status: null } as any)
+        .neq("id", "00000000-0000-0000-0000-000000000000");
+      if (err2) throw err2;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });
+      toast.success("Quota reset and all keys re-activated");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const updateLabel = useMutation({
     mutationFn: async ({ id, label }: { id: string; label: string }) => {
       const { error } = await supabase
@@ -102,5 +120,5 @@ export function useApiKeys() {
       .reduce((sum, k) => sum + k.quota_used_today, 0),
   };
 
-  return { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, updateLabel, testKeys };
+  return { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, updateLabel, testKeys, resetQuota };
 }
