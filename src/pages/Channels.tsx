@@ -108,6 +108,12 @@ export default function Channels() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
+  const [dbTotalChannels, setDbTotalChannels] = useState<number | null>(null);
+
+  useEffect(() => {
+    supabase.from("channels").select("id", { count: "exact", head: true })
+      .then(({ count }) => setDbTotalChannels(count));
+  }, [channels]);
 
   const filteredAndSorted = useMemo(() => {
     let result = channels.filter((ch: any) => {
