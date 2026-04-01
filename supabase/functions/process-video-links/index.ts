@@ -608,8 +608,26 @@ serve(async (req) => {
       }
     }
 
+    // Self-re-trigger if more unprocessed links remain
+    const { count: remaining } = await supabase
+      .from("video_links")
+      .select("id", { count: "exact", head: true })
+      .is("unshortened_url", null);
+
+    if (remaining && remaining > 0) {
+      console.log(`Re-triggering: ${remaining} links still unprocessed`);
+      try {
+        const fnUrl = `${supabaseUrl}/functions/v1/process-video-links`;
+        fetch(fnUrl, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }).catch(() => {}); // fire-and-forget
+      } catch {}
+    }
+
     return new Response(JSON.stringify({
-      success: true, processed: totalProcessed, affected_channels: [...affectedChannels],
+      success: true, processed: totalProcessed, remaining: remaining || 0, affected_channels: [...affectedChannels],
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), {
