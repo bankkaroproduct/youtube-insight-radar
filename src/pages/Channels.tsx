@@ -112,6 +112,7 @@ export default function Channels() {
 
   useEffect(() => {
     supabase.from("channels").select("id", { count: "exact", head: true })
+      .gt("total_videos_fetched", 0)
       .then(({ count }) => setDbTotalChannels(count));
   }, [channels]);
 
