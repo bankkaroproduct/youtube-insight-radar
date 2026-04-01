@@ -9,7 +9,7 @@ import { ApiKeysTable } from "@/components/api-keys/ApiKeysTable";
 import * as XLSX from "xlsx";
 
 export default function ApiKeys() {
-  const { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, testKeys } = useApiKeys();
+  const { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, testKeys, resetQuota } = useApiKeys();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [testingIds, setTestingIds] = useState<string[]>([]);
 
