@@ -86,20 +86,18 @@ export default function KeywordTable() {
   }, [filtered, sortFn, keywordStats]);
 
   const stats = useMemo(() => {
-    let totalVideos = 0;
     let totalLinks = 0;
     for (const s of keywordStats.values()) {
-      totalVideos += s.video_count;
       totalLinks += s.link_count;
     }
     return {
       total: allKeywords.length,
       completed: allKeywords.filter((k) => k.status === "completed").length,
       pending: allKeywords.filter((k) => k.status === "pending").length,
-      videos: totalVideos,
+      videos: uniqueVideoCount,
       links: totalLinks,
     };
-  }, [allKeywords, keywordStats]);
+  }, [allKeywords, keywordStats, uniqueVideoCount]);
 
   const exportFiltered = () => {
     const data = filtered.map((k) => ({
