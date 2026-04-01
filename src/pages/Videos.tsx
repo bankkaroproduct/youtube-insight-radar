@@ -67,12 +67,22 @@ function getUniqueRetailers(video: Video): string[] {
 async function downloadVideosCSV(videos: Video[]) {
   // Fetch channel stats
   const channelIds = [...new Set(videos.map(v => v.channel_id))];
-  const { data: channelData } = await supabase
-    .from("channels")
-    .select("channel_id, subscriber_count, median_views, median_likes")
-    .in("channel_id", channelIds);
+  const ID_CHUNK = 200;
+  const channelChunks: string[][] = [];
+  for (let i = 0; i < channelIds.length; i += ID_CHUNK) {
+    channelChunks.push(channelIds.slice(i, i + ID_CHUNK));
+  }
+  const channelData = (await Promise.all(
+    channelChunks.map(chunk =>
+      supabase
+        .from("channels")
+        .select("channel_id, subscriber_count, median_views, median_likes")
+        .in("channel_id", chunk)
+        .then(({ data }) => data ?? [])
+    )
+  )).flat();
   const channelMap = new Map(
-    (channelData ?? []).map((c: any) => [c.channel_id, c])
+    channelData.map((c: any) => [c.channel_id, c])
   );
 
   const allPlatforms = new Set<string>();
