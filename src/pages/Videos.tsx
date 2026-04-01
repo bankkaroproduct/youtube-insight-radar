@@ -250,7 +250,7 @@ export default function Videos() {
       uniquePlatforms: uniquePlatforms.size,
       uniqueRetailers: uniqueRetailers.size,
     };
-  }, [filteredAndSorted, dbTotalLinks]);
+  }, [filteredAndSorted, dbTotalLinks, dbTotalVideos]);
 
   const statCards = [
     { label: "Total Videos", value: stats.totalVideos, icon: VideoIcon, color: "text-primary" },
