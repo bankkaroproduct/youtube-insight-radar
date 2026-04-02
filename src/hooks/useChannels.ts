@@ -63,10 +63,27 @@ export function useChannels() {
 
   const recomputeStats = useCallback(async (channelIds?: string[]) => {
     try {
-      const { error } = await supabase.functions.invoke("compute-channel-stats", {
-        body: { channel_ids: channelIds || [] },
-      });
-      if (error) throw error;
+      if (channelIds && channelIds.length > 0) {
+        // Process specific channels in batches of 5
+        for (let i = 0; i < channelIds.length; i += 5) {
+          const batch = channelIds.slice(i, i + 5);
+          const { error } = await supabase.functions.invoke("compute-channel-stats", {
+            body: { channel_ids: batch },
+          });
+          if (error) throw error;
+        }
+      } else {
+        // Process all channels in auto-batched loop
+        let totalUpdated = 0;
+        while (true) {
+          const { data, error } = await supabase.functions.invoke("compute-channel-stats", {
+            body: { batch_size: 5 },
+          });
+          if (error) throw error;
+          totalUpdated += data.updated || 0;
+          if (!data.remaining || data.remaining === 0) break;
+        }
+      }
       toast.success("Channel stats recomputed");
       fetchChannels();
     } catch (e: any) {
