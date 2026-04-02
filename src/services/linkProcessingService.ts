@@ -10,6 +10,7 @@ class LinkProcessingService {
   private batchNum = 0;
   private logs: LogEntry[] = [];
   private listeners = new Set<Listener>();
+  private snapshot: { running: boolean; logs: LogEntry[] } = { running: false, logs: [] };
 
   subscribe(fn: Listener) {
     this.listeners.add(fn);
@@ -17,6 +18,7 @@ class LinkProcessingService {
   }
 
   private notify() {
+    this.snapshot = { running: this.running, logs: this.logs };
     this.listeners.forEach((fn) => fn());
   }
 
@@ -28,7 +30,7 @@ class LinkProcessingService {
   }
 
   getState() {
-    return { running: this.running, logs: this.logs };
+    return this.snapshot;
   }
 
   clearLogs() {
