@@ -18,6 +18,7 @@ class LinkProcessingService {
   }
 
   private notify() {
+    this.snapshot = { running: this.running, logs: this.logs };
     this.listeners.forEach((fn) => fn());
   }
 
