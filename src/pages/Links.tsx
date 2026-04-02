@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { linkProcessingService } from "@/services/linkProcessingService";
 import { useAffiliatePatterns, PatternType } from "@/hooks/useAffiliatePatterns";
 import { supabase } from "@/integrations/supabase/client";
 
