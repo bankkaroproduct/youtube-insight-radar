@@ -365,16 +365,14 @@ function ProcessingTab() {
   const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0 });
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
-  const autoRunRef = useRef(false);
-  const batchNumRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  const addLog = useCallback((msg: string) => {
-    const time = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setLogs((prev) => [...prev, `[${time}] ${msg}`]);
-  }, []);
+  const serviceState = useSyncExternalStore(
+    (cb) => linkProcessingService.subscribe(cb),
+    () => linkProcessingService.getState()
+  );
+  const running = serviceState.running;
+  const logs = serviceState.logs.map((l) => `[${l.time}] ${l.message}`);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -391,18 +389,15 @@ function ProcessingTab() {
       ]);
       const total = totalRes.count || 0;
       const processed = processedRes.count || 0;
-      const result = {
+      setStats({
         total,
         processed,
         unprocessed: total - processed,
         withPlatform: platformRes.count || 0,
         withRetailer: retailerRes.count || 0,
-      };
-      setStats(result);
-      return result;
+      });
     } catch (e) {
       console.error("Failed to fetch stats", e);
-      return null;
     } finally {
       setLoading(false);
     }
@@ -410,63 +405,12 @@ function ProcessingTab() {
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
-  const callEdgeFunction = async (batchSize: number) => {
-    const { data: { session } } = await supabase.auth.getSession();
-    const accessToken = session?.access_token;
-    const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-    const resp = await fetch(
-      `https://${projectId}.supabase.co/functions/v1/process-video-links`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-        },
-        body: JSON.stringify({ batch_size: batchSize }),
-      }
-    );
-    return await resp.json();
-  };
-
-  const startProcessing = async () => {
-    autoRunRef.current = true;
-    setRunning(true);
-    batchNumRef.current = 0;
-    addLog("🚀 Auto-processing started...");
-
-    while (autoRunRef.current) {
-      batchNumRef.current++;
-      const batchNum = batchNumRef.current;
-      try {
-        addLog(`⏳ Batch #${batchNum}: processing...`);
-        const result = await callEdgeFunction(1000);
-        if (!result.success) {
-          addLog(`❌ Batch #${batchNum} failed: ${result.error || "Unknown error"}`);
-          autoRunRef.current = false;
-          break;
-        }
-        addLog(`✅ Batch #${batchNum}: ${result.processed} processed, ${result.remaining?.toLocaleString()} remaining`);
-        await fetchStats();
-        if (result.remaining === 0) {
-          addLog("🎉 All links processed!");
-          autoRunRef.current = false;
-          break;
-        }
-      } catch (e: any) {
-        addLog(`❌ Batch #${batchNum} error: ${e.message}`);
-        autoRunRef.current = false;
-        break;
-      }
-    }
-
-    setRunning(false);
-    addLog("⏹ Processing stopped.");
+  const startProcessing = () => {
+    linkProcessingService.start(fetchStats);
   };
 
   const stopProcessing = () => {
-    autoRunRef.current = false;
-    addLog("🛑 Stopping after current batch...");
+    linkProcessingService.stop();
   };
 
   const handleReset = async () => {
@@ -490,7 +434,7 @@ function ProcessingTab() {
 
       if (error) throw error;
       toast({ title: "Reset complete", description: "All links have been reset to unprocessed state." });
-      setLogs([]);
+      linkProcessingService.clearLogs();
       await fetchStats();
     } catch (e: any) {
       toast({ title: "Reset failed", description: e.message, variant: "destructive" });
