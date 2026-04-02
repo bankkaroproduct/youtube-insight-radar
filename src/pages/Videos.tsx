@@ -108,18 +108,10 @@ async function downloadVideosCSV(videos: Video[]) {
     const rMap = new Map(rShares.map(e => [e.name, e]));
     const ch = channelMap.get(v.channel_id);
 
-    const domainLabels = new Set<string>();
+    const domainSet = new Set<string>();
     for (const link of v.links) {
       const domain = link.domain || link.original_domain;
-      if (!domain) continue;
-      const label = link.platform_name
-        ? `${domain} - ${link.platform_name} Affiliate`
-        : link.retailer_name
-          ? `${domain} - ${link.retailer_name} Retailer`
-          : link.classification
-            ? `${domain} - ${link.classification}`
-            : domain;
-      domainLabels.add(label);
+      if (domain) domainSet.add(domain);
     }
 
     return [
@@ -132,7 +124,7 @@ async function downloadVideosCSV(videos: Video[]) {
       v.view_count, v.like_count, v.comment_count,
       v.published_at ? new Date(v.published_at).toISOString().split("T")[0] : "",
       v.links.length,
-      [...domainLabels].join("; "),
+      [...domainSet].join("; "),
       ...platformList.flatMap(p => { const e = pMap.get(p); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
       ...retailerList.flatMap(r => { const e = rMap.get(r); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
     ];
