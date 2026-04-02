@@ -96,7 +96,7 @@ async function downloadVideosCSV(videos: Video[]) {
 
   const headers = [
     "Video ID", "Title", "Channel Name", "Subscribers", "Median Views", "Median Likes",
-    "Keywords", "Best Rank", "Views", "Likes", "Comments", "Published Date", "Total Links",
+    "Keywords", "Best Rank", "Views", "Likes", "Comments", "Published Date", "Total Links", "Domains",
     ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
     ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
   ];
@@ -107,6 +107,21 @@ async function downloadVideosCSV(videos: Video[]) {
     const pMap = new Map(pShares.map(e => [e.name, e]));
     const rMap = new Map(rShares.map(e => [e.name, e]));
     const ch = channelMap.get(v.channel_id);
+
+    const domainLabels = new Set<string>();
+    for (const link of v.links) {
+      const domain = link.domain || link.original_domain;
+      if (!domain) continue;
+      const label = link.platform_name
+        ? `${domain} - ${link.platform_name} Affiliate`
+        : link.retailer_name
+          ? `${domain} - ${link.retailer_name} Retailer`
+          : link.classification
+            ? `${domain} - ${link.classification}`
+            : domain;
+      domainLabels.add(label);
+    }
+
     return [
       v.video_id, v.title, v.channel_name,
       ch?.subscriber_count ?? "",
@@ -117,6 +132,7 @@ async function downloadVideosCSV(videos: Video[]) {
       v.view_count, v.like_count, v.comment_count,
       v.published_at ? new Date(v.published_at).toISOString().split("T")[0] : "",
       v.links.length,
+      [...domainLabels].join("; "),
       ...platformList.flatMap(p => { const e = pMap.get(p); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
       ...retailerList.flatMap(r => { const e = rMap.get(r); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
     ];
