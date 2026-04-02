@@ -108,18 +108,10 @@ async function downloadVideosCSV(videos: Video[]) {
     const rMap = new Map(rShares.map(e => [e.name, e]));
     const ch = channelMap.get(v.channel_id);
 
-    const domainLabels = new Set<string>();
+    const domainSet = new Set<string>();
     for (const link of v.links) {
       const domain = link.domain || link.original_domain;
-      if (!domain) continue;
-      const label = link.platform_name
-        ? `${domain} - ${link.platform_name} Affiliate`
-        : link.retailer_name
-          ? `${domain} - ${link.retailer_name} Retailer`
-          : link.classification
-            ? `${domain} - ${link.classification}`
-            : domain;
-      domainLabels.add(label);
+      if (domain) domainSet.add(domain);
     }
 
     return [
