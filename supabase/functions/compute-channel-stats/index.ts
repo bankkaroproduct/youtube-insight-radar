@@ -47,7 +47,6 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   else if (hasOwn) affiliateStatus = "WITH_US";
   else if (hasCompetitor) affiliateStatus = "COMPETITOR";
 
-  // Group by text columns — naturally deduplicates multiple domains with same name
   const platformVideoSets = new Map<string, Set<string>>();
   const retailerVideoSets = new Map<string, Set<string>>();
   const retailerViaAffiliateSets = new Map<string, Set<string>>();
@@ -56,7 +55,6 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   const allPlatformNames = new Set<string>();
   const allRetailerNames = new Set<string>();
 
-  // Also count from ALL links (including NEUTRAL) for platform/retailer counts
   const { data: allLinks } = await supabase
     .from("video_links")
     .select("video_id, affiliate_platform, resolved_retailer, link_type")
@@ -73,7 +71,6 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
       if (!retailerVideoSets.has(l.resolved_retailer)) retailerVideoSets.set(l.resolved_retailer, new Set());
       retailerVideoSets.get(l.resolved_retailer)!.add(l.video_id);
 
-      // Split by link_type
       if (l.link_type === "both") {
         if (!retailerViaAffiliateSets.has(l.resolved_retailer)) retailerViaAffiliateSets.set(l.resolved_retailer, new Set());
         retailerViaAffiliateSets.get(l.resolved_retailer)!.add(l.video_id);
@@ -94,7 +91,6 @@ async function processChannel(supabase: any, chId: string): Promise<boolean> {
   for (const [name, videoSet] of retailerViaAffiliateSets) retailerViaAffiliateCounts[name] = videoSet.size;
   for (const [name, videoSet] of retailerDirectSets) retailerDirectCounts[name] = videoSet.size;
 
-  // Legacy affiliate_names from non-NEUTRAL links
   const affiliateNames = [...new Set(
     (links || [])
       .map((l: any) => l.affiliate_platform || l.resolved_retailer)
@@ -130,25 +126,42 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     let channelIds: string[] = body.channel_ids || [];
+    const batchSize = body.batch_size || 5;
 
+    // If no specific channels, pick the next batch that needs recomputing
     if (channelIds.length === 0) {
-      const { data } = await supabase.from("channels").select("channel_id");
+      const { data } = await supabase
+        .from("channels")
+        .select("channel_id")
+        .order("last_analyzed_at", { ascending: true, nullsFirst: true })
+        .limit(batchSize);
       channelIds = (data || []).map((c: any) => c.channel_id);
     }
 
+    if (channelIds.length === 0) {
+      return new Response(JSON.stringify({ success: true, updated: 0, remaining: 0 }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     let updated = 0;
-    const CONCURRENCY = 10;
-    for (let i = 0; i < channelIds.length; i += CONCURRENCY) {
-      const batch = channelIds.slice(i, i + CONCURRENCY);
-      const results = await Promise.allSettled(
-        batch.map(chId => processChannel(supabase, chId))
-      );
-      for (const r of results) {
-        if (r.status === "fulfilled" && r.value) updated++;
+    // Process sequentially to stay within CPU limits
+    for (const chId of channelIds) {
+      try {
+        const ok = await processChannel(supabase, chId);
+        if (ok) updated++;
+      } catch (e) {
+        console.error(`Failed channel ${chId}:`, e.message);
       }
     }
 
-    return new Response(JSON.stringify({ success: true, updated }), {
+    // Count remaining channels not yet analyzed (or analyzed before this run)
+    const { count } = await supabase
+      .from("channels")
+      .select("channel_id", { count: "exact", head: true })
+      .or("last_analyzed_at.is.null");
+
+    return new Response(JSON.stringify({ success: true, updated, remaining: count || 0, batch_size: channelIds.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
