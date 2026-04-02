@@ -30,7 +30,7 @@ class LinkProcessingService {
   }
 
   getState() {
-    return { running: this.running, logs: this.logs };
+    return this.snapshot;
   }
 
   clearLogs() {
