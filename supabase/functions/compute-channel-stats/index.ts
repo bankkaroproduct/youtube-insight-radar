@@ -126,7 +126,7 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     let channelIds: string[] = body.channel_ids || [];
-    const batchSize = body.batch_size || 5;
+    const batchSize = body.batch_size || 3;
 
     // If no specific channels, pick the next batch that needs recomputing
     if (channelIds.length === 0) {
