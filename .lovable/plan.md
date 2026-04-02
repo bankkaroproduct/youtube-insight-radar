@@ -1,32 +1,28 @@
 
 
-# Fetch 50 Videos for 30 Channels with Low Video Counts
+# Fix: Maximum Update Depth Error on Links Page
 
-## What
-Update the `fetch-channel-videos` edge function to support filtering channels by `total_videos_fetched` range, then invoke it for channels with 1-3 fetched videos.
+## Problem
+`linkProcessingService.getState()` returns a **new object reference** on every call (`{ running, logs }`). `useSyncExternalStore` uses `Object.is` to compare snapshots — since a new object is never `===` to the previous one, React re-renders infinitely.
 
-## How
+## Fix
 
-### 1. Update edge function (`supabase/functions/fetch-channel-videos/index.ts`)
-Add optional `min_videos` and `max_videos` body parameters to filter the channel query:
+**File: `src/services/linkProcessingService.ts`**
+
+Cache the state object and only create a new one when `running` or `logs` actually change:
 
 ```typescript
-const minVideos = body.min_videos ?? null;
-const maxVideos = body.max_videos ?? null;
+private snapshot = { running: false as boolean, logs: [] as LogEntry[] };
 
-let query = supabase.from("channels").select("channel_id, channel_name")
-  .order("total_videos_fetched", { ascending: false })
-  .limit(limit);
+getState() {
+  return this.snapshot;
+}
 
-if (minVideos !== null) query = query.gte("total_videos_fetched", minVideos);
-if (maxVideos !== null) query = query.lte("total_videos_fetched", maxVideos);
+private notify() {
+  this.snapshot = { running: this.running, logs: this.logs };
+  this.listeners.forEach((fn) => fn());
+}
 ```
 
-### 2. Deploy and invoke
-Invoke with: `{ "limit": 30, "min_videos": 1, "max_videos": 3 }`
-
-This will fetch the latest 50 videos for 30 channels that currently have 1, 2, or 3 videos fetched.
-
-## Cost
-~30 channels × ~150 API units ≈ ~4,500 quota units total.
+This ensures `getState()` returns the same reference between notifications, which is exactly what `useSyncExternalStore` requires.
 
