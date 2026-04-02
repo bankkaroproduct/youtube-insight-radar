@@ -124,7 +124,7 @@ async function downloadVideosCSV(videos: Video[]) {
       v.view_count, v.like_count, v.comment_count,
       v.published_at ? new Date(v.published_at).toISOString().split("T")[0] : "",
       v.links.length,
-      [...domainLabels].join("; "),
+      [...domainSet].join("; "),
       ...platformList.flatMap(p => { const e = pMap.get(p); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
       ...retailerList.flatMap(r => { const e = rMap.get(r); return [e?.count ?? 0, e ? `${e.share}%` : "0%"]; }),
     ];
