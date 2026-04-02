@@ -200,13 +200,20 @@ serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const limit = body.limit || 50;
     const videosPerChannel = body.videos_per_channel || 50;
+    const minVideos = body.min_videos ?? null;
+    const maxVideos = body.max_videos ?? null;
 
-    // Get top channels by total_videos_fetched
-    const { data: channels, error: chErr } = await supabase
+    // Get channels, optionally filtered by total_videos_fetched range
+    let query = supabase
       .from("channels")
       .select("channel_id, channel_name")
       .order("total_videos_fetched", { ascending: false })
       .limit(limit);
+
+    if (minVideos !== null) query = query.gte("total_videos_fetched", minVideos);
+    if (maxVideos !== null) query = query.lte("total_videos_fetched", maxVideos);
+
+    const { data: channels, error: chErr } = await query;
 
     if (chErr) throw chErr;
     if (!channels || channels.length === 0) {
