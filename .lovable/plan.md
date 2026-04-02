@@ -1,33 +1,32 @@
 
 
-# Fetch Latest 50 Videos for Top 50 Channels
+# Fetch 50 Videos for 30 Channels with Low Video Counts
 
 ## What
-Create and invoke a new backend function that takes the top 50 channels (by `total_videos_fetched`) and fetches their most recent 50 videos each using the YouTube Data API.
+Update the `fetch-channel-videos` edge function to support filtering channels by `total_videos_fetched` range, then invoke it for channels with 1-3 fetched videos.
 
 ## How
 
-### 1. New edge function: `fetch-channel-videos/index.ts`
+### 1. Update edge function (`supabase/functions/fetch-channel-videos/index.ts`)
+Add optional `min_videos` and `max_videos` body parameters to filter the channel query:
 
-- Query `channels` table for top 50 rows ordered by `total_videos_fetched DESC`
-- For each channel, call YouTube Search API with `channelId={id}&order=date&maxResults=50&type=video`
-- Fetch video details (snippet + statistics) in chunks of 50
-- Filter out shorts (< 60s, #shorts in title)
-- Upsert into `videos`, extract description URLs into `video_links`
-- Uses existing `youtube_api_keys` rotation (same pattern as `process-fetch-queue`)
-- Process channels in parallel batches of 5 to stay within edge function time limits
-- Fire-and-forget triggers to `process-video-links` and `compute-channel-stats` after completion
+```typescript
+const minVideos = body.min_videos ?? null;
+const maxVideos = body.max_videos ?? null;
 
-### 2. Invoke the function
+let query = supabase.from("channels").select("channel_id, channel_name")
+  .order("total_videos_fetched", { ascending: false })
+  .limit(limit);
 
-After deploying, invoke it to kick off the fetch immediately.
+if (minVideos !== null) query = query.gte("total_videos_fetched", minVideos);
+if (maxVideos !== null) query = query.lte("total_videos_fetched", maxVideos);
+```
 
-## Technical Details
+### 2. Deploy and invoke
+Invoke with: `{ "limit": 30, "min_videos": 1, "max_videos": 3 }`
 
-| Aspect | Detail |
-|--------|--------|
-| YouTube API cost | ~100 units per search call + 1 unit per video details call per 50 videos ≈ ~150 units per channel, ~7,500 total |
-| Parallelism | 5 channels at a time with API key round-robin |
-| Deduplication | Upsert on `video_id` conflict for videos, `video_id,original_url` for links |
-| No keyword association | These videos won't be linked to any keyword (keyword_id = null) |
+This will fetch the latest 50 videos for 30 channels that currently have 1, 2, or 3 videos fetched.
+
+## Cost
+~30 channels × ~150 API units ≈ ~4,500 quota units total.
 
