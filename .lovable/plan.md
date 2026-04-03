@@ -1,25 +1,20 @@
 
 
-# Simplify Domains Column in Videos CSV
+# Fix Excel Upload Button in Preview
 
-## What
-Change the "Domains" column in the CSV export to show only unique domain names (e.g., `meesho.com; amazon.com`) instead of the current labeled format (`meesho.com - Meesho Retailer`).
+## Problem
+The "Upload Excel" button uses `inputRef.current?.click()` to programmatically trigger a hidden file input. Browser security policies inside iframes (like the Lovable preview) can block this, preventing the file picker from opening.
 
-## How
+## Solution
+Replace the hidden input + button pattern with a `<label>` wrapping approach. Browsers always allow a `<label htmlFor>` to trigger its associated file input, even inside iframes.
 
-**File: `src/pages/Videos.tsx`** — lines 111-123
+## Changes
 
-Replace the current domain labeling logic with simple domain collection:
+**File: `src/components/keywords/ExcelUploadCard.tsx`**
 
-```typescript
-const domainSet = new Set<string>();
-for (const link of v.links) {
-  const domain = link.domain || link.original_domain;
-  if (domain) domainSet.add(domain);
-}
-```
+1. Add an `id` to the hidden file input (e.g., `id="excel-upload-input"`)
+2. Replace the `<Button onClick={...}>` with a `<label htmlFor="excel-upload-input">` styled to look like the existing button
+3. Keep the download template button unchanged
 
-Then on line 135, output `[...domainSet].join("; ")`.
-
-This removes classification labels and just lists each unique domain once per video.
+The upload button will visually remain identical but will now reliably open the file picker in all environments.
 
