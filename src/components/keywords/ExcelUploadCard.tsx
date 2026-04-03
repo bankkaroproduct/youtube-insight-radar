@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Upload, Download } from "lucide-react";
@@ -10,7 +9,6 @@ interface Props {
 }
 
 export function ExcelUploadCard({ onUpload }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -33,7 +31,7 @@ export function ExcelUploadCard({ onUpload }: Props) {
     } catch {
       toast.error("Failed to parse Excel file");
     }
-    if (inputRef.current) inputRef.current.value = "";
+    e.target.value = "";
   };
 
   const downloadTemplate = () => {
@@ -52,13 +50,15 @@ export function ExcelUploadCard({ onUpload }: Props) {
         <CardTitle className="text-sm font-medium">Excel Upload</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        <input id="excel-upload-input" ref={inputRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" />
-        <label
-          htmlFor="excel-upload-input"
-          className="inline-flex items-center justify-center gap-2 w-full h-9 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors"
-        >
+        <div className="relative inline-flex items-center justify-center gap-2 w-full h-9 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors select-none">
           <Upload className="h-4 w-4" /> Upload Excel
-        </label>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleFile}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+        </div>
         <Button variant="ghost" size="sm" className="w-full" onClick={downloadTemplate}>
           <Download className="mr-2 h-4 w-4" /> Download Template
         </Button>
