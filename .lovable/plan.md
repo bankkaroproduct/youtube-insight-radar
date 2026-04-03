@@ -1,20 +1,27 @@
 
 
-# Fix Excel Upload Button in Preview
+# Fix Excel Upload Button
 
 ## Problem
-The "Upload Excel" button uses `inputRef.current?.click()` to programmatically trigger a hidden file input. Browser security policies inside iframes (like the Lovable preview) can block this, preventing the file picker from opening.
+The `Button` component with `asChild` uses Radix UI's `Slot`, which can interfere with the native `<label htmlFor>` click-to-trigger-input behavior. The `Slot` component merges props and may prevent the label's default action from reaching the hidden file input.
 
 ## Solution
-Replace the hidden input + button pattern with a `<label>` wrapping approach. Browsers always allow a `<label htmlFor>` to trigger its associated file input, even inside iframes.
+Remove `asChild` and the `Button` wrapper entirely. Style the `<label>` directly with Tailwind classes to match the outline button appearance. This ensures the native label-input association works without any Radix interference.
 
 ## Changes
 
 **File: `src/components/keywords/ExcelUploadCard.tsx`**
 
-1. Add an `id` to the hidden file input (e.g., `id="excel-upload-input"`)
-2. Replace the `<Button onClick={...}>` with a `<label htmlFor="excel-upload-input">` styled to look like the existing button
-3. Keep the download template button unchanged
+Replace the current Button+label combination (lines 56-60) with a plain `<label>` styled to look like the outline button:
 
-The upload button will visually remain identical but will now reliably open the file picker in all environments.
+```tsx
+<label
+  htmlFor="excel-upload-input"
+  className="inline-flex items-center justify-center gap-2 w-full h-9 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors"
+>
+  <Upload className="h-4 w-4" /> Upload Excel
+</label>
+```
+
+This removes the Radix `Slot` layer entirely while keeping the same visual appearance.
 
