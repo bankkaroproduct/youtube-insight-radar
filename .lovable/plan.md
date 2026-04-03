@@ -1,33 +1,40 @@
 
-Fix the Excel upload by replacing the current label-based trigger with a directly clickable native file input surface.
+Fix the Excel upload by switching from a custom “fake button” trigger to a visible native file input.
 
 What I found
-- `src/components/keywords/ExcelUploadCard.tsx` already uses the plain `<label htmlFor="excel-upload-input">` approach, so the previous fix is already present.
-- The session replay shows repeated clicks plus text-selection events on the upload control, which suggests the click is landing on the visible text/button area but not reliably opening the file picker.
-- There is another upload flow in `src/components/links/BulkUploadDialog.tsx`, but the Excel uploader is still using a fragile hidden-input trigger pattern.
+- `src/components/keywords/ExcelUploadCard.tsx` already uses the transparent overlay approach, so the previous fixes are present but still not solving it.
+- Your screenshot shows the upload control rendering as a very thin strip instead of a normal button, which matches a native file input / overlay styling issue.
+- The session replay shows repeated clicks on the same element with no picker opening, so the click target itself is the problem.
+- The actual import logic in `handleFile` looks fine; the failure is at the file-picker trigger stage.
 
 Plan
-1. Update `src/components/keywords/ExcelUploadCard.tsx`
-   - Replace the hidden sibling `<input>` + `<label htmlFor>` setup.
-   - Use a `relative` wrapper where the real `<input type="file">` sits over the full button area (`absolute inset-0`, transparent, full size, cursor pointer).
-   - Keep the visible upload UI looking the same.
+1. Replace the custom upload surface in `src/components/keywords/ExcelUploadCard.tsx`
+   - Remove the `relative` div + invisible overlaid file input.
+   - Use a normal visible file input instead of trying to simulate a button.
 
-2. Make the interaction reliable
-   - Add `select-none` so repeated clicks do not select the “Upload Excel” text.
-   - Preserve hover/focus styling on the visible surface with wrapper-based classes.
+2. Style the native input with the existing shared input styles
+   - Reuse the project’s `Input` component for `type="file"` so it keeps the app’s design while staying natively clickable.
+   - Keep accepted formats limited to `.xlsx,.xls`.
 
-3. Keep the upload logic intact
-   - Leave the existing Excel parsing with `xlsx` unchanged.
-   - Keep `onUpload(rows, file.name)` unchanged.
-   - Clear the input after handling so the same file can be uploaded again.
-   - Leave the template download button unchanged.
+3. Keep the Excel parsing/import flow unchanged
+   - Preserve `handleFile`, `xlsx` parsing, toast errors, and `onUpload(rows, file.name)`.
+   - Keep clearing `e.target.value` so the same file can be selected again.
+   - Leave the “Download Template” button unchanged.
+
+4. Minor cleanup
+   - Remove any no-longer-needed upload-specific wrapper styling.
+   - Keep the card layout simple and reliable.
 
 Technical details
-- File to update: `src/components/keywords/ExcelUploadCard.tsx`
-- This supersedes the current `htmlFor` fix because the native input itself will receive the click, which is more reliable in embedded preview environments.
-- The `useRef` reset can likely be removed and replaced with clearing `e.currentTarget.value`.
+- Main file: `src/components/keywords/ExcelUploadCard.tsx`
+- Likely change:
+  ```tsx
+  <Input type="file" accept=".xlsx,.xls" onChange={handleFile} className="cursor-pointer" />
+  ```
+- This avoids browser/iframe quirks around hidden inputs, labels, overlays, and proxy click targets.
 
 Validation
-- Clicking anywhere on “Upload Excel” should open the file picker.
-- Selecting a valid `.xlsx` or `.xls` file should trigger the existing import flow.
-- Re-uploading the same file should still work after the input reset.
+- The upload control should appear as a normal full-height input, not a thin strip.
+- Clicking anywhere inside the file input should open the file picker.
+- Selecting an Excel file should trigger the existing import flow.
+- Re-selecting the same file should still work.
