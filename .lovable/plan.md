@@ -1,27 +1,33 @@
 
+Fix the Excel upload by replacing the current label-based trigger with a directly clickable native file input surface.
 
-# Fix Excel Upload Button
+What I found
+- `src/components/keywords/ExcelUploadCard.tsx` already uses the plain `<label htmlFor="excel-upload-input">` approach, so the previous fix is already present.
+- The session replay shows repeated clicks plus text-selection events on the upload control, which suggests the click is landing on the visible text/button area but not reliably opening the file picker.
+- There is another upload flow in `src/components/links/BulkUploadDialog.tsx`, but the Excel uploader is still using a fragile hidden-input trigger pattern.
 
-## Problem
-The `Button` component with `asChild` uses Radix UI's `Slot`, which can interfere with the native `<label htmlFor>` click-to-trigger-input behavior. The `Slot` component merges props and may prevent the label's default action from reaching the hidden file input.
+Plan
+1. Update `src/components/keywords/ExcelUploadCard.tsx`
+   - Replace the hidden sibling `<input>` + `<label htmlFor>` setup.
+   - Use a `relative` wrapper where the real `<input type="file">` sits over the full button area (`absolute inset-0`, transparent, full size, cursor pointer).
+   - Keep the visible upload UI looking the same.
 
-## Solution
-Remove `asChild` and the `Button` wrapper entirely. Style the `<label>` directly with Tailwind classes to match the outline button appearance. This ensures the native label-input association works without any Radix interference.
+2. Make the interaction reliable
+   - Add `select-none` so repeated clicks do not select the “Upload Excel” text.
+   - Preserve hover/focus styling on the visible surface with wrapper-based classes.
 
-## Changes
+3. Keep the upload logic intact
+   - Leave the existing Excel parsing with `xlsx` unchanged.
+   - Keep `onUpload(rows, file.name)` unchanged.
+   - Clear the input after handling so the same file can be uploaded again.
+   - Leave the template download button unchanged.
 
-**File: `src/components/keywords/ExcelUploadCard.tsx`**
+Technical details
+- File to update: `src/components/keywords/ExcelUploadCard.tsx`
+- This supersedes the current `htmlFor` fix because the native input itself will receive the click, which is more reliable in embedded preview environments.
+- The `useRef` reset can likely be removed and replaced with clearing `e.currentTarget.value`.
 
-Replace the current Button+label combination (lines 56-60) with a plain `<label>` styled to look like the outline button:
-
-```tsx
-<label
-  htmlFor="excel-upload-input"
-  className="inline-flex items-center justify-center gap-2 w-full h-9 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors"
->
-  <Upload className="h-4 w-4" /> Upload Excel
-</label>
-```
-
-This removes the Radix `Slot` layer entirely while keeping the same visual appearance.
-
+Validation
+- Clicking anywhere on “Upload Excel” should open the file picker.
+- Selecting a valid `.xlsx` or `.xls` file should trigger the existing import flow.
+- Re-uploading the same file should still work after the input reset.
