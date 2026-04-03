@@ -52,9 +52,11 @@ export function ExcelUploadCard({ onUpload }: Props) {
         <CardTitle className="text-sm font-medium">Excel Upload</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" />
-        <Button variant="outline" size="sm" className="w-full" onClick={() => inputRef.current?.click()}>
-          <Upload className="mr-2 h-4 w-4" /> Upload Excel
+        <input id="excel-upload-input" ref={inputRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" />
+        <Button variant="outline" size="sm" className="w-full cursor-pointer" asChild>
+          <label htmlFor="excel-upload-input" className="flex items-center justify-center gap-2 w-full h-full">
+            <Upload className="h-4 w-4" /> Upload Excel
+          </label>
         </Button>
         <Button variant="ghost" size="sm" className="w-full" onClick={downloadTemplate}>
           <Download className="mr-2 h-4 w-4" /> Download Template
