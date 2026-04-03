@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, Download } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Download } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 
@@ -11,7 +12,8 @@ interface Props {
 export function ExcelUploadCard({ onUpload }: Props) {
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.currentTarget;
+    const file = input.files?.[0];
     if (!file) return;
     try {
       const data = await file.arrayBuffer();
@@ -30,8 +32,9 @@ export function ExcelUploadCard({ onUpload }: Props) {
       await onUpload(rows, file.name);
     } catch {
       toast.error("Failed to parse Excel file");
+    } finally {
+      input.value = "";
     }
-    e.target.value = "";
   };
 
   const downloadTemplate = () => {
@@ -50,15 +53,7 @@ export function ExcelUploadCard({ onUpload }: Props) {
         <CardTitle className="text-sm font-medium">Excel Upload</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        <div className="relative inline-flex items-center justify-center gap-2 w-full h-9 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors select-none">
-          <Upload className="h-4 w-4" /> Upload Excel
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleFile}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          />
-        </div>
+        <Input type="file" accept=".xlsx,.xls" onChange={handleFile} className="cursor-pointer file:cursor-pointer" />
         <Button variant="ghost" size="sm" className="w-full" onClick={downloadTemplate}>
           <Download className="mr-2 h-4 w-4" /> Download Template
         </Button>
