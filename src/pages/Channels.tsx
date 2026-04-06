@@ -312,8 +312,8 @@ export default function Channels() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}</TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {ch.youtube_total_videos && ch.total_videos_fetched >= ch.youtube_total_videos
-                          ? `${ch.total_videos_fetched}-Till date`
+                        {ch.youtube_total_videos != null && ch.youtube_total_videos < 50
+                          ? `${ch.youtube_total_videos}-Till date`
                           : ch.total_videos_fetched}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(ch.median_views)}</TableCell>
