@@ -239,6 +239,26 @@ function matchPattern(domain: string, url: string, patterns: Pattern[], filterTy
 const RESOLVE_BATCH = 10;
 const RESOLVE_DELAY_MS = 200;
 
+// Rate limit helper for unshorten API
+async function checkUnshortenQuota(supabase: any, cost: number): Promise<boolean> {
+  const { data } = await supabase
+    .from("rate_limits")
+    .select("requests_today, quota_limit, last_reset")
+    .eq("key", "unshorten_api")
+    .single();
+  if (!data) return true;
+  const lastReset = new Date(data.last_reset);
+  const now = new Date();
+  let current = data.requests_today;
+  if (lastReset.toDateString() !== now.toDateString()) {
+    await supabase.from("rate_limits").update({ requests_today: 0, last_reset: now.toISOString() }).eq("key", "unshorten_api");
+    current = 0;
+  }
+  if (current + cost > data.quota_limit) return false;
+  await supabase.from("rate_limits").update({ requests_today: current + cost }).eq("key", "unshorten_api");
+  return true;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
