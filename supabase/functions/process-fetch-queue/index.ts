@@ -40,6 +40,33 @@ async function incrementQuota(supabase: any, keyId: string, units: number, quota
   }).eq("id", keyId);
 }
 
+// Global rate limit check + increment
+async function checkAndIncrementRateLimit(supabase: any, key: string, cost: number): Promise<{ allowed: boolean; remaining: number }> {
+  const { data } = await supabase
+    .from("rate_limits")
+    .select("requests_today, quota_limit, last_reset")
+    .eq("key", key)
+    .single();
+
+  if (!data) return { allowed: true, remaining: 999999 };
+
+  // Auto-reset if last_reset is not today
+  const lastReset = new Date(data.last_reset);
+  const now = new Date();
+  let currentRequests = data.requests_today;
+  if (lastReset.toDateString() !== now.toDateString()) {
+    await supabase.from("rate_limits").update({ requests_today: 0, last_reset: now.toISOString() }).eq("key", key);
+    currentRequests = 0;
+  }
+
+  if (currentRequests + cost > data.quota_limit) {
+    return { allowed: false, remaining: data.quota_limit - currentRequests };
+  }
+
+  await supabase.from("rate_limits").update({ requests_today: currentRequests + cost }).eq("key", key);
+  return { allowed: true, remaining: data.quota_limit - currentRequests - cost };
+}
+
 function extractUrls(text: string): string[] {
   if (!text) return [];
   const urlRegex = /https?:\/\/[^\s<>"')\]]+/gi;
@@ -50,6 +77,13 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
   if (channelIds.length === 0) return;
   
   try {
+    // Check rate limit (channels.list = 1 unit)
+    const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 1);
+    if (!rlCheck.allowed) {
+      console.log("YouTube quota exhausted, skipping channel details fetch");
+      return;
+    }
+
     const params = new URLSearchParams({
       part: "snippet,statistics,brandingSettings,topicDetails",
       id: channelIds.join(","),
@@ -122,6 +156,21 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
   let currentKey = apiKeyData;
 
   for (let page = 0; page < MAX_PAGES; page++) {
+    // Check rate limit before each search call (search.list = 100 units)
+    const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 100);
+    if (!rlCheck.allowed) {
+      console.log(`YouTube quota exhausted (remaining: ${rlCheck.remaining}). Stopping job ${job.id}.`);
+      if (page === 0) {
+        await supabase.from("fetch_jobs").update({
+          status: "failed",
+          error_message: "YouTube API quota exhausted for today. Resets at midnight.",
+          completed_at: new Date().toISOString(),
+        }).eq("id", job.id);
+        return { channelIds: [], keyUsed: currentKey };
+      }
+      break;
+    }
+
     const params = new URLSearchParams({
       part: "snippet",
       q: job.keyword,
@@ -141,12 +190,11 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
       const reason = body?.error?.errors?.[0]?.reason;
       if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
         await markKeyExhausted(supabase, currentKey.id);
-        // Try to get a replacement key
         const replacements = await getAvailableApiKeys(supabase, 1);
         if (replacements.length > 0) {
           currentKey = replacements[0];
           quotaCache.set(currentKey.id, currentKey.quota_used_today);
-          page--; // retry this page
+          page--;
           continue;
         }
         if (page === 0) {
@@ -181,6 +229,13 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
       videos_found: 0,
       completed_at: new Date().toISOString(),
     }).eq("id", job.id);
+    // Cache the keyword even with 0 results
+    await supabase.from("keyword_cache").upsert({
+      keyword: job.keyword.toLowerCase().trim(),
+      fetched_at: new Date().toISOString(),
+      video_ids: [],
+      videos_found: 0,
+    }, { onConflict: "keyword" });
     return { channelIds: [], keyUsed: currentKey };
   }
 
@@ -189,13 +244,16 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
   const channelRecordsMap = new Map<string, any>();
   const videoSnippets = new Map<string, any>();
 
-  // Fetch video details in parallel chunks
   const detailChunks: string[][] = [];
   for (let i = 0; i < allVideoIds.length; i += 50) {
     detailChunks.push(allVideoIds.slice(i, i + 50));
   }
 
   const chunkResults = await Promise.all(detailChunks.map(async (chunk) => {
+    // Rate limit: videos.list = 1 unit per call
+    const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 1);
+    if (!rlCheck.allowed) return [];
+
     const detailParams = new URLSearchParams({
       part: "snippet,statistics,contentDetails",
       id: chunk.join(","),
@@ -307,6 +365,14 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
     }).eq("id", job.keyword_id);
   }
 
+  // Cache the keyword
+  await supabase.from("keyword_cache").upsert({
+    keyword: job.keyword.toLowerCase().trim(),
+    fetched_at: new Date().toISOString(),
+    video_ids: allVideoIds.slice(0, 100),
+    videos_found: videoRecords.length,
+  }, { onConflict: "keyword" });
+
   return { channelIds: [...allChannelIds], keyUsed: currentKey };
 }
 
@@ -317,6 +383,30 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
+
+    // Check global YouTube rate limit before processing any jobs
+    const { data: ytQuota } = await supabase
+      .from("rate_limits")
+      .select("requests_today, quota_limit, last_reset")
+      .eq("key", "youtube_api")
+      .single();
+
+    if (ytQuota) {
+      const lastReset = new Date(ytQuota.last_reset);
+      const now = new Date();
+      if (lastReset.toDateString() !== now.toDateString()) {
+        await supabase.from("rate_limits").update({ requests_today: 0, last_reset: now.toISOString() }).eq("key", "youtube_api");
+      } else if (ytQuota.requests_today >= ytQuota.quota_limit) {
+        // Mark all pending jobs as failed due to quota
+        await supabase.from("fetch_jobs")
+          .update({ status: "failed", error_message: "YouTube API quota exhausted for today.", completed_at: new Date().toISOString() })
+          .eq("status", "pending");
+        return new Response(JSON.stringify({ error: "YouTube API quota exhausted" }), {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
 
     const { data: pendingJobs, error: fetchError } = await supabase
       .from("fetch_jobs")
@@ -332,7 +422,6 @@ serve(async (req) => {
       });
     }
 
-    // Get multiple API keys for parallel processing
     const availableKeys = await getAvailableApiKeys(supabase, Math.min(pendingJobs.length, MAX_PARALLEL_JOBS));
     if (availableKeys.length === 0) {
       return new Response(JSON.stringify({ error: "No available API keys with remaining quota" }), {
@@ -348,7 +437,6 @@ serve(async (req) => {
 
     const allChannelIds = new Set<string>();
 
-    // Assign each job an API key (round-robin)
     const jobPromises = pendingJobs.map((job: any, idx: number) => {
       const key = availableKeys[idx % availableKeys.length];
       return processJob(supabase, job, key, quotaCache)

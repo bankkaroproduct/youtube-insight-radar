@@ -298,6 +298,27 @@ export type Database = {
         }
         Relationships: []
       }
+      keyword_cache: {
+        Row: {
+          fetched_at: string
+          keyword: string
+          video_ids: Json | null
+          videos_found: number | null
+        }
+        Insert: {
+          fetched_at?: string
+          keyword: string
+          video_ids?: Json | null
+          videos_found?: number | null
+        }
+        Update: {
+          fetched_at?: string
+          keyword?: string
+          video_ids?: Json | null
+          videos_found?: number | null
+        }
+        Relationships: []
+      }
       keywords_search_runs: {
         Row: {
           business_aim: string
@@ -343,6 +364,27 @@ export type Database = {
           source_name?: string | null
           status?: string
           user_id?: string | null
+        }
+        Relationships: []
+      }
+      rate_limits: {
+        Row: {
+          key: string
+          last_reset: string
+          quota_limit: number
+          requests_today: number
+        }
+        Insert: {
+          key: string
+          last_reset?: string
+          quota_limit: number
+          requests_today?: number
+        }
+        Update: {
+          key?: string
+          last_reset?: string
+          quota_limit?: number
+          requests_today?: number
         }
         Relationships: []
       }
