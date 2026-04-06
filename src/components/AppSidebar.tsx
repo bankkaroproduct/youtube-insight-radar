@@ -11,6 +11,7 @@ import {
   Shield,
   UserCog,
   LayoutDashboard,
+  Instagram,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -40,6 +41,7 @@ const discoveryItems = [
 const intelligenceItems = [
   { title: "Channels", url: "/channels", icon: Users },
   { title: "Affiliates", url: "/links", icon: Link },
+  { title: "Instagram", url: "/instagram", icon: Instagram },
 ];
 
 
