@@ -1,0 +1,1 @@
+ALTER TABLE public.instagram_profiles ADD COLUMN is_private boolean DEFAULT false;

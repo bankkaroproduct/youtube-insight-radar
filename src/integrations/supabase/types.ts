@@ -264,6 +264,7 @@ export type Database = {
           id: string
           instagram_username: string
           is_business: boolean | null
+          is_private: boolean | null
           post_count: number | null
           profile_pic_url: string | null
           recent_posts: Json | null
@@ -289,6 +290,7 @@ export type Database = {
           id?: string
           instagram_username: string
           is_business?: boolean | null
+          is_private?: boolean | null
           post_count?: number | null
           profile_pic_url?: string | null
           recent_posts?: Json | null
@@ -314,6 +316,7 @@ export type Database = {
           id?: string
           instagram_username?: string
           is_business?: boolean | null
+          is_private?: boolean | null
           post_count?: number | null
           profile_pic_url?: string | null
           recent_posts?: Json | null
