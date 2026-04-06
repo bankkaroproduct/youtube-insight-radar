@@ -450,8 +450,17 @@ serve(async (req) => {
               totalCached++;
               return { ...link, finalUrl: cached };
             }
-            // Resolve via API
+            // Resolve via API (with rate limit check)
             try {
+              const quotaOk = await checkUnshortenQuota(supabase, 1);
+              if (!quotaOk) {
+                // Quota exhausted - use fallback (HTTP redirect, no API)
+                const finalUrl = await fallbackUnshorten(link.original_url);
+                urlCache.set(link.original_url, finalUrl);
+                if (finalUrl !== link.original_url) totalResolved++;
+                else totalFailed++;
+                return { ...link, finalUrl };
+              }
               const finalUrl = await unshortenUrl(link.original_url);
               urlCache.set(link.original_url, finalUrl);
               if (finalUrl !== link.original_url) {
