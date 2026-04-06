@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useVideos, Video } from "@/hooks/useVideos";
 import { supabase } from "@/integrations/supabase/client";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Link2, Tag, Users, AlertTriangle, Globe, Store, Download } from "lucide-react";
+import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, ChevronLeft, Link2, Tag, Users, AlertTriangle, Globe, Store, Download } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
@@ -65,7 +65,6 @@ function getUniqueRetailers(video: Video): string[] {
 }
 
 async function downloadVideosCSV(videos: Video[]) {
-  // Fetch channel stats including email and instagram
   const channelIds = [...new Set(videos.map(v => v.channel_id))];
   const ID_CHUNK = 200;
   const channelChunks: string[][] = [];
@@ -81,9 +80,7 @@ async function downloadVideosCSV(videos: Video[]) {
         .then(({ data }) => data ?? [])
     )
   )).flat();
-  const channelMap = new Map(
-    channelData.map((c: any) => [c.channel_id, c])
-  );
+  const channelMap = new Map(channelData.map((c: any) => [c.channel_id, c]));
 
   const allPlatforms = new Set<string>();
   const allRetailers = new Set<string>();
@@ -205,7 +202,7 @@ function VideoDetailRow({ video }: { video: Video }) {
 }
 
 export default function Videos() {
-  const { videos, isLoading, refresh } = useVideos();
+  const { videos, stats, isLoading, isStatsLoading, refresh, page, totalCount, hasMore, goToPage, pageSize } = useVideos();
   const [searchParams] = useSearchParams();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState({ title: "", channel: searchParams.get("channel") || "", keyword: "", classification: "" });
@@ -245,32 +242,7 @@ export default function Videos() {
     });
   }, [videos, filters, sortFn]);
 
-  const [dbTotalLinks, setDbTotalLinks] = useState<number | null>(null);
-  const [dbTotalVideos, setDbTotalVideos] = useState<number | null>(null);
-  useEffect(() => {
-    supabase.from("video_links").select("id", { count: "exact", head: true })
-      .then(({ count }) => setDbTotalLinks(count));
-    supabase.from("videos").select("id", { count: "exact", head: true })
-      .then(({ count }) => setDbTotalVideos(count));
-  }, [videos]);
-
-  const stats = useMemo(() => {
-    const data = filteredAndSorted;
-    const uniqueChannels = new Set(data.map((v) => v.channel_id));
-    const uniquePlatforms = new Set<string>();
-    const uniqueRetailers = new Set<string>();
-    for (const v of data) {
-      for (const name of getUniquePlatforms(v)) uniquePlatforms.add(name);
-      for (const name of getUniqueRetailers(v)) uniqueRetailers.add(name);
-    }
-    return {
-      totalVideos: dbTotalVideos ?? data.length,
-      totalLinks: dbTotalLinks ?? data.flatMap((v) => v.links).length,
-      uniqueChannels: uniqueChannels.size,
-      uniquePlatforms: uniquePlatforms.size,
-      uniqueRetailers: uniqueRetailers.size,
-    };
-  }, [filteredAndSorted, dbTotalLinks, dbTotalVideos]);
+  const totalPages = Math.ceil(totalCount / pageSize);
 
   const statCards = [
     { label: "Total Videos", value: stats.totalVideos, icon: VideoIcon, color: "text-primary" },
@@ -285,7 +257,9 @@ export default function Videos() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold">Videos</h1>
-          <p className="text-muted-foreground mt-1">{videos.length} videos fetched from YouTube.</p>
+          <p className="text-muted-foreground mt-1">
+            Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, totalCount)} of {totalCount} videos.
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => downloadVideosCSV(filteredAndSorted)}>
@@ -304,7 +278,11 @@ export default function Videos() {
               <div className="flex items-center gap-3">
                 <s.icon className={`h-8 w-8 ${s.color}`} />
                 <div>
-                  <p className="text-2xl font-bold">{s.value}</p>
+                  {isStatsLoading ? (
+                    <Skeleton className="h-7 w-16" />
+                  ) : (
+                    <p className="text-2xl font-bold">{s.value}</p>
+                  )}
                   <p className="text-xs text-muted-foreground">{s.label}</p>
                 </div>
               </div>
@@ -322,140 +300,157 @@ export default function Videos() {
         <CardContent>
           {isLoading ? (
             <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
-          ) : videos.length === 0 ? (
+          ) : videos.length === 0 && page === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
               No videos yet. Fetch videos by running keyword jobs from the Keywords page.
             </div>
           ) : (
-            <div className="overflow-auto max-h-[700px]">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[30px]"></TableHead>
-                    <TableHead className="w-[50px]">Thumb</TableHead>
-                    <SortableHeader label="Title" sortKey="title" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Channel" sortKey="channel" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Keywords</TableHead>
-                    <SortableHeader label="Rank" sortKey="rank" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Links" sortKey="links" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Platforms</TableHead>
-                    <TableHead>Retailers</TableHead>
-                    <SortableHeader label="Published" sortKey="published" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead className="w-[40px]"></TableHead>
-                  </TableRow>
-                  <TableRow className="bg-muted/30">
-                    <TableHead />
-                    <TableHead />
-                    <TableHead><Input placeholder="Filter title..." className="h-7 text-xs" value={filters.title} onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))} /></TableHead>
-                    <TableHead><Input placeholder="Filter channel..." className="h-7 text-xs" value={filters.channel} onChange={(e) => setFilters(f => ({ ...f, channel: e.target.value }))} /></TableHead>
-                    <TableHead><Input placeholder="Filter keyword..." className="h-7 text-xs" value={filters.keyword} onChange={(e) => setFilters(f => ({ ...f, keyword: e.target.value }))} /></TableHead>
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead>
-                      <Select value={filters.classification} onValueChange={(v) => setFilters(f => ({ ...f, classification: v === "all" ? "" : v }))}>
-                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All</SelectItem>
-                          <SelectItem value="OWN">Own</SelectItem>
-                          <SelectItem value="COMPETITOR">Competitor</SelectItem>
-                          <SelectItem value="NEUTRAL">Neutral</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </TableHead>
-                    <TableHead />
-                    <TableHead />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredAndSorted.map((v) => {
-                    const platformShares = getPlatformShares(v);
-                    const retailerShares = getRetailerShares(v);
-                    return (
-                      <>
-                        <TableRow key={v.id} className="cursor-pointer" onClick={() => toggleExpand(v.id)}>
-                          <TableCell>
-                            {expandedIds.has(v.id) ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-                          </TableCell>
-                          <TableCell>
-                            {v.thumbnail_url ? <img src={v.thumbnail_url} alt="" className="w-12 h-8 rounded object-cover" /> : <div className="w-12 h-8 rounded bg-muted" />}
-                          </TableCell>
-                          <TableCell className="max-w-[300px]">
-                            <a
-                              href={`https://www.youtube.com/watch?v=${v.video_id}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-medium text-sm text-primary hover:underline"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <ExpandableText text={v.title} maxLength={80} />
-                            </a>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">{v.channel_name}</TableCell>
-                          <TableCell>
-                            {v.keywords.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {v.keywords.map((kw) => (<Badge key={kw.id} variant="secondary" className="text-xs">{kw.keyword}</Badge>))}
-                              </div>
-                            ) : "—"}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums font-medium">{v.best_rank != null ? `#${v.best_rank}` : "—"}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatNumber(v.view_count)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatNumber(v.like_count)}</TableCell>
-                          <TableCell>
-                            {v.links.length > 0 ? (
-                              <div className="flex flex-wrap gap-1 max-w-[200px]">
-                                {v.links.slice(0, 3).map((link) => (
-                                  <Badge key={link.id} variant="outline" className="text-xs truncate max-w-[150px]">
-                                    {link.domain || new URL(link.original_url).hostname}
-                                  </Badge>
-                                ))}
-                                {v.links.length > 3 && <Badge variant="secondary" className="text-xs">+{v.links.length - 3}</Badge>}
-                              </div>
-                            ) : "—"}
-                          </TableCell>
-                          <TableCell>
-                            {platformShares.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {platformShares.map((e) => (
-                                  <Badge key={e.name} variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">
-                                    {e.name} {e.share}%
-                                  </Badge>
-                                ))}
-                              </div>
-                            ) : "—"}
-                          </TableCell>
-                          <TableCell>
-                            {retailerShares.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {retailerShares.map((e) => (
-                                  <Badge key={e.name} variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">
-                                    {e.name} {e.share}%
-                                  </Badge>
-                                ))}
-                              </div>
-                            ) : "—"}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
-                            {v.published_at ? format(new Date(v.published_at), "MMM d, yyyy") : "—"}
-                          </TableCell>
-                          <TableCell>
-                            <a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground" onClick={(e) => e.stopPropagation()}>
-                              <ExternalLink className="h-4 w-4" />
-                            </a>
-                          </TableCell>
-                        </TableRow>
-                        {expandedIds.has(v.id) && <VideoDetailRow key={`${v.id}-detail`} video={v} />}
-                      </>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+            <>
+              <div className="overflow-auto max-h-[700px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[30px]"></TableHead>
+                      <TableHead className="w-[50px]">Thumb</TableHead>
+                      <SortableHeader label="Title" sortKey="title" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Channel" sortKey="channel" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <TableHead>Keywords</TableHead>
+                      <SortableHeader label="Rank" sortKey="rank" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                      <SortableHeader label="Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                      <SortableHeader label="Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                      <SortableHeader label="Links" sortKey="links" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <TableHead>Platforms</TableHead>
+                      <TableHead>Retailers</TableHead>
+                      <SortableHeader label="Published" sortKey="published" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <TableHead className="w-[40px]"></TableHead>
+                    </TableRow>
+                    <TableRow className="bg-muted/30">
+                      <TableHead />
+                      <TableHead />
+                      <TableHead><Input placeholder="Filter title..." className="h-7 text-xs" value={filters.title} onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))} /></TableHead>
+                      <TableHead><Input placeholder="Filter channel..." className="h-7 text-xs" value={filters.channel} onChange={(e) => setFilters(f => ({ ...f, channel: e.target.value }))} /></TableHead>
+                      <TableHead><Input placeholder="Filter keyword..." className="h-7 text-xs" value={filters.keyword} onChange={(e) => setFilters(f => ({ ...f, keyword: e.target.value }))} /></TableHead>
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead>
+                        <Select value={filters.classification} onValueChange={(v) => setFilters(f => ({ ...f, classification: v === "all" ? "" : v }))}>
+                          <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All</SelectItem>
+                            <SelectItem value="OWN">Own</SelectItem>
+                            <SelectItem value="COMPETITOR">Competitor</SelectItem>
+                            <SelectItem value="NEUTRAL">Neutral</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableHead>
+                      <TableHead />
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAndSorted.map((v) => {
+                      const platformShares = getPlatformShares(v);
+                      const retailerShares = getRetailerShares(v);
+                      return (
+                        <>
+                          <TableRow key={v.id} className="cursor-pointer" onClick={() => toggleExpand(v.id)}>
+                            <TableCell>
+                              {expandedIds.has(v.id) ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                            </TableCell>
+                            <TableCell>
+                              {v.thumbnail_url ? <img src={v.thumbnail_url} alt="" className="w-12 h-8 rounded object-cover" /> : <div className="w-12 h-8 rounded bg-muted" />}
+                            </TableCell>
+                            <TableCell className="max-w-[300px]">
+                              <a
+                                href={`https://www.youtube.com/watch?v=${v.video_id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium text-sm text-primary hover:underline"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <ExpandableText text={v.title} maxLength={80} />
+                              </a>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground text-sm">{v.channel_name}</TableCell>
+                            <TableCell>
+                              {v.keywords.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {v.keywords.map((kw) => (<Badge key={kw.id} variant="secondary" className="text-xs">{kw.keyword}</Badge>))}
+                                </div>
+                              ) : "—"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">{v.best_rank != null ? `#${v.best_rank}` : "—"}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatNumber(v.view_count)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatNumber(v.like_count)}</TableCell>
+                            <TableCell>
+                              {v.links.length > 0 ? (
+                                <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                  {v.links.slice(0, 3).map((link) => (
+                                    <Badge key={link.id} variant="outline" className="text-xs truncate max-w-[150px]">
+                                      {link.domain || new URL(link.original_url).hostname}
+                                    </Badge>
+                                  ))}
+                                  {v.links.length > 3 && <Badge variant="secondary" className="text-xs">+{v.links.length - 3}</Badge>}
+                                </div>
+                              ) : "—"}
+                            </TableCell>
+                            <TableCell>
+                              {platformShares.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {platformShares.map((e) => (
+                                    <Badge key={e.name} variant="outline" className="text-xs bg-blue-500/15 text-blue-700 border-blue-500/30">
+                                      {e.name} {e.share}%
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ) : "—"}
+                            </TableCell>
+                            <TableCell>
+                              {retailerShares.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {retailerShares.map((e) => (
+                                    <Badge key={e.name} variant="outline" className="text-xs bg-purple-500/15 text-purple-700 border-purple-500/30">
+                                      {e.name} {e.share}%
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ) : "—"}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground text-sm">
+                              {v.published_at ? format(new Date(v.published_at), "MMM d, yyyy") : "—"}
+                            </TableCell>
+                            <TableCell>
+                              <a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground" onClick={(e) => e.stopPropagation()}>
+                                <ExternalLink className="h-4 w-4" />
+                              </a>
+                            </TableCell>
+                          </TableRow>
+                          {expandedIds.has(v.id) && <VideoDetailRow key={`${v.id}-detail`} video={v} />}
+                        </>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Pagination */}
+              <div className="flex items-center justify-between mt-4">
+                <p className="text-sm text-muted-foreground">
+                  Page {page + 1} of {totalPages || 1}
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" disabled={page === 0} onClick={() => goToPage(page - 1)}>
+                    <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={!hasMore} onClick={() => goToPage(page + 1)}>
+                    Next <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
