@@ -305,6 +305,7 @@ export default function Channels() {
                     <TableHead>Channel Link</TableHead>
                     <TableHead>Videos</TableHead>
                     <TableHead>Contact</TableHead>
+                    <TableHead>IG Followers</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
                   <TableRow className="bg-muted/30">
