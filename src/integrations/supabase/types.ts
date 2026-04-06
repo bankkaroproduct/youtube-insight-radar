@@ -244,6 +244,74 @@ export type Database = {
           },
         ]
       }
+      instagram_profiles: {
+        Row: {
+          bio: string | null
+          business_category: string | null
+          channel_id: string
+          contact_email: string | null
+          contact_phone: string | null
+          created_at: string | null
+          external_url: string | null
+          follower_count: number | null
+          following_count: number | null
+          full_name: string | null
+          id: string
+          instagram_username: string
+          is_business: boolean | null
+          post_count: number | null
+          profile_pic_url: string | null
+          recent_posts: Json | null
+          scraped_at: string | null
+        }
+        Insert: {
+          bio?: string | null
+          business_category?: string | null
+          channel_id: string
+          contact_email?: string | null
+          contact_phone?: string | null
+          created_at?: string | null
+          external_url?: string | null
+          follower_count?: number | null
+          following_count?: number | null
+          full_name?: string | null
+          id?: string
+          instagram_username: string
+          is_business?: boolean | null
+          post_count?: number | null
+          profile_pic_url?: string | null
+          recent_posts?: Json | null
+          scraped_at?: string | null
+        }
+        Update: {
+          bio?: string | null
+          business_category?: string | null
+          channel_id?: string
+          contact_email?: string | null
+          contact_phone?: string | null
+          created_at?: string | null
+          external_url?: string | null
+          follower_count?: number | null
+          following_count?: number | null
+          full_name?: string | null
+          id?: string
+          instagram_username?: string
+          is_business?: boolean | null
+          post_count?: number | null
+          profile_pic_url?: string | null
+          recent_posts?: Json | null
+          scraped_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "instagram_profiles_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: true
+            referencedRelation: "channels"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ip_access_logs: {
         Row: {
           action: string

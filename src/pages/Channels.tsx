@@ -48,7 +48,7 @@ function renderCountTags(
   );
 }
 
-function downloadCSV(channels: any[]) {
+function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
   // Collect all unique platform and retailer names
   const allPlatforms = new Set<string>();
   const allRetailers = new Set<string>();
@@ -61,7 +61,7 @@ function downloadCSV(channels: any[]) {
 
   const headers = [
     "Channel Name", "Description", "Channel Link", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
-    "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram",
+    "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram", "IG Followers", "IG Bio", "IG Business Category",
     ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
     ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
   ];
@@ -85,6 +85,9 @@ function downloadCSV(channels: any[]) {
       ch.country || "",
       ch.contact_email || "",
       ch.instagram_url || "",
+      igProfiles[ch.id]?.follower_count ?? "",
+      igProfiles[ch.id]?.bio ?? "",
+      igProfiles[ch.id]?.business_category ?? "",
       ...platformList.flatMap(p => { const c = counts[p] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
       ...retailerList.flatMap(r => { const c = rCounts[r] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
     ];
@@ -108,6 +111,45 @@ export default function Channels() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const [fetchingNew, setFetchingNew] = useState(false);
+  const [scrapingIG, setScrapingIG] = useState(false);
+  const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
+
+  // Fetch instagram profiles
+  useEffect(() => {
+    supabase.from("instagram_profiles").select("*").then(({ data }) => {
+      if (data) {
+        const map: Record<string, any> = {};
+        for (const p of data) map[p.channel_id] = p;
+        setIgProfiles(map);
+      }
+    });
+  }, [channels]);
+
+  const scrapeInstagramProfiles = async () => {
+    setScrapingIG(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/scrape-instagram-profiles`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${session?.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+        }
+      );
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "Failed");
+      toast.success(result.message || `Scraped ${result.scraped} profiles`);
+      refresh();
+    } catch (e: any) {
+      toast.error("Instagram scrape failed: " + e.message);
+    } finally {
+      setScrapingIG(false);
+    }
+  };
 
   const fetchNewChannelVideos = async () => {
     setFetchingNew(true);
@@ -198,11 +240,15 @@ export default function Channels() {
         </div>
         <div className="flex gap-2 items-center">
           
+          <Button variant="outline" size="sm" onClick={scrapeInstagramProfiles} disabled={scrapingIG}>
+            {scrapingIG ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Instagram className="h-4 w-4 mr-2" />}
+            Scrape Instagram
+          </Button>
           <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
           </Button>
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted)}>
+          <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted, igProfiles)}>
             <Download className="h-4 w-4 mr-2" /> Download CSV
           </Button>
           <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
@@ -262,6 +308,7 @@ export default function Channels() {
                     <TableHead>Channel Link</TableHead>
                     <TableHead>Videos</TableHead>
                     <TableHead>Contact</TableHead>
+                    <TableHead>IG Followers</TableHead>
                     <TableHead>Description</TableHead>
                   </TableRow>
                   <TableRow className="bg-muted/30">
@@ -295,6 +342,7 @@ export default function Channels() {
                     </TableHead>
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
                     <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.country} onChange={(e) => setFilters(f => ({ ...f, country: e.target.value }))} /></TableHead>
+                    <TableHead />
                     <TableHead />
                     <TableHead />
                     <TableHead />
@@ -369,6 +417,11 @@ export default function Channels() {
                           ) : null}
                           {!ch.contact_email && !ch.instagram_url ? "—" : null}
                         </div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-sm">
+                        {igProfiles[ch.id]?.follower_count != null
+                          ? formatNumber(igProfiles[ch.id].follower_count)
+                          : "—"}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[250px]">
                         <ExpandableText text={ch.description || ""} maxLength={60} />
