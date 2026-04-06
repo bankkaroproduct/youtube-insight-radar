@@ -284,6 +284,11 @@ serve(async (req) => {
       body: JSON.stringify({ channel_ids: channelIds }),
     }).catch(e => console.error("Failed to trigger compute-channel-stats:", e));
 
+    fetch(`${supabaseUrl}/functions/v1/scrape-instagram-profiles`, {
+      method: "POST", headers: triggerHeaders,
+      body: JSON.stringify({ channel_ids: channelIds }),
+    }).catch(e => console.error("Failed to trigger scrape-instagram-profiles:", e));
+
     return new Response(JSON.stringify({
       success: true,
       channels_processed: processedChannels,

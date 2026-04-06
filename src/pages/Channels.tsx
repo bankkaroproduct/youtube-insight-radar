@@ -111,7 +111,7 @@ export default function Channels() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const [fetchingNew, setFetchingNew] = useState(false);
-  const [scrapingIG, setScrapingIG] = useState(false);
+  
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
 
   // Fetch instagram profiles
@@ -125,31 +125,7 @@ export default function Channels() {
     });
   }, [channels]);
 
-  const scrapeInstagramProfiles = async () => {
-    setScrapingIG(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const resp = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/scrape-instagram-profiles`,
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${session?.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({}),
-        }
-      );
-      const result = await resp.json();
-      if (!resp.ok) throw new Error(result.error || "Failed");
-      toast.success(result.message || `Scraped ${result.scraped} profiles`);
-      refresh();
-    } catch (e: any) {
-      toast.error("Instagram scrape failed: " + e.message);
-    } finally {
-      setScrapingIG(false);
-    }
-  };
+
 
   const fetchNewChannelVideos = async () => {
     setFetchingNew(true);
@@ -240,10 +216,8 @@ export default function Channels() {
         </div>
         <div className="flex gap-2 items-center">
           
-          <Button variant="outline" size="sm" onClick={scrapeInstagramProfiles} disabled={scrapingIG}>
-            {scrapingIG ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Instagram className="h-4 w-4 mr-2" />}
-            Scrape Instagram
-          </Button>
+
+
           <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
