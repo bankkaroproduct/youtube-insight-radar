@@ -415,6 +415,11 @@ export default function Channels() {
                           {!ch.contact_email && !ch.instagram_url ? "—" : null}
                         </div>
                       </TableCell>
+                      <TableCell className="text-right tabular-nums text-sm">
+                        {igProfiles[ch.id]?.follower_count != null
+                          ? formatNumber(igProfiles[ch.id].follower_count)
+                          : "—"}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[250px]">
                         <ExpandableText text={ch.description || ""} maxLength={60} />
                       </TableCell>
