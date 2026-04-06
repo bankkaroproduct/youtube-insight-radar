@@ -1,40 +1,48 @@
 
-Fix the Excel upload by switching from a custom “fake button” trigger to a visible native file input.
 
-What I found
-- `src/components/keywords/ExcelUploadCard.tsx` already uses the transparent overlay approach, so the previous fixes are present but still not solving it.
-- Your screenshot shows the upload control rendering as a very thin strip instead of a normal button, which matches a native file input / overlay styling issue.
-- The session replay shows repeated clicks on the same element with no picker opening, so the click target itself is the problem.
-- The actual import logic in `handleFile` looks fine; the failure is at the file-picker trigger stage.
+# Fetch Videos for Channels with 0 Fetched Videos + Show "Till Date" Count
 
-Plan
-1. Replace the custom upload surface in `src/components/keywords/ExcelUploadCard.tsx`
-   - Remove the `relative` div + invisible overlaid file input.
-   - Use a normal visible file input instead of trying to simulate a button.
+## What the user wants
+1. A way to trigger fetching the last 50 videos for channels that currently have `total_videos_fetched < 1` (i.e., 0).
+2. In the Videos column on the Channels table, if a channel has fewer than 50 total videos, display something like "10-Till date" to indicate that's all the channel has.
 
-2. Style the native input with the existing shared input styles
-   - Reuse the project’s `Input` component for `type="file"` so it keeps the app’s design while staying natively clickable.
-   - Keep accepted formats limited to `.xlsx,.xls`.
+## Changes
 
-3. Keep the Excel parsing/import flow unchanged
-   - Preserve `handleFile`, `xlsx` parsing, toast errors, and `onUpload(rows, file.name)`.
-   - Keep clearing `e.target.value` so the same file can be selected again.
-   - Leave the “Download Template” button unchanged.
+### 1. Add "Fetch New Channels" button on Channels page
+**File: `src/pages/Channels.tsx`**
+- Add a new button "Fetch New Channel Videos" next to the existing action buttons.
+- On click, invoke the `fetch-channel-videos` edge function with `{ min_videos: 0, max_videos: 0, limit: 50 }` to target channels with 0 fetched videos.
+- Show a loading spinner/toast while running, and refresh channels on completion.
 
-4. Minor cleanup
-   - Remove any no-longer-needed upload-specific wrapper styling.
-   - Keep the card layout simple and reliable.
+### 2. Update edge function to also fetch channel statistics (total video count)
+**File: `supabase/functions/fetch-channel-videos/index.ts`**
+- After the search API call for each channel, use the YouTube Channels API (`part=statistics`) to get the channel's actual total upload count.
+- Store this in a new column or return it so the frontend can display it.
+- Actually, a simpler approach: use the YouTube `search` endpoint's `totalResults` from the response (already returned in `pageInfo.totalResults`) to know how many videos the channel has in total on YouTube.
+- Save this value to a new `youtube_total_videos` column on the `channels` table.
 
-Technical details
-- Main file: `src/components/keywords/ExcelUploadCard.tsx`
-- Likely change:
-  ```tsx
-  <Input type="file" accept=".xlsx,.xls" onChange={handleFile} className="cursor-pointer" />
-  ```
-- This avoids browser/iframe quirks around hidden inputs, labels, overlays, and proxy click targets.
+### 3. Add `youtube_total_videos` column to channels table
+**Migration:**
+```sql
+ALTER TABLE public.channels ADD COLUMN youtube_total_videos integer DEFAULT NULL;
+```
 
-Validation
-- The upload control should appear as a normal full-height input, not a thin strip.
-- Clicking anywhere inside the file input should open the file picker.
-- Selecting an Excel file should trigger the existing import flow.
-- Re-selecting the same file should still work.
+### 4. Update Videos column display in Channels table
+**File: `src/pages/Channels.tsx`**
+- Change the Videos column (line 282) from just showing `total_videos_fetched` to:
+  - If `youtube_total_videos` exists and `total_videos_fetched >= youtube_total_videos`: show `"{total_videos_fetched}-Till date"`
+  - If `youtube_total_videos` exists and `total_videos_fetched < youtube_total_videos`: show just `total_videos_fetched`
+  - If `youtube_total_videos` is null: show just `total_videos_fetched`
+
+### 5. Update useChannels hook
+**File: `src/hooks/useChannels.ts`**
+- Add `youtube_total_videos` to the Channel interface.
+- The existing `select("*")` already fetches all columns, so no query change needed.
+
+## Technical details
+
+- The `fetch-channel-videos` edge function already accepts `min_videos` / `max_videos` params, so calling it with `{ min_videos: 0, max_videos: 0 }` will target channels with exactly 0 fetched videos.
+- The YouTube Search API response includes `pageInfo.totalResults` which gives the approximate total video count for the channel. We'll capture this and save it to the new column.
+- The edge function's `processChannel` will be updated to return this count and upsert it into the channels table.
+- The frontend button will use the same batching pattern (manual fetch with auth headers) as other edge function calls in the project.
+
