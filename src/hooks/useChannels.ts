@@ -28,6 +28,7 @@ export interface Channel {
   country: string | null;
   platform_video_counts: Record<string, number> | null;
   retailer_video_counts: Record<string, number> | null;
+  youtube_total_videos: number | null;
 }
 
 export function useChannels() {

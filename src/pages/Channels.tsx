@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
@@ -105,6 +106,33 @@ export default function Channels() {
   const { channels, isLoading, refresh, recomputeStats } = useChannels();
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
+  const [fetchingNew, setFetchingNew] = useState(false);
+
+  const fetchNewChannelVideos = async () => {
+    setFetchingNew(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-channel-videos`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${session?.access_token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ min_videos: 0, max_videos: 0, limit: 50 }),
+        }
+      );
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "Failed");
+      toast.success(`Fetched videos for ${result.channels_processed} new channels (${result.total_videos_inserted} videos)`);
+      refresh();
+    } catch (e: any) {
+      toast.error("Failed to fetch new channel videos: " + e.message);
+    } finally {
+      setFetchingNew(false);
+    }
+  };
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
   const [dbTotalChannels, setDbTotalChannels] = useState<number | null>(null);
 
@@ -169,6 +197,10 @@ export default function Channels() {
         </div>
         <div className="flex gap-2 items-center">
           
+          <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
+            {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
+            Fetch New Channel Videos
+          </Button>
           <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted)}>
             <Download className="h-4 w-4 mr-2" /> Download CSV
           </Button>
@@ -279,7 +311,11 @@ export default function Channels() {
                         </a>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}</TableCell>
-                      <TableCell className="text-right tabular-nums">{ch.total_videos_fetched}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {ch.youtube_total_videos && ch.total_videos_fetched >= ch.youtube_total_videos
+                          ? `${ch.total_videos_fetched}-Till date`
+                          : ch.total_videos_fetched}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(ch.median_views)}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(ch.median_likes)}</TableCell>
                       <TableCell>
