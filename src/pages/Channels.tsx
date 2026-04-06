@@ -61,7 +61,7 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
 
   const headers = [
     "Channel Name", "Description", "Channel Link", "Subscribers", "Total Videos", "Median Views", "Median Likes", "Median Comments",
-    "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram",
+    "Affiliate Status", "Relevant", "Category", "Country", "Contact Email", "Instagram", "IG Followers", "IG Bio", "IG Business Category",
     ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
     ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
   ];
