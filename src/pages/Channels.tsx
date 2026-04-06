@@ -237,6 +237,10 @@ export default function Channels() {
         </div>
         <div className="flex gap-2 items-center">
           
+          <Button variant="outline" size="sm" onClick={scrapeInstagramProfiles} disabled={scrapingIG}>
+            {scrapingIG ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Instagram className="h-4 w-4 mr-2" />}
+            Scrape Instagram
+          </Button>
           <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
