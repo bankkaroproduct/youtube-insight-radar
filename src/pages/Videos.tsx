@@ -64,8 +64,103 @@ function getUniqueRetailers(video: Video): string[] {
   return getRetailerShares(video).map(e => e.name);
 }
 
-async function downloadVideosCSV(videos: Video[]) {
-  const channelIds = [...new Set(videos.map(v => v.channel_id))];
+async function downloadAllVideosCSV() {
+  // 1. Fetch ALL videos in batches
+  const BATCH = 1000;
+  let allVideos: any[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("videos")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .range(from, from + BATCH - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    allVideos = allVideos.concat(rows);
+    if (rows.length < BATCH) break;
+    from += BATCH;
+  }
+
+  // 2. Fetch ALL video_links in batches
+  let allLinks: any[] = [];
+  from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("video_links")
+      .select("*")
+      .range(from, from + BATCH - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    allLinks = allLinks.concat(rows);
+    if (rows.length < BATCH) break;
+    from += BATCH;
+  }
+
+  // 3. Fetch ALL video_keywords + keyword names
+  let allVK: any[] = [];
+  from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("video_keywords")
+      .select("video_id, keyword_id, search_rank")
+      .range(from, from + BATCH - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    allVK = allVK.concat(rows);
+    if (rows.length < BATCH) break;
+    from += BATCH;
+  }
+
+  const keywordIds = [...new Set(allVK.map(vk => vk.keyword_id).filter(Boolean))];
+  const keywordsMap = new Map<string, string>();
+  for (let i = 0; i < keywordIds.length; i += BATCH) {
+    const chunk = keywordIds.slice(i, i + BATCH);
+    const { data } = await supabase.from("keywords_search_runs").select("id, keyword").in("id", chunk);
+    for (const k of data ?? []) keywordsMap.set(k.id, k.keyword);
+  }
+
+  // Build maps
+  const linksByVideo = new Map<string, any[]>();
+  for (const link of allLinks) {
+    const list = linksByVideo.get(link.video_id) || [];
+    list.push({
+      ...link,
+      affiliate_name: link.affiliate_platform || link.resolved_retailer || null,
+      platform_name: link.affiliate_platform || null,
+      retailer_name: link.resolved_retailer || null,
+    });
+    linksByVideo.set(link.video_id, list);
+  }
+
+  const keywordsByVideo = new Map<string, { keyword: string; search_rank: number | null }[]>();
+  const bestRankByVideo = new Map<string, number>();
+  for (const vk of allVK) {
+    const kwName = keywordsMap.get(vk.keyword_id);
+    if (kwName) {
+      const list = keywordsByVideo.get(vk.video_id) || [];
+      list.push({ keyword: kwName, search_rank: vk.search_rank ?? null });
+      keywordsByVideo.set(vk.video_id, list);
+    }
+    if (vk.search_rank != null) {
+      const current = bestRankByVideo.get(vk.video_id);
+      if (current == null || vk.search_rank < current) bestRankByVideo.set(vk.video_id, vk.search_rank);
+    }
+  }
+
+  // Enrich videos
+  const enrichedVideos: Video[] = allVideos.map(v => ({
+    ...v,
+    view_count: v.view_count ?? 0,
+    like_count: v.like_count ?? 0,
+    comment_count: v.comment_count ?? 0,
+    links: linksByVideo.get(v.id) || [],
+    keywords: keywordsByVideo.get(v.id) || [],
+    best_rank: bestRankByVideo.get(v.id) ?? null,
+  }));
+
+  // 4. Fetch channel info
+  const channelIds = [...new Set(enrichedVideos.map(v => v.channel_id))];
   const ID_CHUNK = 200;
   const channelChunks: string[][] = [];
   for (let i = 0; i < channelIds.length; i += ID_CHUNK) {
@@ -82,9 +177,10 @@ async function downloadVideosCSV(videos: Video[]) {
   )).flat();
   const channelMap = new Map(channelData.map((c: any) => [c.channel_id, c]));
 
+  // 5. Build CSV
   const allPlatforms = new Set<string>();
   const allRetailers = new Set<string>();
-  for (const v of videos) {
+  for (const v of enrichedVideos) {
     for (const e of getPlatformShares(v)) allPlatforms.add(e.name);
     for (const e of getRetailerShares(v)) allRetailers.add(e.name);
   }
@@ -99,7 +195,7 @@ async function downloadVideosCSV(videos: Video[]) {
     ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
   ];
 
-  const rows = videos.map(v => {
+  const rows = enrichedVideos.map(v => {
     const pShares = getPlatformShares(v);
     const rShares = getRetailerShares(v);
     const pMap = new Map(pShares.map(e => [e.name, e]));
