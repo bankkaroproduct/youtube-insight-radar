@@ -48,7 +48,7 @@ function renderCountTags(
   );
 }
 
-function downloadCSV(channels: any[]) {
+function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
   // Collect all unique platform and retailer names
   const allPlatforms = new Set<string>();
   const allRetailers = new Set<string>();
