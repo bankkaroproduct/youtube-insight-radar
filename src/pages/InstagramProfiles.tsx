@@ -311,7 +311,7 @@ export default function InstagramProfiles() {
                           <a href={`https://instagram.com/${p.instagram_username}`} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline">
                             @{p.instagram_username}
                           </a>
-                          {p.is_private && <Lock className="h-3 w-3 text-muted-foreground" title="Private account" />}
+                          {p.is_private && <Lock className="h-3 w-3 text-muted-foreground" />}
                         </div>
                         {p.full_name && <div className="text-xs text-muted-foreground">{p.full_name}</div>}
                       </TableCell>
