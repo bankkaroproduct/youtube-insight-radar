@@ -127,6 +127,7 @@ export type Database = {
           subscriber_count: number | null
           total_videos_fetched: number | null
           youtube_category: string | null
+          youtube_total_videos: number | null
         }
         Insert: {
           affiliate_names?: string[] | null
@@ -156,6 +157,7 @@ export type Database = {
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null
+          youtube_total_videos?: number | null
         }
         Update: {
           affiliate_names?: string[] | null
@@ -185,6 +187,7 @@ export type Database = {
           subscriber_count?: number | null
           total_videos_fetched?: number | null
           youtube_category?: string | null
+          youtube_total_videos?: number | null
         }
         Relationships: []
       }
