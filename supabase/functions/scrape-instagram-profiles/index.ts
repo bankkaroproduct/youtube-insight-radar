@@ -44,6 +44,8 @@ async function analyzeAffiliatePotential(
   posts: any[],
   bioLinks: string[],
   storefrontName: string | null,
+  isPrivate: boolean,
+  followerCount: number,
 ): Promise<{ score: string; reasoning: string }> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) {
@@ -61,12 +63,19 @@ Username: @${username}
 Bio: ${bio || "No bio"}
 Bio Links: ${bioLinks.join(", ") || "None"}
 Storefront: ${storefrontName || "None detected"}
+Account Privacy: ${isPrivate ? "PRIVATE (no posts visible)" : "Public"}
+Follower Count: ${followerCount}
 
-Recent Posts:
-${postSummary}
+${posts.length > 0 ? `Recent Posts:\n${postSummary}` : "No posts available (account may be private or has no posts)."}
 
-Based on the bio, post captions, hashtags, and engagement, rate this profile's affiliate marketing suitability.
-Consider: Does this creator review products? Do they use affiliate links? Do they promote brands? What's their engagement like? Are they in a good niche for affiliate (tech, beauty, fashion, lifestyle, finance)?
+Based on all available information, rate this profile's affiliate marketing suitability.
+
+IMPORTANT INSTRUCTIONS:
+- If the account is private or has no posts, focus your analysis ENTIRELY on the bio, bio links, storefront presence, and follower count.
+- Look carefully for collaboration signals in the bio such as: "DM for collab", "collab", "collabs", "brand inquiries", "business inquiries", "PR", "partnerships", "paid promotions", "open for collabs", "brand ambassador", "sponsored", "PR packages", "for business", "business email", "creator", "influencer", "content creator", "brand deals", "work with me", "enquiries", "promotions", "paid partnership", "affiliate", "link in bio", "shop my", "use my code", "discount code", "promo code".
+- These keywords may appear in different forms, languages (including Hindi/regional), or abbreviations. Consider the INTENT behind the words.
+- A private account with collaboration signals and decent followers (10K+) can still be rated "Good" or "Average".
+- If the account is public, also consider post captions, hashtags, and engagement.
 
 Respond with ONLY valid JSON:
 {"score": "Good|Average|Poor", "reasoning": "1-2 sentence explanation"}`;
@@ -287,9 +296,12 @@ serve(async (req) => {
         // Detect storefront
         const storefrontName = detectStorefront(bio, profile.externalUrl || null, bioLinks);
 
+        // Detect private account
+        const isPrivate = profile.isPrivate === true;
+
         // AI affiliate analysis
         const { score, reasoning } = await analyzeAffiliatePotential(
-          username, bio, recentPosts, bioLinks, storefrontName
+          username, bio, recentPosts, bioLinks, storefrontName, isPrivate, profile.followersCount || 0
         );
 
         const profileData: Record<string, any> = {
@@ -302,6 +314,7 @@ serve(async (req) => {
           following_count: profile.followsCount || 0,
           post_count: profile.postsCount || 0,
           is_business: profile.isBusinessAccount || false,
+          is_private: isPrivate,
           business_category: profile.businessCategoryName || null,
           contact_email: profile.businessEmail || null,
           contact_phone: profile.businessPhoneNumber || null,

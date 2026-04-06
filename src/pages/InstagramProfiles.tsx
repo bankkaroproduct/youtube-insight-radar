@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Instagram, Download, RefreshCw, Loader2, ExternalLink, ChevronDown, ChevronRight, Heart, MessageCircle, Eye } from "lucide-react";
+import { Instagram, Download, RefreshCw, Loader2, ExternalLink, ChevronDown, ChevronRight, Heart, MessageCircle, Eye, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
@@ -46,6 +46,7 @@ interface IGProfile {
   following_count: number | null;
   post_count: number | null;
   is_business: boolean | null;
+  is_private: boolean | null;
   business_category: string | null;
   contact_email: string | null;
   contact_phone: string | null;
@@ -306,9 +307,12 @@ export default function InstagramProfiles() {
                   {filtered.map(p => (
                     <TableRow key={p.id} className="align-top">
                       <TableCell className="font-medium">
-                        <a href={`https://instagram.com/${p.instagram_username}`} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline">
-                          @{p.instagram_username}
-                        </a>
+                        <div className="flex items-center gap-1">
+                          <a href={`https://instagram.com/${p.instagram_username}`} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline">
+                            @{p.instagram_username}
+                          </a>
+                          {p.is_private && <Lock className="h-3 w-3 text-muted-foreground" />}
+                        </div>
                         {p.full_name && <div className="text-xs text-muted-foreground">{p.full_name}</div>}
                       </TableCell>
                       <TableCell className="text-sm">{p.channel_name || "—"}</TableCell>
