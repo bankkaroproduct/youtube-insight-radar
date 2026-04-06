@@ -14,6 +14,7 @@ import Keywords from "@/pages/Keywords";
 import KeywordTable from "@/pages/KeywordTable";
 import Videos from "@/pages/Videos";
 import Channels from "@/pages/Channels";
+import InstagramProfiles from "@/pages/InstagramProfiles";
 import Links from "@/pages/Links";
 import UserManagement from "@/pages/settings/UserManagement";
 import ApiKeys from "@/pages/settings/ApiKeys";
@@ -70,6 +71,7 @@ function AppRoutes() {
       <Route path="/keyword-table" element={<ProtectedRoute><KeywordTable /></ProtectedRoute>} />
       <Route path="/videos" element={<ProtectedRoute><Videos /></ProtectedRoute>} />
       <Route path="/channels" element={<ProtectedRoute><Channels /></ProtectedRoute>} />
+      <Route path="/instagram" element={<ProtectedRoute><InstagramProfiles /></ProtectedRoute>} />
       <Route path="/links" element={<ProtectedRoute><Links /></ProtectedRoute>} />
       <Route path="/settings/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
       <Route path="/settings/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
