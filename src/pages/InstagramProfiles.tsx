@@ -200,7 +200,7 @@ export default function InstagramProfiles() {
             "Authorization": `Bearer ${session?.access_token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ force: true }),
         }
       );
       const result = await resp.json();
@@ -284,22 +284,22 @@ export default function InstagramProfiles() {
               No Instagram profiles scraped yet. Profiles are scraped automatically when channels are processed.
             </div>
           ) : (
-            <div className="overflow-auto max-h-[700px]">
-              <Table>
+            <div className="overflow-x-auto max-h-[700px]">
+              <Table className="min-w-[1400px]">
                 <TableHeader>
                   <TableRow>
-                    <SortableHeader label="Username" sortKey="username" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Channel" sortKey="channel" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Bio</TableHead>
-                    <SortableHeader label="Followers" sortKey="followers" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Avg Likes" sortKey="avgLikes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Avg Comments" sortKey="avgComments" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Affiliate" sortKey="score" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Bio Links</TableHead>
-                    <TableHead>Storefront</TableHead>
-                    <TableHead>Recent Posts</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Scraped</TableHead>
+                    <SortableHeader label="Username" sortKey="username" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[140px]" />
+                    <SortableHeader label="Channel" sortKey="channel" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[100px]" />
+                    <TableHead className="min-w-[180px] max-w-[220px]">Bio</TableHead>
+                    <SortableHeader label="Followers" sortKey="followers" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[90px]" />
+                    <SortableHeader label="Avg Likes" sortKey="avgLikes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[80px]" />
+                    <SortableHeader label="Avg Comments" sortKey="avgComments" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[80px]" />
+                    <SortableHeader label="Affiliate" sortKey="score" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[120px]" />
+                    <TableHead className="min-w-[140px]">Bio Links</TableHead>
+                    <TableHead className="min-w-[100px]">Storefront</TableHead>
+                    <TableHead className="min-w-[100px]">Recent Posts</TableHead>
+                    <TableHead className="min-w-[100px]">Email</TableHead>
+                    <TableHead className="min-w-[90px]">Scraped</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -312,12 +312,12 @@ export default function InstagramProfiles() {
                         {p.full_name && <div className="text-xs text-muted-foreground">{p.full_name}</div>}
                       </TableCell>
                       <TableCell className="text-sm">{p.channel_name || "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-[200px]">
+                      <TableCell className="text-sm text-muted-foreground min-w-[180px] max-w-[220px]">
                         <ExpandableText text={p.bio || ""} maxLength={60} />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{p.follower_count != null ? formatNumber(p.follower_count) : "—"}</TableCell>
-                      <TableCell className="text-right tabular-nums">{p.avg_post_likes ? formatNumber(p.avg_post_likes) : "—"}</TableCell>
-                      <TableCell className="text-right tabular-nums">{p.avg_post_comments ? formatNumber(p.avg_post_comments) : "—"}</TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">{p.follower_count != null ? formatNumber(p.follower_count) : "—"}</TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">{p.avg_post_likes ? formatNumber(p.avg_post_likes) : "—"}</TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">{p.avg_post_comments ? formatNumber(p.avg_post_comments) : "—"}</TableCell>
                       <TableCell>
                         <div className="space-y-1">
                           <Badge variant="outline" className={scoreColors[p.affiliate_score || "Unknown"]}>

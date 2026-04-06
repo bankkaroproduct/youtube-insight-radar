@@ -123,7 +123,7 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     const body = await req.json().catch(() => ({}));
-    const { channel_ids } = body as { channel_ids?: string[] };
+    const { channel_ids, force } = body as { channel_ids?: string[]; force?: boolean };
 
     // Get channels with instagram_url
     let query = supabase
@@ -166,28 +166,31 @@ serve(async (req) => {
       });
     }
 
-    // Filter out recently scraped (within 7 days)
-    const { data: existing } = await supabase
-      .from("instagram_profiles")
-      .select("instagram_username, scraped_at")
-      .in("instagram_username", usernames);
+    // Filter out recently scraped (within 7 days) unless force=true
+    let toScrape = usernames;
+    if (!force) {
+      const { data: existing } = await supabase
+        .from("instagram_profiles")
+        .select("instagram_username, scraped_at")
+        .in("instagram_username", usernames);
 
-    const recentlyScraped = new Set(
-      (existing || [])
-        .filter(p => {
-          const scraped = new Date(p.scraped_at);
-          const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-          return scraped > weekAgo;
-        })
-        .map(p => p.instagram_username)
-    );
+      const recentlyScraped = new Set(
+        (existing || [])
+          .filter(p => {
+            const scraped = new Date(p.scraped_at);
+            const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            return scraped > weekAgo;
+          })
+          .map(p => p.instagram_username)
+      );
 
-    const toScrape = usernames.filter(u => !recentlyScraped.has(u));
+      toScrape = usernames.filter(u => !recentlyScraped.has(u));
 
-    if (toScrape.length === 0) {
-      return new Response(JSON.stringify({ message: "All profiles were scraped within the last 7 days", scraped: 0 }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      if (toScrape.length === 0) {
+        return new Response(JSON.stringify({ message: "All profiles were scraped within the last 7 days", scraped: 0 }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // Batch into groups of 10
