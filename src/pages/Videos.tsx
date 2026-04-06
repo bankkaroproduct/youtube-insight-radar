@@ -301,6 +301,7 @@ export default function Videos() {
   const { videos, stats, isLoading, isStatsLoading, refresh, page, totalCount, hasMore, goToPage, pageSize } = useVideos();
   const [searchParams] = useSearchParams();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [isDownloading, setIsDownloading] = useState(false);
   const [filters, setFilters] = useState({ title: "", channel: searchParams.get("channel") || "", keyword: "", classification: "" });
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<Video>();
 
