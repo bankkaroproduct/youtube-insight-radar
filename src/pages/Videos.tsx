@@ -65,7 +65,7 @@ function getUniqueRetailers(video: Video): string[] {
 }
 
 async function downloadVideosCSV(videos: Video[]) {
-  // Fetch channel stats
+  // Fetch channel stats including email and instagram
   const channelIds = [...new Set(videos.map(v => v.channel_id))];
   const ID_CHUNK = 200;
   const channelChunks: string[][] = [];
@@ -76,7 +76,7 @@ async function downloadVideosCSV(videos: Video[]) {
     channelChunks.map(chunk =>
       supabase
         .from("channels")
-        .select("channel_id, subscriber_count, median_views, median_likes")
+        .select("channel_id, channel_name, channel_url, subscriber_count, median_views, median_likes, contact_email, instagram_url")
         .in("channel_id", chunk)
         .then(({ data }) => data ?? [])
     )
@@ -95,7 +95,8 @@ async function downloadVideosCSV(videos: Video[]) {
   const retailerList = [...allRetailers].sort();
 
   const headers = [
-    "Video ID", "Title", "Channel Name", "Subscribers", "Median Views", "Median Likes",
+    "Video ID", "Title", "Video Link", "Channel Name", "Channel Link", "Contact Email", "Instagram",
+    "Subscribers", "Median Views", "Median Likes",
     "Keywords", "Best Rank", "Views", "Likes", "Comments", "Published Date", "Total Links", "Domains",
     ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
     ...retailerList.flatMap(r => [`Retailer: ${r} (count)`, `Retailer: ${r} (%)`]),
@@ -115,7 +116,12 @@ async function downloadVideosCSV(videos: Video[]) {
     }
 
     return [
-      v.video_id, v.title, v.channel_name,
+      v.video_id, v.title,
+      `https://www.youtube.com/watch?v=${v.video_id}`,
+      v.channel_name,
+      ch?.channel_url || `https://www.youtube.com/channel/${v.channel_id}`,
+      ch?.contact_email || "",
+      ch?.instagram_url || "",
       ch?.subscriber_count ?? "",
       ch?.median_views ?? "",
       ch?.median_likes ?? "",
