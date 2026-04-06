@@ -85,6 +85,9 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
       ch.country || "",
       ch.contact_email || "",
       ch.instagram_url || "",
+      igProfiles[ch.id]?.follower_count ?? "",
+      igProfiles[ch.id]?.bio ?? "",
+      igProfiles[ch.id]?.business_category ?? "",
       ...platformList.flatMap(p => { const c = counts[p] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
       ...retailerList.flatMap(r => { const c = rCounts[r] || 0; return [c, totalVids > 0 ? `${Math.round((c / totalVids) * 100)}%` : "0%"]; }),
     ];
