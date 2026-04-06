@@ -1,60 +1,38 @@
 
 
-# Scrape Instagram Profiles via Apify
+# Separate Instagram Profiles Page + Auto-Scraping
 
 ## Overview
-Create an edge function that uses Apify's Instagram Profile Scraper to fetch full profile data (bio, stats, posts, contact info) for channels that have an `instagram_url`, store results in a new `instagram_profiles` table, and add a UI button on the Channels page to trigger the scrape.
+Create a dedicated `/instagram` page for viewing Instagram profile data, remove the manual "Scrape Instagram" button from Channels, and make IG scraping happen automatically when channels are processed.
 
-## Prerequisites
-- An Apify API key is needed. You don't currently have one stored. I'll need to request it via the secrets tool before proceeding.
+## Changes
 
-## Database Changes
+### 1. New page: `src/pages/InstagramProfiles.tsx`
+- Fetch all `instagram_profiles` rows with a join to `channels` for channel name
+- Table columns: Username, Channel Name, Full Name, Bio, Followers, Following, Posts, Business Category, Contact Email, Phone, External URL, Scraped At
+- Search filter (username, channel name, full name)
+- Sortable headers for followers, following, post count
+- CSV download button for IG-specific data
+- "Scrape Now" button to manually trigger for any missing/stale profiles (keeps the ability but on the right page)
 
-**New table: `instagram_profiles`**
-- `id` uuid PK
-- `channel_id` uuid (references channels.id)
-- `instagram_username` text
-- `full_name` text
-- `bio` text
-- `profile_pic_url` text
-- `follower_count` integer
-- `following_count` integer
-- `post_count` integer
-- `is_business` boolean
-- `business_category` text
-- `contact_email` text
-- `contact_phone` text
-- `external_url` text
-- `recent_posts` jsonb (array of {url, caption, likes, comments, timestamp})
-- `scraped_at` timestamptz
-- `created_at` timestamptz
+### 2. `src/components/AppSidebar.tsx`
+- Add "Instagram" entry to `intelligenceItems` array with `Instagram` icon from lucide-react, linking to `/instagram`
 
-RLS: authenticated can read, admins can manage.
+### 3. `src/App.tsx`
+- Import `InstagramProfiles` component
+- Add route: `/instagram` → `<ProtectedRoute><InstagramProfiles /></ProtectedRoute>`
 
-## Edge Function: `scrape-instagram-profiles`
+### 4. `src/pages/Channels.tsx`
+- Remove `scrapingIG` state, `scrapeInstagramProfiles` function, and the "Scrape Instagram" button
+- Keep `igProfiles` fetch and IG Followers column in the table (useful context)
 
-1. Accepts `{ channel_ids?: string[] }` — if empty, finds all channels with `instagram_url` not yet scraped (or scraped >7 days ago)
-2. Extracts Instagram usernames from the `instagram_url` column
-3. Batches usernames (max 10 per Apify run) to avoid overloading
-4. Calls Apify Instagram Profile Scraper API (`https://api.apify.com/v2/acts/apify~instagram-profile-scraper/runs`)
-5. Polls for completion, then fetches results from the dataset
-6. Upserts into `instagram_profiles` table
-7. Also updates `channels.contact_email` if a new email is found from Instagram
+### 5. Auto-scrape: `supabase/functions/fetch-channel-videos/index.ts`
+- At the end (where it already fire-and-forgets `process-video-links` and `compute-channel-stats`), add a fire-and-forget call to `scrape-instagram-profiles` with the processed `channelIds`
+- This means whenever new channel videos are fetched, Instagram profiles get scraped automatically
 
-## Frontend Changes
+### 6. No database changes needed
 
-**Channels page (`src/pages/Channels.tsx`)**
-- Add "Scrape Instagram" button next to existing action buttons
-- Shows loading state while scraping
-- On completion, refreshes channel list
-- Add Instagram follower count column to the table
-
-**Channels CSV export**
-- Include Instagram follower count, bio, and business category from `instagram_profiles`
-
-## Files to Create/Edit
-1. **Migration** — create `instagram_profiles` table with RLS
-2. **`supabase/functions/scrape-instagram-profiles/index.ts`** — Apify integration
-3. **`src/pages/Channels.tsx`** — add scrape button and follower column
-4. **`src/hooks/useChannels.ts`** — optionally join instagram profile data
+## Technical Details
+- The `fetch-channel-videos` function already has a pattern for fire-and-forget downstream calls (lines 278-285). We add one more for `scrape-instagram-profiles` passing the channel IDs that were just processed.
+- The `scrape-instagram-profiles` function already handles filtering out recently scraped profiles (within 7 days), so duplicate calls are safe.
 
