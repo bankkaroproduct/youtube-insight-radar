@@ -75,7 +75,13 @@ class LinkProcessingService {
           this.autoRun = false;
           break;
         }
-        this.addLog(`✅ Batch #${batchNum}: ${result.processed} processed, ${result.remaining?.toLocaleString()} remaining`);
+        // Richer log with cache/resolve/fail breakdown
+        const details: string[] = [];
+        if (result.cached > 0) details.push(`${result.cached} cached`);
+        if (result.resolved > 0) details.push(`${result.resolved} resolved`);
+        if (result.failed > 0) details.push(`${result.failed} failed`);
+        const breakdown = details.length > 0 ? ` (${details.join(", ")})` : "";
+        this.addLog(`✅ Batch #${batchNum}: ${result.processed} processed${breakdown}, ${result.remaining?.toLocaleString()} remaining`);
         onStatsRefresh?.();
         if (result.remaining === 0) {
           this.addLog("🎉 All links processed!");

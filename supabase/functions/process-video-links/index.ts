@@ -15,14 +15,12 @@ const KNOWN_SHORTENERS = [
   "amzlink.to", "amzn.eu", "linktw.in",
 ];
 
-// Known affiliate redirect domains that MUST always be unshortened to reveal retailer
 const AFFILIATE_REDIRECT_DOMAINS = [
   "wishlink.com", "lehlah.club", "haulpack.com",
   "earnkaro.com", "cuelinks.com", "magicpin.in",
   "openinapp.co", "shopmy.us", "geni.us",
 ];
 
-// Domains that use JS-based redirects (not HTTP 3xx) — need HTML parsing
 const JS_REDIRECT_DOMAINS = [
   "wishlink.com", "lehlah.club", "instamojo.com", "link.springer.com",
   "haulpack.com", "earnkaro.com", "cuelinks.com", "magicpin.in",
@@ -33,25 +31,20 @@ function isJsRedirectDomain(domain: string): boolean {
 }
 
 function extractRedirectFromHtml(html: string, sourceDomain: string): string | null {
-  // Pattern 1: window.location.href = "URL" or window.location = "URL"
   const jsMatch = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
   if (jsMatch && jsMatch[1]?.startsWith("http")) return jsMatch[1];
 
-  // Pattern 2: <meta http-equiv="refresh" content="...url=URL">
   const metaMatch = html.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"'\s>]+)/i);
   if (metaMatch && metaMatch[1]?.startsWith("http")) return metaMatch[1];
 
-  // Pattern 3: <link rel="canonical" href="URL">
   const canonicalMatch = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i);
   if (canonicalMatch && canonicalMatch[1]?.startsWith("http")) {
     const canonDomain = extractDomain(canonicalMatch[1]);
-    // Only use canonical if it points to a different domain
     if (canonDomain && !canonDomain.includes(sourceDomain) && !sourceDomain.includes(canonDomain)) {
       return canonicalMatch[1];
     }
   }
 
-  // Pattern 4: First external <a href> not pointing back to source domain
   const escapedDomain = sourceDomain.replace(/\./g, "\\.");
   const extLinkRegex = new RegExp(`<a[^>]+href=["'](https?:\\/\\/(?!(?:[^"']*${escapedDomain}))[^"']+)["']`, "i");
   const extMatch = html.match(extLinkRegex);
@@ -60,15 +53,45 @@ function extractRedirectFromHtml(html: string, sourceDomain: string): string | n
   return null;
 }
 
+// Fetch with AbortController timeout
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Stream only first 20KB of HTML body
+async function fetchHtmlPartial(url: string, timeoutMs = 8000): Promise<string> {
+  const resp = await fetchWithTimeout(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; LinkBot/1.0)" },
+  }, timeoutMs);
+  const reader = resp.body?.getReader();
+  if (!reader) return "";
+  let html = "";
+  let bytes = 0;
+  const decoder = new TextDecoder();
+  try {
+    while (bytes < 20000) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+      bytes += value.length;
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return html;
+}
+
 async function resolveJsRedirect(url: string): Promise<string> {
   try {
-    const resp = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: AbortSignal.timeout(8000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; LinkBot/1.0)" },
-    });
-    const html = await resp.text();
+    const html = await fetchHtmlPartial(url, 8000);
     const domain = extractDomain(url);
     const extracted = extractRedirectFromHtml(html, domain);
     if (extracted) return extracted;
@@ -78,7 +101,6 @@ async function resolveJsRedirect(url: string): Promise<string> {
   }
 }
 
-// Affiliate short domains → platform name
 const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "wsli.nk": "Wishlink",
   "fkrt.it": "Flipkart Affiliate",
@@ -97,7 +119,6 @@ const AFFILIATE_SHORT_DOMAINS: Record<string, string> = {
   "bitli.in": "Bitli",
 };
 
-// Retailer domains → retailer name
 const RETAILER_DOMAINS: Record<string, string> = {
   "amazon.in": "Amazon",
   "amazon.com": "Amazon",
@@ -137,18 +158,20 @@ function lookupRetailer(domain: string): { name: string; domain: string } | null
 
 async function fallbackUnshorten(url: string): Promise<string> {
   try {
-    const resp = await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(5000) });
+    const resp = await fetchWithTimeout(url, { method: "HEAD", redirect: "follow" }, 5000);
     let resolved = resp.url || url;
-    // If we landed on a JS-redirect domain, parse HTML for the real destination
-    if (isJsRedirectDomain(extractDomain(resolved))) {
+    const resolvedDomain = extractDomain(resolved);
+    // Only do JS redirect parsing if we landed on a JS-redirect domain AND it's still the same as input
+    if (isJsRedirectDomain(resolvedDomain) && resolved === url) {
       resolved = await resolveJsRedirect(resolved);
     }
     return resolved;
   } catch {
     try {
-      const resp = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(5000) });
+      const resp = await fetchWithTimeout(url, { method: "GET", redirect: "follow" }, 5000);
       let resolved = resp.url || url;
-      if (isJsRedirectDomain(extractDomain(resolved))) {
+      const resolvedDomain = extractDomain(resolved);
+      if (isJsRedirectDomain(resolvedDomain) && resolved === url) {
         resolved = await resolveJsRedirect(resolved);
       }
       return resolved;
@@ -158,7 +181,6 @@ async function fallbackUnshorten(url: string): Promise<string> {
   }
 }
 
-// Round-robin API key rotation for unshorten.me
 const unshortenKeys = [
   Deno.env.get("UNSHORTEN_API_KEY"),
   Deno.env.get("UNSHORTEN_API_KEY_2"),
@@ -174,15 +196,19 @@ async function unshortenUrl(url: string): Promise<string> {
   if (unshortenKeys.length === 0) return fallbackUnshorten(url);
   const apiKey = getNextUnshortenKey();
   try {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `https://unshorten.me/api/v2/unshorten?url=${encodeURIComponent(url)}`,
-      { headers: { Authorization: `Token ${apiKey}` }, signal: AbortSignal.timeout(5000) }
+      { headers: { Authorization: `Token ${apiKey}` } },
+      5000
     );
     if (resp.status === 401 || resp.status === 429) return fallbackUnshorten(url);
     const data = await resp.json();
     if (data.success && data.unshortened_url) {
       let resolved = data.unshortened_url;
-      if (isJsRedirectDomain(extractDomain(resolved))) {
+      // Only parse JS redirect if the resolved URL is still on a JS-redirect domain
+      // AND it's not already a known retailer (optimization: skip HTML fetch when not needed)
+      const resolvedDomain = extractDomain(resolved);
+      if (isJsRedirectDomain(resolvedDomain) && !lookupRetailer(resolvedDomain)) {
         resolved = await resolveJsRedirect(resolved);
       }
       return resolved;
@@ -197,16 +223,6 @@ function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return ""; }
 }
 
-async function parallelMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let idx = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (idx < items.length) { const i = idx++; results[i] = await fn(items[i]); }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 interface Pattern {
   id: string; pattern: string; name: string; classification: string; is_confirmed: boolean; type: string;
 }
@@ -218,6 +234,10 @@ function matchPattern(domain: string, url: string, patterns: Pattern[], filterTy
   }
   return null;
 }
+
+// Batched parallel processing: groups of RESOLVE_BATCH with delay between
+const RESOLVE_BATCH = 10;
+const RESOLVE_DELAY_MS = 200;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -233,7 +253,6 @@ serve(async (req) => {
 
     const allPatterns: Pattern[] = (patterns || []) as Pattern[];
 
-    // Build dynamic lookup maps from DB patterns (confirmed ones take priority)
     const affiliatePlatformDomains = new Set<string>();
     for (const p of allPatterns) {
       if (!p.is_confirmed || !p.name) continue;
@@ -248,12 +267,10 @@ serve(async (req) => {
         RETAILER_DOMAINS[p.pattern] = p.name;
       }
     }
-    // Also add hardcoded affiliate domains
     for (const d of Object.keys(AFFILIATE_SHORT_DOMAINS)) {
       affiliatePlatformDomains.add(d);
     }
 
-    // A URL needs unshortening if domain is a known shortener OR a known affiliate platform
     function needsUnshortening(domain: string): boolean {
       if (KNOWN_SHORTENERS.some(s => domain.includes(s))) return true;
       if (AFFILIATE_REDIRECT_DOMAINS.some(s => domain.includes(s))) return true;
@@ -263,7 +280,6 @@ serve(async (req) => {
       return false;
     }
 
-    // Parse optional batch_size from request body
     let requestedBatchSize: number | null = null;
     let isManualBatch = false;
     try {
@@ -272,17 +288,21 @@ serve(async (req) => {
         requestedBatchSize = Math.min(Math.max(body.batch_size, 1), 500);
         isManualBatch = true;
       }
-    } catch {
-      // No body or invalid JSON — use defaults
-    }
+    } catch {}
 
     const affectedChannels = new Set<string>();
     let totalProcessed = 0;
+    let totalCached = 0;
+    let totalResolved = 0;
+    let totalFailed = 0;
     const MAX_TOTAL = requestedBatchSize || 500;
     const BATCH_SIZE = 50;
     const videoChannelCache = new Map<string, string>();
 
-    // Step 0: Fast-path skip-domain links (youtube, social, etc.) — no unshortening needed
+    // In-memory URL cache: original_url → resolved_url
+    const urlCache = new Map<string, string>();
+
+    // Step 0: Fast-path skip-domain links
     {
       const { data: skipLinks } = await supabase
         .from("video_links")
@@ -300,19 +320,23 @@ serve(async (req) => {
         }
         if (skipUpdates.length > 0) {
           console.log(`Fast-pathing ${skipUpdates.length} skip-domain links`);
-          await Promise.all(
-            skipUpdates.map(link => {
-              const domain = extractDomain(link.original_url);
-              return supabase.from("video_links").update({
-                unshortened_url: link.original_url,
-                domain: domain,
-                original_domain: domain,
-                classification: "NEUTRAL",
-                is_shortened: false,
-                link_type: "unknown",
-              }).eq("id", link.id);
-            })
-          );
+          // Batch DB writes in chunks of 50
+          for (let i = 0; i < skipUpdates.length; i += 50) {
+            const chunk = skipUpdates.slice(i, i + 50);
+            await Promise.all(
+              chunk.map(link => {
+                const domain = extractDomain(link.original_url);
+                return supabase.from("video_links").update({
+                  unshortened_url: link.original_url,
+                  domain,
+                  original_domain: domain,
+                  classification: "NEUTRAL",
+                  is_shortened: false,
+                  link_type: "unknown",
+                }).eq("id", link.id);
+              })
+            );
+          }
           totalProcessed += skipUpdates.length;
         }
       }
@@ -356,7 +380,7 @@ serve(async (req) => {
             const domain = extractDomain(link.original_url);
             return supabase.from("video_links").update({
               unshortened_url: link.original_url,
-              domain: domain,
+              domain,
               original_domain: domain,
               classification: "NEUTRAL",
               is_shortened: false,
@@ -367,11 +391,67 @@ serve(async (req) => {
         totalProcessed += skipLinks.length;
       }
 
-      const unshortenResults = await parallelMap(
-        shortenedLinks,
-        async (link) => ({ ...link, finalUrl: await unshortenUrl(link.original_url) }),
-        10
-      );
+      // DB-level cache: pre-populate from previously resolved links with same original_url
+      if (shortenedLinks.length > 0) {
+        const urlsToResolve = shortenedLinks
+          .map(l => l.original_url)
+          .filter(u => !urlCache.has(u));
+        
+        if (urlsToResolve.length > 0) {
+          const uniqueUrls = [...new Set(urlsToResolve)];
+          // Query DB for previously resolved versions of these URLs
+          const { data: cachedRows } = await supabase
+            .from("video_links")
+            .select("original_url, unshortened_url")
+            .in("original_url", uniqueUrls.slice(0, 100)) // limit IN clause size
+            .not("unshortened_url", "is", null)
+            .neq("unshortened_url", "");
+          
+          if (cachedRows) {
+            for (const row of cachedRows) {
+              if (row.unshortened_url && row.unshortened_url !== row.original_url) {
+                urlCache.set(row.original_url, row.unshortened_url);
+              }
+            }
+          }
+        }
+      }
+
+      // Resolve shortened links in batches of RESOLVE_BATCH with delay
+      const unshortenResults: Array<typeof links[0] & { finalUrl: string }> = [];
+
+      for (let i = 0; i < shortenedLinks.length; i += RESOLVE_BATCH) {
+        const batch = shortenedLinks.slice(i, i + RESOLVE_BATCH);
+        const batchResults = await Promise.all(
+          batch.map(async (link) => {
+            // Check in-memory cache first
+            const cached = urlCache.get(link.original_url);
+            if (cached) {
+              totalCached++;
+              return { ...link, finalUrl: cached };
+            }
+            // Resolve via API
+            try {
+              const finalUrl = await unshortenUrl(link.original_url);
+              urlCache.set(link.original_url, finalUrl);
+              if (finalUrl !== link.original_url) {
+                totalResolved++;
+              } else {
+                totalFailed++;
+              }
+              return { ...link, finalUrl };
+            } catch {
+              totalFailed++;
+              return { ...link, finalUrl: link.original_url };
+            }
+          })
+        );
+        unshortenResults.push(...batchResults);
+        // Rate limit delay between batches
+        if (i + RESOLVE_BATCH < shortenedLinks.length) {
+          await new Promise(r => setTimeout(r, RESOLVE_DELAY_MS));
+        }
+      }
 
       const processedLinks = [
         ...normalLinks.map(l => ({ ...l, finalUrl: l.original_url })),
@@ -390,7 +470,6 @@ serve(async (req) => {
         matched_pattern_id: string | null;
         affiliate_platform_id: string | null;
         retailer_pattern_id: string | null;
-        // New text columns
         is_shortened: boolean;
         link_type: string;
         affiliate_platform: string | null;
@@ -406,19 +485,13 @@ serve(async (req) => {
         const unshortenedDomain = extractDomain(link.finalUrl);
         const isShortened = originalDomain !== unshortenedDomain;
 
-        // Platform identified from original_url domain (always, regardless of isShortened)
         const affiliatePlatformName = lookupAffiliatePlatform(originalDomain);
-        // Also check DB patterns for platform match on original domain (always)
         let platformMatch: Pattern | null = matchPattern(originalDomain, link.original_url, allPatterns, "affiliate_platform");
 
-        // Retailer identified from unshortened_url domain (resolved destination)
-        // If shortened, check unshortened domain; if not shortened but platform matched, skip retailer (same domain)
-        // If not shortened and no platform, check original domain for retailer
         let retailerLookup: { name: string; domain: string } | null = null;
         if (isShortened) {
           retailerLookup = lookupRetailer(unshortenedDomain);
         } else if (!affiliatePlatformName && !platformMatch) {
-          // Not a platform URL, check if it's a direct retailer link
           retailerLookup = lookupRetailer(originalDomain);
         }
 
@@ -427,7 +500,6 @@ serve(async (req) => {
         let resolvedRetailerDomain: string | null = null;
 
         if (affiliatePlatformName || platformMatch) {
-          // Original URL is an affiliate platform
           linkType = "affiliate";
           if (retailerLookup) {
             linkType = "both";
@@ -435,13 +507,11 @@ serve(async (req) => {
             resolvedRetailerDomain = retailerLookup.domain;
           }
         } else if (retailerLookup) {
-          // Direct retailer link
           linkType = "retailer";
           resolvedRetailer = retailerLookup.name;
           resolvedRetailerDomain = retailerLookup.domain;
         }
 
-        // Retailer pattern match from DB
         let retailerMatch = matchPattern(unshortenedDomain, link.finalUrl, allPatterns, "retailer");
 
         let classification = "NEUTRAL";
@@ -461,19 +531,15 @@ serve(async (req) => {
           }
         }
 
-        // Auto-discover new domains with smarter type assignment
         if (!platformMatch && !retailerMatch && originalDomain && !SKIP_DOMAINS.has(originalDomain)) {
           if (!allPatterns.find(p => p.pattern === originalDomain)) {
             if (isShortened || affiliatePlatformName || AFFILIATE_REDIRECT_DOMAINS.some(s => originalDomain.includes(s))) {
-              // Original domain redirects somewhere → it's a platform
               newPlatformDomains.add(originalDomain);
             } else {
-              // No redirect, no platform match → discover as retailer
               newRetailerDomains.add(originalDomain);
             }
           }
         }
-        // If shortened and unshortened domain is different, also discover retailer destination
         if (!retailerMatch && isShortened && unshortenedDomain && unshortenedDomain !== originalDomain && !SKIP_DOMAINS.has(unshortenedDomain)) {
           if (!allPatterns.find(p => p.pattern === unshortenedDomain)) newRetailerDomains.add(unshortenedDomain);
         }
@@ -539,26 +605,29 @@ serve(async (req) => {
         }
       }
 
-      // Batch update all links — now includes new text columns
-      await Promise.all(
-        linkUpdates.map(lu =>
-          supabase.from("video_links").update({
-            unshortened_url: lu.unshortened_url,
-            domain: lu.domain,
-            original_domain: lu.original_domain,
-            classification: lu.classification,
-            matched_pattern_id: lu.matched_pattern_id,
-            affiliate_platform_id: lu.affiliate_platform_id,
-            retailer_pattern_id: lu.retailer_pattern_id,
-            is_shortened: lu.is_shortened,
-            link_type: lu.link_type,
-            affiliate_platform: lu.affiliate_platform,
-            affiliate_domain: lu.affiliate_domain,
-            resolved_retailer: lu.resolved_retailer,
-            resolved_retailer_domain: lu.resolved_retailer_domain,
-          }).eq("id", lu.id)
-        )
-      );
+      // Batch DB writes in chunks of 50
+      for (let i = 0; i < linkUpdates.length; i += 50) {
+        const chunk = linkUpdates.slice(i, i + 50);
+        await Promise.all(
+          chunk.map(lu =>
+            supabase.from("video_links").update({
+              unshortened_url: lu.unshortened_url,
+              domain: lu.domain,
+              original_domain: lu.original_domain,
+              classification: lu.classification,
+              matched_pattern_id: lu.matched_pattern_id,
+              affiliate_platform_id: lu.affiliate_platform_id,
+              retailer_pattern_id: lu.retailer_pattern_id,
+              is_shortened: lu.is_shortened,
+              link_type: lu.link_type,
+              affiliate_platform: lu.affiliate_platform,
+              affiliate_domain: lu.affiliate_domain,
+              resolved_retailer: lu.resolved_retailer,
+              resolved_retailer_domain: lu.resolved_retailer_domain,
+            }).eq("id", lu.id)
+          )
+        );
+      }
 
       totalProcessed += processedLinks.length;
     }
@@ -639,19 +708,22 @@ serve(async (req) => {
       }
 
       if (batchUpdates.length > 0) {
-        await Promise.all(
-          batchUpdates.map(u =>
-            supabase.from("video_links").update({
-              matched_pattern_id: u.matched_pattern_id,
-              classification: u.classification,
-              affiliate_platform_id: u.affiliate_platform_id,
-              retailer_pattern_id: u.retailer_pattern_id,
-              affiliate_platform: u.affiliate_platform,
-              resolved_retailer: u.resolved_retailer,
-              link_type: u.link_type,
-            }).eq("id", u.id)
-          )
-        );
+        for (let i = 0; i < batchUpdates.length; i += 50) {
+          const chunk = batchUpdates.slice(i, i + 50);
+          await Promise.all(
+            chunk.map(u =>
+              supabase.from("video_links").update({
+                matched_pattern_id: u.matched_pattern_id,
+                classification: u.classification,
+                affiliate_platform_id: u.affiliate_platform_id,
+                retailer_pattern_id: u.retailer_pattern_id,
+                affiliate_platform: u.affiliate_platform,
+                resolved_retailer: u.resolved_retailer,
+                link_type: u.link_type,
+              }).eq("id", u.id)
+            )
+          );
+        }
       }
     }
 
@@ -683,12 +755,18 @@ serve(async (req) => {
           method: "POST",
           headers: { "Authorization": `Bearer ${serviceKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({}),
-        }).catch(() => {}); // fire-and-forget
+        }).catch(() => {});
       } catch {}
     }
 
     return new Response(JSON.stringify({
-      success: true, processed: totalProcessed, remaining: remaining || 0, affected_channels: [...affectedChannels],
+      success: true,
+      processed: totalProcessed,
+      remaining: remaining || 0,
+      affected_channels: [...affectedChannels],
+      cached: totalCached,
+      resolved: totalResolved,
+      failed: totalFailed,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message }), {
