@@ -92,7 +92,7 @@ async function downloadVideosCSV(videos: Video[]) {
   const retailerList = [...allRetailers].sort();
 
   const headers = [
-    "Video ID", "Title", "Video Link", "Channel Name", "Channel Link", "Contact Email", "Instagram",
+    "Video ID", "Title", "Description", "Video Link", "Channel Name", "Channel Link", "Contact Email", "Instagram",
     "Subscribers", "Median Views", "Median Likes",
     "Keywords", "Best Rank", "Views", "Likes", "Comments", "Published Date", "Total Links", "Domains",
     ...platformList.flatMap(p => [`Platform: ${p} (count)`, `Platform: ${p} (%)`]),
@@ -113,7 +113,7 @@ async function downloadVideosCSV(videos: Video[]) {
     }
 
     return [
-      v.video_id, v.title,
+      v.video_id, v.title, v.description || "",
       `https://www.youtube.com/watch?v=${v.video_id}`,
       v.channel_name,
       ch?.channel_url || `https://www.youtube.com/channel/${v.channel_id}`,
