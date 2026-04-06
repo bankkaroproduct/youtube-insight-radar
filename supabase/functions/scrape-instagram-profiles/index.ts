@@ -1,6 +1,113 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2/cors";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+};
+
+function extractUrlsFromText(text: string): string[] {
+  if (!text) return [];
+  const urlRegex = /https?:\/\/[^\s<>"')\]]+/gi;
+  return [...new Set(text.match(urlRegex) || [])];
+}
+
+const STOREFRONT_PATTERNS: Record<string, RegExp> = {
+  "Linktree": /linktr\.ee/i,
+  "Amazon Storefront": /amazon\.\w+\/shop/i,
+  "Flipkart Affiliate": /fkrt\.it|flipkart\.com\/affiliate/i,
+  "Wishlink": /wishlink\.com/i,
+  "Stan Store": /stan\.store/i,
+  "Beacons": /beacons\.ai/i,
+  "Bio.link": /bio\.link/i,
+  "Shopmy": /shopmy\.us/i,
+  "LTK": /liketoknow\.it|ltk\.app/i,
+  "Gumroad": /gumroad\.com/i,
+  "Koji": /koji\.to/i,
+  "Milkshake": /msha\.ke/i,
+  "Tap.bio": /tap\.bio/i,
+  "Campsite": /campsite\.bio/i,
+  "Snipfeed": /snipfeed\.co/i,
+};
+
+function detectStorefront(bio: string, externalUrl: string | null, bioLinks: string[]): string | null {
+  const allText = [bio, externalUrl || "", ...bioLinks].join(" ");
+  for (const [name, pattern] of Object.entries(STOREFRONT_PATTERNS)) {
+    if (pattern.test(allText)) return name;
+  }
+  return null;
+}
+
+async function analyzeAffiliatePotential(
+  username: string,
+  bio: string,
+  posts: any[],
+  bioLinks: string[],
+  storefrontName: string | null,
+): Promise<{ score: string; reasoning: string }> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) {
+    return { score: "Unknown", reasoning: "AI analysis unavailable - API key not configured" };
+  }
+
+  const postSummary = posts.slice(0, 10).map((p: any, i: number) => {
+    const caption = (p.caption || "").substring(0, 200);
+    return `Post ${i + 1}: "${caption}" (Likes: ${p.likes}, Comments: ${p.comments})`;
+  }).join("\n");
+
+  const prompt = `Analyze this Instagram profile for affiliate marketing potential.
+
+Username: @${username}
+Bio: ${bio || "No bio"}
+Bio Links: ${bioLinks.join(", ") || "None"}
+Storefront: ${storefrontName || "None detected"}
+
+Recent Posts:
+${postSummary}
+
+Based on the bio, post captions, hashtags, and engagement, rate this profile's affiliate marketing suitability.
+Consider: Does this creator review products? Do they use affiliate links? Do they promote brands? What's their engagement like? Are they in a good niche for affiliate (tech, beauty, fashion, lifestyle, finance)?
+
+Respond with ONLY valid JSON:
+{"score": "Good|Average|Poor", "reasoning": "1-2 sentence explanation"}`;
+
+  try {
+    const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash-lite",
+        messages: [
+          { role: "system", content: "You are an affiliate marketing analyst. Return only valid JSON." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+
+    if (!resp.ok) {
+      console.error("AI analysis failed:", resp.status);
+      return { score: "Unknown", reasoning: "AI analysis failed" };
+    }
+
+    const data = await resp.json();
+    const content = data.choices?.[0]?.message?.content || "";
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        score: parsed.score || "Unknown",
+        reasoning: parsed.reasoning || "No reasoning provided",
+      };
+    }
+    return { score: "Unknown", reasoning: "Could not parse AI response" };
+  } catch (e) {
+    console.error("AI analysis error:", e);
+    return { score: "Unknown", reasoning: "AI analysis error" };
+  }
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -43,7 +150,6 @@ serve(async (req) => {
 
     for (const ch of channels) {
       const url = ch.instagram_url as string;
-      // Extract username from various URL formats
       const match = url.match(/(?:instagram\.com|instagr\.am)\/([a-zA-Z0-9_.]+)/i);
       if (match) {
         const username = match[1].toLowerCase();
@@ -89,7 +195,7 @@ serve(async (req) => {
     for (let i = 0; i < toScrape.length; i += 10) {
       const batch = toScrape.slice(i, i + 10);
 
-      // Start Apify run
+      // Start Apify run - request 20 posts
       const startRes = await fetch(
         `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/runs?token=${APIFY_TOKEN}`,
         {
@@ -97,7 +203,7 @@ serve(async (req) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             usernames: batch,
-            resultsLimit: 12,
+            resultsLimit: 20,
           }),
         }
       );
@@ -126,7 +232,6 @@ serve(async (req) => {
           break;
         }
         await new Promise(r => setTimeout(r, 5000));
-
         const statusRes = await fetch(
           `https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_TOKEN}`
         );
@@ -146,43 +251,67 @@ serve(async (req) => {
       );
       const results = await resultsRes.json();
 
-      // Process and upsert each profile
+      // Process each profile
       for (const profile of results) {
         const username = (profile.username || "").toLowerCase();
         const channelInfo = channelMap[username];
         if (!channelInfo) continue;
 
-        const recentPosts = (profile.latestPosts || []).slice(0, 12).map((p: any) => ({
-          url: p.url || p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : "",
-          caption: (p.caption || "").substring(0, 500),
+        const recentPosts = (profile.latestPosts || []).slice(0, 20).map((p: any) => ({
+          url: p.url || (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ""),
+          caption: (p.caption || "").substring(0, 1000),
           likes: p.likesCount || 0,
           comments: p.commentsCount || 0,
+          views: p.videoViewCount || p.videoPlayCount || 0,
           timestamp: p.timestamp || p.takenAtTimestamp || null,
           type: p.type || "Image",
+          hashtags: ((p.caption || "").match(/#\w+/g) || []).slice(0, 20),
         }));
 
-        const profileData = {
+        // Compute averages from scraped posts
+        const avgPostLikes = recentPosts.length > 0
+          ? Math.round(recentPosts.reduce((s: number, p: any) => s + p.likes, 0) / recentPosts.length)
+          : 0;
+        const avgPostComments = recentPosts.length > 0
+          ? Math.round(recentPosts.reduce((s: number, p: any) => s + p.comments, 0) / recentPosts.length)
+          : 0;
+
+        // Extract bio links
+        const bio = profile.biography || "";
+        const bioLinks = extractUrlsFromText(bio);
+        if (profile.externalUrl) bioLinks.push(profile.externalUrl);
+
+        // Detect storefront
+        const storefrontName = detectStorefront(bio, profile.externalUrl || null, bioLinks);
+
+        // AI affiliate analysis
+        const { score, reasoning } = await analyzeAffiliatePotential(
+          username, bio, recentPosts, bioLinks, storefrontName
+        );
+
+        const profileData: Record<string, any> = {
           channel_id: channelInfo.id,
           instagram_username: username,
           full_name: profile.fullName || null,
-          bio: profile.biography || null,
+          bio: bio || null,
           profile_pic_url: profile.profilePicUrl || profile.profilePicUrlHD || null,
           follower_count: profile.followersCount || 0,
           following_count: profile.followsCount || 0,
           post_count: profile.postsCount || 0,
           is_business: profile.isBusinessAccount || false,
           business_category: profile.businessCategoryName || null,
-          contact_email: profile.businessEmail || profile.contactPhoneNumber ? null : null,
+          contact_email: profile.businessEmail || null,
           contact_phone: profile.businessPhoneNumber || null,
           external_url: profile.externalUrl || null,
           recent_posts: recentPosts,
+          bio_links: [...new Set(bioLinks)],
+          storefront_name: storefrontName,
+          affiliate_score: score,
+          affiliate_reasoning: reasoning,
+          avg_post_likes: avgPostLikes,
+          avg_post_comments: avgPostComments,
           scraped_at: new Date().toISOString(),
         };
-
-        // Extract email from bio or business info
-        if (profile.businessEmail) {
-          profileData.contact_email = profile.businessEmail;
-        }
 
         const { error: upsertErr } = await supabase
           .from("instagram_profiles")
@@ -193,7 +322,7 @@ serve(async (req) => {
           continue;
         }
 
-        // Update channel contact_email if empty and we found one
+        // Update channel contact_email if empty
         if (profileData.contact_email) {
           const { data: ch } = await supabase
             .from("channels")
