@@ -1,0 +1,1 @@
+ALTER TABLE public.channels ADD COLUMN youtube_total_videos integer DEFAULT NULL;
