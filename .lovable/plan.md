@@ -1,43 +1,47 @@
 
 
-# Fix Instagram Profiles Layout + Re-scrape Existing Profiles
+# Enhanced AI Analysis for Private/No-Post Accounts
 
 ## Problem
-1. The table columns are cramped — Username column isn't visible in the screenshot, Bio text bleeds into Followers area, and several columns (Following, Posts, Category) take space but the important new columns (Avg Likes, Avg Comments, Affiliate Score) show dashes
-2. Existing profiles were scraped before the post-scraping + AI analysis was added, so they all show "—" for avg likes, avg comments, affiliate score, bio links, storefront, and recent posts
+Currently, profiles with no accessible posts (private accounts) show "—" for affiliate score because the AI analysis relies heavily on post captions. Private accounts still have a public bio that often contains collaboration signals like "DM for collab", "Open for partnerships", "Brand inquiries", etc.
 
 ## Changes
 
-### 1. Fix table layout in `src/pages/InstagramProfiles.tsx`
-- Add `min-w-[1400px]` to the Table to prevent column squishing on smaller viewports
-- Add explicit `min-w-` and `max-w-` constraints to columns:
-  - Username: `min-w-[140px]` — show @handle + full name
-  - Channel: `min-w-[100px]` — truncate long names
-  - Bio: `min-w-[180px] max-w-[220px]` — proper ExpandableText containment
-  - Followers: `min-w-[90px]` right-aligned
-  - Following + Posts: keep as sortable headers but remove from default view to save space (move to CSV only), OR combine into a compact format
-  - Avg Likes / Avg Comments: `min-w-[80px]` each
-  - Affiliate: `min-w-[120px]` — badge + short reasoning
-  - Bio Links: `min-w-[140px]` — truncated link hostnames
-  - Storefront: `min-w-[100px]`
-  - Recent Posts: `min-w-[100px]` — expandable
-  - Email: `min-w-[100px]`
-  - Scraped: `min-w-[90px]`
-- Remove the Following and Posts columns from the table (keep in CSV) to reduce clutter since avg engagement metrics are more useful
-- Add `whitespace-nowrap` to numeric cells
-- Fix Bio column with proper `overflow-hidden` and `text-ellipsis`
+### 1. Update AI prompt in `supabase/functions/scrape-instagram-profiles/index.ts`
 
-### 2. Add "Re-scrape All" functionality to `supabase/functions/scrape-instagram-profiles/index.ts`
-- Accept a new optional body parameter: `force: true`
-- When `force` is true, skip the 7-day recency filter — scrape ALL profiles regardless of when they were last scraped
-- This allows the "Scrape Now" button to re-scrape existing profiles that are missing post data
+Enhance the `analyzeAffiliatePotential` function to:
+- Detect private accounts (Apify returns `isPrivate` field) and adjust analysis accordingly
+- When no posts are available, focus analysis entirely on bio content, bio links, storefront presence, and follower count
+- Add explicit detection of collaboration signals in bio: "DM for collab", "collab", "brand inquiries", "business inquiries", "PR", "partnerships", "paid promotions", "for collabs DM", "open to work", "brand ambassador", "sponsored", "PR packages", etc.
+- Pass `isPrivate` and `followerCount` to the AI prompt so it can reason about private accounts with high followers being likely affiliates
+- Update the prompt to instruct the AI: "If the account is private, focus on bio signals. Look for collaboration keywords like DM for collab, brand inquiries, partnerships, etc. A private account with collab signals and high followers can still be rated Good."
 
-### 3. Update `src/pages/InstagramProfiles.tsx` Scrape Now button
-- Pass `{ force: true }` in the body when calling scrape-instagram-profiles
-- This ensures clicking "Scrape Now" will re-scrape all existing profiles to populate the new columns (posts, avg likes, avg comments, affiliate score, bio links, storefront)
+### 2. Store `is_private` field
+
+- Add `is_private boolean` column to `instagram_profiles` table via migration
+- Populate from Apify's `isPrivate` field during scraping
+- Display a lock icon next to username on the frontend when `is_private` is true
+
+### 3. Update frontend `src/pages/InstagramProfiles.tsx`
+
+- Show a small lock icon (🔒) next to username for private accounts
+- When affiliate score exists but no posts, the reasoning column explains it was bio-based analysis
 
 ## Technical Details
-- The edge function already works correctly for new scrapes — it fetches 20 posts, computes averages, detects storefronts, and runs AI analysis. The issue is purely that existing profiles were scraped before this logic existed.
-- Adding `force: true` bypasses the `recentlyScraped` filter so all profiles get re-processed.
-- The table layout fix uses CSS min-width constraints on a horizontally scrollable table to prevent column overlap.
+
+The key change is in the AI prompt — adding a section like:
+
+```
+Account Privacy: ${isPrivate ? "PRIVATE (no posts visible)" : "Public"}
+Follower Count: ${followerCount}
+
+IMPORTANT: If the account is private, analyze based on bio and links only.
+Look for collaboration signals: "DM for collab", "business inquiries", 
+"brand partnerships", "PR", "paid promotions", "open for collabs", 
+"brand ambassador", "sponsored content", etc.
+A private account with collaboration signals and decent followers 
+can still be rated Good or Average for affiliate potential.
+```
+
+The Apify scraper already returns `isPrivate` — we just need to use it and pass it through.
 
