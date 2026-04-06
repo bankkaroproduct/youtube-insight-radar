@@ -246,7 +246,12 @@ export type Database = {
       }
       instagram_profiles: {
         Row: {
+          affiliate_reasoning: string | null
+          affiliate_score: string | null
+          avg_post_comments: number | null
+          avg_post_likes: number | null
           bio: string | null
+          bio_links: string[] | null
           business_category: string | null
           channel_id: string
           contact_email: string | null
@@ -263,9 +268,15 @@ export type Database = {
           profile_pic_url: string | null
           recent_posts: Json | null
           scraped_at: string | null
+          storefront_name: string | null
         }
         Insert: {
+          affiliate_reasoning?: string | null
+          affiliate_score?: string | null
+          avg_post_comments?: number | null
+          avg_post_likes?: number | null
           bio?: string | null
+          bio_links?: string[] | null
           business_category?: string | null
           channel_id: string
           contact_email?: string | null
@@ -282,9 +293,15 @@ export type Database = {
           profile_pic_url?: string | null
           recent_posts?: Json | null
           scraped_at?: string | null
+          storefront_name?: string | null
         }
         Update: {
+          affiliate_reasoning?: string | null
+          affiliate_score?: string | null
+          avg_post_comments?: number | null
+          avg_post_likes?: number | null
           bio?: string | null
+          bio_links?: string[] | null
           business_category?: string | null
           channel_id?: string
           contact_email?: string | null
@@ -301,6 +318,7 @@ export type Database = {
           profile_pic_url?: string | null
           recent_posts?: Json | null
           scraped_at?: string | null
+          storefront_name?: string | null
         }
         Relationships: [
           {
