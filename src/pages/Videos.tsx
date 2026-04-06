@@ -359,8 +359,12 @@ export default function Videos() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => downloadVideosCSV(filteredAndSorted)}>
-            <Download className="h-4 w-4 mr-2" /> Download CSV
+          <Button variant="outline" size="sm" disabled={isDownloading} onClick={async () => {
+            setIsDownloading(true);
+            try { await downloadAllVideosCSV(); } catch { /* toast handled inside */ }
+            setIsDownloading(false);
+          }}>
+            <Download className="h-4 w-4 mr-2" /> {isDownloading ? "Exporting..." : "Download CSV"}
           </Button>
           <Button variant="outline" size="sm" onClick={refresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
