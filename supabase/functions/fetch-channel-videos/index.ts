@@ -54,12 +54,13 @@ async function processChannel(
   apiKeys: KeyData[],
   keyIndex: { val: number },
   quotaCache: Map<string, number>,
-): Promise<{ videosInserted: number }> {
+): Promise<{ videosInserted: number; youtubeTotal: number | null }> {
   let currentKey = apiKeys[keyIndex.val % apiKeys.length];
 
   // Search for latest 50 videos from this channel
   const allVideoIds: string[] = [];
   let nextPageToken: string | null = null;
+  let youtubeTotal: number | null = null;
 
   for (let page = 0; page < 1; page++) {
     const params = new URLSearchParams({
@@ -96,6 +97,9 @@ async function processChannel(
 
     await incrementQuota(supabase, currentKey.id, 100, quotaCache);
     const searchData = await resp.json();
+    if (searchData.pageInfo?.totalResults != null && youtubeTotal === null) {
+      youtubeTotal = searchData.pageInfo.totalResults;
+    }
     const items = (searchData.items || []).filter((item: any) => item.id?.videoId);
     for (const item of items) {
       if (!allVideoIds.includes(item.id.videoId)) {
@@ -106,7 +110,13 @@ async function processChannel(
     if (!nextPageToken) break;
   }
 
-  if (allVideoIds.length === 0) return { videosInserted: 0 };
+  if (allVideoIds.length === 0) {
+    // Still save the youtube total even if no videos found
+    if (youtubeTotal !== null) {
+      await supabase.from("channels").update({ youtube_total_videos: youtubeTotal }).eq("channel_id", channelId);
+    }
+    return { videosInserted: 0, youtubeTotal };
+  }
 
   // Fetch video details in chunks of 50
   const videoRecords: any[] = [];
@@ -157,7 +167,7 @@ async function processChannel(
     }
   }
 
-  if (videoRecords.length === 0) return { videosInserted: 0 };
+  if (videoRecords.length === 0) return { videosInserted: 0, youtubeTotal };
 
   // Upsert videos
   const { data: insertedVideos } = await supabase
@@ -185,8 +195,13 @@ async function processChannel(
     }
   }
 
+  // Save youtube_total_videos to the channel
+  if (youtubeTotal !== null) {
+    await supabase.from("channels").update({ youtube_total_videos: youtubeTotal }).eq("channel_id", channelId);
+  }
+
   keyIndex.val++;
-  return { videosInserted: videoRecords.length };
+  return { videosInserted: videoRecords.length, youtubeTotal };
 }
 
 serve(async (req) => {
