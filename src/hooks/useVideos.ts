@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -50,9 +50,60 @@ export interface VideoStats {
   uniqueRetailers: number;
 }
 
+export interface VideoFilters {
+  title: string;
+  channel: string;
+  keyword: string;
+  classification: string;
+}
+
 const PAGE_SIZE = 50;
 
-export function useVideos() {
+async function resolveFilteredVideoIds(filters: VideoFilters): Promise<string[] | null> {
+  // Returns null if no cross-table filters active (meaning "no restriction")
+  // Returns array of video IDs if keyword or classification filters are active
+  const needsKeywordFilter = filters.keyword.trim().length > 0;
+  const needsClassificationFilter = filters.classification.length > 0;
+
+  if (!needsKeywordFilter && !needsClassificationFilter) return null;
+
+  const sets: Set<string>[] = [];
+
+  if (needsKeywordFilter) {
+    // Find keyword IDs matching the filter
+    const { data: kwRows } = await supabase
+      .from("keywords_search_runs")
+      .select("id")
+      .ilike("keyword", `%${filters.keyword.trim()}%`);
+    const kwIds = kwRows?.map(k => k.id) ?? [];
+    if (kwIds.length === 0) return []; // No matching keywords → no videos
+
+    // Find video IDs linked to those keywords
+    const { data: vkRows } = await supabase
+      .from("video_keywords")
+      .select("video_id")
+      .in("keyword_id", kwIds);
+    sets.push(new Set((vkRows ?? []).map(vk => vk.video_id)));
+  }
+
+  if (needsClassificationFilter) {
+    const { data: linkRows } = await supabase
+      .from("video_links")
+      .select("video_id")
+      .eq("classification", filters.classification);
+    sets.push(new Set((linkRows ?? []).map(l => l.video_id)));
+  }
+
+  // Intersect all sets
+  if (sets.length === 0) return null;
+  let result = sets[0];
+  for (let i = 1; i < sets.length; i++) {
+    result = new Set([...result].filter(id => sets[i].has(id)));
+  }
+  return [...result];
+}
+
+export function useVideos(filters?: VideoFilters) {
   const [videos, setVideos] = useState<Video[]>([]);
   const [stats, setStats] = useState<VideoStats>({
     totalVideos: 0, totalLinks: 0, uniqueChannels: 0, uniquePlatforms: 0, uniqueRetailers: 0,
@@ -62,8 +113,8 @@ export function useVideos() {
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const [hasMore, setHasMore] = useState(true);
+  const fetchIdRef = useRef(0);
 
-  // --- Fetch stats with 5 parallel lightweight queries ---
   const fetchStats = useCallback(async () => {
     setIsStatsLoading(true);
     try {
@@ -85,28 +136,56 @@ export function useVideos() {
         uniquePlatforms,
         uniqueRetailers,
       });
-      setTotalCount(videosRes.count ?? 0);
     } catch {
       toast.error("Failed to load video stats");
     }
     setIsStatsLoading(false);
   }, []);
 
-  // --- Fetch a single page of videos with their links and keywords ---
-  const fetchPage = useCallback(async (pageNum: number) => {
+  const fetchPage = useCallback(async (pageNum: number, currentFilters?: VideoFilters) => {
+    const thisId = ++fetchIdRef.current;
     setIsLoading(true);
     try {
+      const f = currentFilters ?? { title: "", channel: "", keyword: "", classification: "" };
+
+      // Resolve cross-table filter IDs first
+      const filteredIds = await resolveFilteredVideoIds(f);
+      // If cross-table filters returned empty array, no results possible
+      if (filteredIds !== null && filteredIds.length === 0) {
+        if (thisId === fetchIdRef.current) {
+          setVideos([]);
+          setTotalCount(0);
+          setHasMore(false);
+          setIsLoading(false);
+        }
+        return;
+      }
+
       const from = pageNum * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
 
-      const { data: videoRows, error } = await supabase
-        .from("videos")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      // Build filtered count query
+      let countQuery = supabase.from("videos").select("*", { count: "exact", head: true });
+      if (f.title.trim()) countQuery = countQuery.ilike("title", `%${f.title.trim()}%`);
+      if (f.channel.trim()) countQuery = countQuery.ilike("channel_name", `%${f.channel.trim()}%`);
+      if (filteredIds !== null) countQuery = countQuery.in("id", filteredIds);
 
-      if (error) throw error;
-      if (!videoRows || videoRows.length === 0) {
+      // Build data query
+      let dataQuery = supabase.from("videos").select("*").order("created_at", { ascending: false }).range(from, to);
+      if (f.title.trim()) dataQuery = dataQuery.ilike("title", `%${f.title.trim()}%`);
+      if (f.channel.trim()) dataQuery = dataQuery.ilike("channel_name", `%${f.channel.trim()}%`);
+      if (filteredIds !== null) dataQuery = dataQuery.in("id", filteredIds);
+
+      const [countRes, dataRes] = await Promise.all([countQuery, dataQuery]);
+
+      if (thisId !== fetchIdRef.current) return; // stale request
+
+      if (dataRes.error) throw dataRes.error;
+      const videoRows = dataRes.data ?? [];
+
+      setTotalCount(countRes.count ?? 0);
+
+      if (videoRows.length === 0) {
         setVideos([]);
         setHasMore(false);
         setIsLoading(false);
@@ -116,16 +195,16 @@ export function useVideos() {
       setHasMore(videoRows.length === PAGE_SIZE);
       const videoIds = videoRows.map((v) => v.id);
 
-      // Fetch links and video_keywords for just this page in parallel
       const [linksRes, vkRes] = await Promise.all([
         supabase.from("video_links").select("*").in("video_id", videoIds),
         supabase.from("video_keywords").select("video_id, keyword_id, search_rank").in("video_id", videoIds),
       ]);
 
+      if (thisId !== fetchIdRef.current) return;
+
       const linksData = linksRes.data ?? [];
       const vkData = vkRes.data ?? [];
 
-      // Fetch keyword names
       const keywordIds = [...new Set(vkData.map((vk) => vk.keyword_id).filter(Boolean))];
       let keywordsMap = new Map<string, string>();
       if (keywordIds.length > 0) {
@@ -137,6 +216,8 @@ export function useVideos() {
           keywordsMap.set(k.id, k.keyword);
         }
       }
+
+      if (thisId !== fetchIdRef.current) return;
 
       const linksByVideo = new Map<string, VideoLink[]>();
       for (const link of linksData) {
@@ -179,25 +260,41 @@ export function useVideos() {
         }))
       );
     } catch {
-      toast.error("Failed to load videos");
+      if (thisId === fetchIdRef.current) {
+        toast.error("Failed to load videos");
+      }
     }
-    setIsLoading(false);
+    if (thisId === fetchIdRef.current) {
+      setIsLoading(false);
+    }
   }, []);
 
   const goToPage = useCallback((p: number) => {
     setPage(p);
-    fetchPage(p);
-  }, [fetchPage]);
+    fetchPage(p, filters);
+  }, [fetchPage, filters]);
 
   const refresh = useCallback(() => {
     fetchStats();
-    fetchPage(page);
-  }, [fetchStats, fetchPage, page]);
+    fetchPage(page, filters);
+  }, [fetchStats, fetchPage, page, filters]);
+
+  // Re-fetch when filters change, reset to page 0
+  const prevFiltersRef = useRef<string>("");
+  useEffect(() => {
+    const key = JSON.stringify(filters ?? {});
+    if (prevFiltersRef.current !== key) {
+      prevFiltersRef.current = key;
+      setPage(0);
+      fetchPage(0, filters);
+    }
+  }, [filters, fetchPage]);
 
   useEffect(() => {
     fetchStats();
-    fetchPage(0);
-  }, [fetchStats, fetchPage]);
+    fetchPage(0, filters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return { videos, stats, isLoading, isStatsLoading, refresh, page, totalCount, hasMore, goToPage, pageSize: PAGE_SIZE };
 }
