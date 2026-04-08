@@ -152,13 +152,35 @@ function PatternTable({
 export default function Links() {
   const {
     platformPatterns, retailerPatterns, discoveredPatterns, uniqueNames, isLoading,
-    addPattern, confirmPattern, deletePattern, processLinks,
+    addPattern, confirmPattern, deletePattern, processLinks, confirmedPatterns,
   } = useAffiliatePatterns();
 
   const addName = async (name: string) => {
     // Names are derived from patterns; adding a pattern with this name will include it
   };
-  
+
+  const downloadCSV = () => {
+    const rows = confirmedPatterns.map(p => ({
+      Pattern: p.pattern,
+      Name: p.name,
+      Classification: p.classification,
+      Type: p.type === "retailer" ? "Retailer" : "Affiliate Platform",
+      Source: p.is_auto_discovered ? "Auto" : "Manual",
+      "Created At": new Date(p.created_at).toLocaleDateString(),
+    }));
+    const headers = Object.keys(rows[0] || {});
+    const csv = [
+      headers.join(","),
+      ...rows.map(r => headers.map(h => `"${(r as any)[h] ?? ""}"`).join(","))
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "affiliate_patterns.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const [open, setOpen] = useState(false);
   const [newPattern, setNewPattern] = useState("");
