@@ -298,12 +298,31 @@ function VideoDetailRow({ video }: { video: Video }) {
 }
 
 export default function Videos() {
-  const { videos, stats, isLoading, isStatsLoading, refresh, page, totalCount, hasMore, goToPage, pageSize } = useVideos();
   const [searchParams] = useSearchParams();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [isDownloading, setIsDownloading] = useState(false);
-  const [filters, setFilters] = useState({ title: "", channel: searchParams.get("channel") || "", keyword: "", classification: "" });
+  const [filters, setFilters] = useState<VideoFilters>({ title: "", channel: searchParams.get("channel") || "", keyword: "", classification: "" });
+  const [debouncedFilters, setDebouncedFilters] = useState<VideoFilters>(filters);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<Video>();
+
+  // Debounce text filters by 300ms, classification is instant
+  const updateFilter = useCallback((key: keyof VideoFilters, value: string) => {
+    setFilters(f => ({ ...f, [key]: value }));
+    if (key === "classification") {
+      setDebouncedFilters(f => ({ ...f, [key]: value }));
+    } else {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        setDebouncedFilters(f => ({ ...f, [key]: value }));
+      }, 300);
+    }
+  }, []);
+
+  // Cleanup debounce on unmount
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+
+  const { videos, stats, isLoading, isStatsLoading, refresh, page, totalCount, hasMore, goToPage, pageSize } = useVideos(debouncedFilters);
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
@@ -313,19 +332,9 @@ export default function Videos() {
     });
   };
 
-  const filteredAndSorted = useMemo(() => {
-    let result = videos.filter((v) => {
-      if (filters.title && !v.title.toLowerCase().includes(filters.title.toLowerCase())) return false;
-      if (filters.channel && !v.channel_name.toLowerCase().includes(filters.channel.toLowerCase())) return false;
-      if (filters.keyword && !v.keywords.some(k => k.keyword.toLowerCase().includes(filters.keyword.toLowerCase()))) return false;
-      if (filters.classification) {
-        const hasMatch = v.links.some(l => l.classification === filters.classification);
-        if (!hasMatch) return false;
-      }
-      return true;
-    });
-
-    return sortFn(result, (item, key) => {
+  // Sort only (filtering is server-side now)
+  const sortedVideos = useMemo(() => {
+    return sortFn(videos, (item, key) => {
       switch (key) {
         case "title": return item.title;
         case "channel": return item.channel_name;
@@ -337,7 +346,7 @@ export default function Videos() {
         default: return null;
       }
     });
-  }, [videos, filters, sortFn]);
+  }, [videos, sortFn]);
 
   const totalPages = Math.ceil(totalCount / pageSize);
 
