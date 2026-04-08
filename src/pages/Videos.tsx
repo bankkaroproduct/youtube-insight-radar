@@ -437,16 +437,16 @@ export default function Videos() {
                     <TableRow className="bg-muted/30">
                       <TableHead />
                       <TableHead />
-                      <TableHead><Input placeholder="Filter title..." className="h-7 text-xs" value={filters.title} onChange={(e) => setFilters(f => ({ ...f, title: e.target.value }))} /></TableHead>
-                      <TableHead><Input placeholder="Filter channel..." className="h-7 text-xs" value={filters.channel} onChange={(e) => setFilters(f => ({ ...f, channel: e.target.value }))} /></TableHead>
-                      <TableHead><Input placeholder="Filter keyword..." className="h-7 text-xs" value={filters.keyword} onChange={(e) => setFilters(f => ({ ...f, keyword: e.target.value }))} /></TableHead>
+                       <TableHead><Input placeholder="Filter title..." className="h-7 text-xs" value={filters.title} onChange={(e) => updateFilter("title", e.target.value)} /></TableHead>
+                       <TableHead><Input placeholder="Filter channel..." className="h-7 text-xs" value={filters.channel} onChange={(e) => updateFilter("channel", e.target.value)} /></TableHead>
+                       <TableHead><Input placeholder="Filter keyword..." className="h-7 text-xs" value={filters.keyword} onChange={(e) => updateFilter("keyword", e.target.value)} /></TableHead>
                       <TableHead />
                       <TableHead />
                       <TableHead />
                       <TableHead />
                       <TableHead />
                       <TableHead>
-                        <Select value={filters.classification} onValueChange={(v) => setFilters(f => ({ ...f, classification: v === "all" ? "" : v }))}>
+                        <Select value={filters.classification} onValueChange={(v) => updateFilter("classification", v === "all" ? "" : v)}>
                           <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="all">All</SelectItem>
@@ -461,7 +461,7 @@ export default function Videos() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredAndSorted.map((v) => {
+                    {sortedVideos.map((v) => {
                       const platformShares = getPlatformShares(v);
                       const retailerShares = getRetailerShares(v);
                       return (
