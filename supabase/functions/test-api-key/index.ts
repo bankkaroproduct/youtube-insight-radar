@@ -14,17 +14,16 @@ serve(async (req) => {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Verify admin
+    // Verify admin — auth is REQUIRED
     const authHeader = req.headers.get("Authorization");
-    if (authHeader) {
-      const token = authHeader.replace("Bearer ", "");
-      const { data: { user } } = await supabase.auth.getUser(token);
-      if (!user) throw new Error("Unauthorized");
+    if (!authHeader?.startsWith("Bearer ")) throw new Error("Unauthorized");
+    const token = authHeader.replace("Bearer ", "");
+    const { data: { user } } = await supabase.auth.getUser(token);
+    if (!user) throw new Error("Unauthorized");
 
-      const { data: hasAdmin } = await supabase.rpc("has_role", { _user_id: user.id, _role: "admin" });
-      const { data: hasSuperAdmin } = await supabase.rpc("has_role", { _user_id: user.id, _role: "super_admin" });
-      if (!hasAdmin && !hasSuperAdmin) throw new Error("Forbidden: admin only");
-    }
+    const { data: hasAdmin } = await supabase.rpc("has_role", { _user_id: user.id, _role: "admin" });
+    const { data: hasSuperAdmin } = await supabase.rpc("has_role", { _user_id: user.id, _role: "super_admin" });
+    if (!hasAdmin && !hasSuperAdmin) throw new Error("Forbidden: admin only");
 
     const { key_ids } = await req.json();
     if (!key_ids || !Array.isArray(key_ids) || key_ids.length === 0) {

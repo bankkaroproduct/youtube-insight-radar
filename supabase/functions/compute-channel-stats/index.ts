@@ -122,11 +122,43 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // Auth guard: require service role key or valid admin JWT
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const token = authHeader.replace("Bearer ", "");
+    if (token !== serviceKey) {
+      const tmpClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: claims, error: claimsErr } = await tmpClient.auth.getClaims(token);
+      if (claimsErr || !claims?.claims) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const adminCheck = createClient(supabaseUrl, serviceKey);
+      const userId = claims.claims.sub as string;
+      const { data: hasAdmin } = await adminCheck.rpc("has_role", { _user_id: userId, _role: "admin" });
+      const { data: hasSuperAdmin } = await adminCheck.rpc("has_role", { _user_id: userId, _role: "super_admin" });
+      if (!hasAdmin && !hasSuperAdmin) {
+        return new Response(JSON.stringify({ error: "Forbidden: admin only" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const supabase = createClient(supabaseUrl, serviceKey);
 
     const body = await req.json().catch(() => ({}));
     let channelIds: string[] = body.channel_ids || [];
     const batchSize = body.batch_size || 3;
+    // Track run start time to accurately count remaining channels
+    const runStartTime = body.run_start || new Date().toISOString();
 
     // If no specific channels, pick the next batch that needs recomputing
     if (channelIds.length === 0) {
@@ -155,13 +187,13 @@ serve(async (req) => {
       }
     }
 
-    // Count remaining channels not yet analyzed (or analyzed before this run)
+    // Count remaining channels not yet analyzed or analyzed before this run started
     const { count } = await supabase
       .from("channels")
       .select("channel_id", { count: "exact", head: true })
-      .or("last_analyzed_at.is.null");
+      .or(`last_analyzed_at.is.null,last_analyzed_at.lt.${runStartTime}`);
 
-    return new Response(JSON.stringify({ success: true, updated, remaining: count || 0, batch_size: channelIds.length }), {
+    return new Response(JSON.stringify({ success: true, updated, remaining: count || 0, batch_size: channelIds.length, run_start: runStartTime }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

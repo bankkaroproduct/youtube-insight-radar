@@ -265,6 +265,36 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // Auth guard: require service role key or valid admin JWT
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const token = authHeader.replace("Bearer ", "");
+    if (token !== serviceKey) {
+      const tmpClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: claims, error: claimsErr } = await tmpClient.auth.getClaims(token);
+      if (claimsErr || !claims?.claims) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const adminCheck = createClient(supabaseUrl, serviceKey);
+      const userId = claims.claims.sub as string;
+      const { data: hasAdmin } = await adminCheck.rpc("has_role", { _user_id: userId, _role: "admin" });
+      const { data: hasSuperAdmin } = await adminCheck.rpc("has_role", { _user_id: userId, _role: "super_admin" });
+      if (!hasAdmin && !hasSuperAdmin) {
+        return new Response(JSON.stringify({ error: "Forbidden: admin only" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const supabase = createClient(supabaseUrl, serviceKey);
 
     const { data: patterns } = await supabase
@@ -273,22 +303,40 @@ serve(async (req) => {
 
     const allPatterns: Pattern[] = (patterns || []) as Pattern[];
 
+    // Clone module-level constants into local variables to avoid cross-invocation mutation
+    const localAffiliateShortDomains: Record<string, string> = { ...AFFILIATE_SHORT_DOMAINS };
+    const localRetailerDomains: Record<string, string> = { ...RETAILER_DOMAINS };
+
     const affiliatePlatformDomains = new Set<string>();
     for (const p of allPatterns) {
       if (!p.is_confirmed || !p.name) continue;
       const pType = (p.type || "").toLowerCase();
       if (pType === "affiliate_platform") {
-        if (!AFFILIATE_SHORT_DOMAINS[p.pattern]) {
-          AFFILIATE_SHORT_DOMAINS[p.pattern] = p.name;
+        if (!localAffiliateShortDomains[p.pattern]) {
+          localAffiliateShortDomains[p.pattern] = p.name;
         }
         affiliatePlatformDomains.add(p.pattern);
       }
-      if (pType === "retailer" && !RETAILER_DOMAINS[p.pattern]) {
-        RETAILER_DOMAINS[p.pattern] = p.name;
+      if (pType === "retailer" && !localRetailerDomains[p.pattern]) {
+        localRetailerDomains[p.pattern] = p.name;
       }
     }
-    for (const d of Object.keys(AFFILIATE_SHORT_DOMAINS)) {
+    for (const d of Object.keys(localAffiliateShortDomains)) {
       affiliatePlatformDomains.add(d);
+    }
+
+    // Use local clones for lookups within this request
+    function localLookupAffiliatePlatform(domain: string): string | null {
+      for (const [d, name] of Object.entries(localAffiliateShortDomains)) {
+        if (domain.includes(d)) return name;
+      }
+      return null;
+    }
+    function localLookupRetailer(domain: string): { name: string; domain: string } | null {
+      for (const [d, name] of Object.entries(localRetailerDomains)) {
+        if (domain.includes(d)) return { name, domain: d };
+      }
+      return null;
     }
 
     function needsUnshortening(domain: string): boolean {
@@ -305,7 +353,7 @@ serve(async (req) => {
     try {
       const body = await req.json();
       if (body?.batch_size && typeof body.batch_size === "number") {
-        requestedBatchSize = Math.min(Math.max(body.batch_size, 1), 500);
+        requestedBatchSize = Math.min(Math.max(body.batch_size, 1), 2000);
         isManualBatch = true;
       }
     } catch {}
@@ -514,14 +562,14 @@ serve(async (req) => {
         const unshortenedDomain = extractDomain(link.finalUrl);
         const isShortened = originalDomain !== unshortenedDomain;
 
-        const affiliatePlatformName = lookupAffiliatePlatform(originalDomain);
+        const affiliatePlatformName = localLookupAffiliatePlatform(originalDomain);
         let platformMatch: Pattern | null = matchPattern(originalDomain, link.original_url, allPatterns, "affiliate_platform");
 
         let retailerLookup: { name: string; domain: string } | null = null;
         if (isShortened) {
-          retailerLookup = lookupRetailer(unshortenedDomain);
+          retailerLookup = localLookupRetailer(unshortenedDomain);
         } else if (!affiliatePlatformName && !platformMatch) {
-          retailerLookup = lookupRetailer(originalDomain);
+          retailerLookup = localLookupRetailer(originalDomain);
         }
 
         let linkType: string = "unknown";
