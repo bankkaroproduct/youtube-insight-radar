@@ -83,8 +83,9 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
+    const status = e.message === "Forbidden: admin only" ? 403 : e.message === "Unauthorized" ? 401 : 500;
     return new Response(JSON.stringify({ error: e.message }), {
-      status: e.message === "Forbidden: admin only" ? 403 : 500,
+      status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
