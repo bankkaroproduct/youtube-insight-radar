@@ -11,6 +11,8 @@ serve(async (req) => {
   try {
     const { keyword } = await req.json();
     if (!keyword) throw new Error("Keyword required");
+    if (typeof keyword !== "string" || keyword.length > 200) throw new Error("Keyword must be a string of max 200 characters");
+    const sanitizedKeyword = keyword.trim().replace(/[<>]/g, "");
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
@@ -22,7 +24,7 @@ serve(async (req) => {
         model: "google/gemini-3-flash-preview",
         messages: [
           { role: "system", content: "You are a YouTube SEO expert. Generate 5-10 search variations of the given keyword for broader YouTube video discovery. Return only a JSON array of strings." },
-          { role: "user", content: `Generate search variations for: "${keyword}"` },
+          { role: "user", content: `Generate search variations for: "${sanitizedKeyword}"` },
         ],
       }),
     });

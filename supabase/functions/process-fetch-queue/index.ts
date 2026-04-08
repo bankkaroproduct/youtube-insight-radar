@@ -382,6 +382,37 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // Auth guard: require service role key or valid admin JWT
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const token = authHeader.replace("Bearer ", "");
+    const isServiceRole = token === serviceKey;
+    if (!isServiceRole) {
+      const tmpClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: claims, error: claimsErr } = await tmpClient.auth.getClaims(token);
+      if (claimsErr || !claims?.claims) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const userId = claims.claims.sub as string;
+      const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+      const { data: hasAdmin } = await supabaseAdmin.rpc("has_role", { _user_id: userId, _role: "admin" });
+      const { data: hasSuperAdmin } = await supabaseAdmin.rpc("has_role", { _user_id: userId, _role: "super_admin" });
+      if (!hasAdmin && !hasSuperAdmin) {
+        return new Response(JSON.stringify({ error: "Forbidden: admin only" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const supabase = createClient(supabaseUrl, serviceKey);
 
     // Check global YouTube rate limit before processing any jobs
@@ -437,28 +468,27 @@ serve(async (req) => {
 
     const allChannelIds = new Set<string>();
 
-    const jobPromises = pendingJobs.map((job: any, idx: number) => {
-      const key = availableKeys[idx % availableKeys.length];
-      return processJob(supabase, job, key, quotaCache)
-        .then((result) => {
-          for (const chId of result.channelIds) allChannelIds.add(chId);
-          return { success: true, jobId: job.id };
-        })
-        .catch(async (err) => {
-          console.error(`Job ${job.id} failed:`, err.message);
-          await supabase.from("fetch_jobs").update({
-            status: "failed",
-            error_message: err.message,
-            completed_at: new Date().toISOString(),
-          }).eq("id", job.id);
-          if (job.keyword_id) {
-            await supabase.from("keywords_search_runs").update({ status: "failed" }).eq("id", job.keyword_id);
-          }
-          return { success: false, jobId: job.id };
-        });
-    });
-
-    const results = await Promise.all(jobPromises);
+    // Process jobs sequentially to prevent quota race conditions
+    const results: { success: boolean; jobId: string }[] = [];
+    for (const job of pendingJobs) {
+      const key = availableKeys[results.length % availableKeys.length];
+      try {
+        const result = await processJob(supabase, job, key, quotaCache);
+        for (const chId of result.channelIds) allChannelIds.add(chId);
+        results.push({ success: true, jobId: job.id });
+      } catch (err: any) {
+        console.error(`Job ${job.id} failed:`, err.message);
+        await supabase.from("fetch_jobs").update({
+          status: "failed",
+          error_message: err.message,
+          completed_at: new Date().toISOString(),
+        }).eq("id", job.id);
+        if (job.keyword_id) {
+          await supabase.from("keywords_search_runs").update({ status: "failed" }).eq("id", job.keyword_id);
+        }
+        results.push({ success: false, jobId: job.id });
+      }
+    }
 
     // Fetch channel details with first available key
     if (allChannelIds.size > 0) {
@@ -513,13 +543,12 @@ serve(async (req) => {
     }
 
     // Self-re-trigger if more pending jobs remain
-    const { data: remaining } = await supabase
+    const { count: remainingCount } = await supabase
       .from("fetch_jobs")
       .select("id", { count: "exact", head: true })
-      .eq("status", "pending")
-      .limit(1);
+      .eq("status", "pending");
 
-    if (remaining && remaining.length > 0) {
+    if (remainingCount && remainingCount > 0) {
       fetch(`${supabaseUrl}/functions/v1/process-fetch-queue`, {
         method: "POST",
         headers: triggerHeaders,
