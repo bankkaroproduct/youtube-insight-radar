@@ -340,7 +340,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={platformPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="affiliate platforms" />
+                <PatternTable patterns={platformPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} onUpdateName={updatePatternName} typeLabel="affiliate platforms" />
               )}
             </CardContent>
           </Card>
@@ -357,7 +357,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="retailers" />
+                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} onUpdateName={updatePatternName} typeLabel="retailers" />
               )}
             </CardContent>
           </Card>
@@ -374,7 +374,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={socialPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="social links" />
+                <PatternTable patterns={socialPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} onUpdateName={updatePatternName} typeLabel="social links" />
               )}
             </CardContent>
           </Card>
