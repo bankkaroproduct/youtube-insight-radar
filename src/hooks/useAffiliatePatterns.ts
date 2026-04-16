@@ -80,6 +80,19 @@ export function useAffiliatePatterns() {
     }
   };
 
+  const updatePatternName = async (id: string, name: string) => {
+    const { error } = await supabase
+      .from("affiliate_patterns")
+      .update({ name })
+      .eq("id", id);
+    if (error) {
+      toast.error("Failed to update name");
+    } else {
+      toast.success("Name updated");
+      fetchPatterns();
+    }
+  };
+
   const deletePattern = async (id: string) => {
     const { error } = await supabase.from("affiliate_patterns").delete().eq("id", id);
     if (error) {
@@ -127,6 +140,7 @@ export function useAffiliatePatterns() {
     addPattern,
     confirmPattern,
     updatePatternType,
+    updatePatternName,
     deletePattern,
     processLinks,
     refresh: fetchPatterns,

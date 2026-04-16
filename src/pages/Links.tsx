@@ -104,10 +104,40 @@ function DiscoveredNamePicker({
   );
 }
 
+function EditableName({ value, onSave }: { value: string; onSave: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  if (!editing) {
+    return (
+      <span className="cursor-pointer hover:underline" onClick={() => { setDraft(value); setEditing(true); }}>
+        {value}
+      </span>
+    );
+  }
+
+  return (
+    <Input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      className="h-8 w-[140px] text-sm"
+      autoFocus
+      onBlur={() => {
+        if (draft.trim() && draft.trim() !== value) onSave(draft.trim());
+        setEditing(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { if (draft.trim() && draft.trim() !== value) onSave(draft.trim()); setEditing(false); }
+        if (e.key === "Escape") setEditing(false);
+      }}
+    />
+  );
+}
+
 function PatternTable({
-  patterns, onDelete, onUpdateType, typeLabel,
+  patterns, onDelete, onUpdateType, onUpdateName, typeLabel,
 }: {
-  patterns: any[]; onDelete: (id: string) => void; onUpdateType: (id: string, type: PatternType) => void; typeLabel?: string;
+  patterns: any[]; onDelete: (id: string) => void; onUpdateType: (id: string, type: PatternType) => void; onUpdateName: (id: string, name: string) => void; typeLabel?: string;
 }) {
   if (patterns.length === 0) {
     return (
@@ -132,7 +162,9 @@ function PatternTable({
         {patterns.map((p) => (
           <TableRow key={p.id}>
             <TableCell className="font-mono text-sm">{p.pattern}</TableCell>
-            <TableCell>{p.name}</TableCell>
+            <TableCell>
+              <EditableName value={p.name} onSave={(name) => onUpdateName(p.id, name)} />
+            </TableCell>
             <TableCell>
               <Badge variant="outline" className={classColors[p.classification] || classColors.NEUTRAL}>
                 {p.classification}
@@ -169,7 +201,7 @@ function PatternTable({
 export default function Links() {
   const {
     platformPatterns, retailerPatterns, socialPatterns, neutralPatterns, discoveredPatterns, uniqueNames, isLoading,
-    addPattern, confirmPattern, updatePatternType, deletePattern, processLinks, confirmedPatterns,
+    addPattern, confirmPattern, updatePatternType, updatePatternName, deletePattern, processLinks, confirmedPatterns,
   } = useAffiliatePatterns();
 
   const addName = async (name: string) => {
@@ -308,7 +340,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={platformPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="affiliate platforms" />
+                <PatternTable patterns={platformPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} onUpdateName={updatePatternName} typeLabel="affiliate platforms" />
               )}
             </CardContent>
           </Card>
@@ -325,7 +357,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="retailers" />
+                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} onUpdateName={updatePatternName} typeLabel="retailers" />
               )}
             </CardContent>
           </Card>
@@ -342,7 +374,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={socialPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="social links" />
+                <PatternTable patterns={socialPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} onUpdateName={updatePatternName} typeLabel="social links" />
               )}
             </CardContent>
           </Card>
