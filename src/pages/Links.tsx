@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe, Play, RotateCcw, Loader2, Download } from "lucide-react";
+import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe, Play, RotateCcw, Loader2, Download, Share2, CircleDot } from "lucide-react";
 import { BulkUploadDialog } from "@/components/links/BulkUploadDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
@@ -28,6 +28,15 @@ const classColors: Record<string, string> = {
 const typeColors: Record<string, string> = {
   affiliate_platform: "bg-blue-500/15 text-blue-700 border-blue-500/30",
   retailer: "bg-purple-500/15 text-purple-700 border-purple-500/30",
+  social: "bg-pink-500/15 text-pink-700 border-pink-500/30",
+  neutral: "bg-muted text-muted-foreground",
+};
+
+const typeLabels: Record<string, string> = {
+  affiliate_platform: "Platform",
+  retailer: "Retailer",
+  social: "Social",
+  neutral: "Neutral",
 };
 
 function NameDropdown({
@@ -96,9 +105,9 @@ function DiscoveredNamePicker({
 }
 
 function PatternTable({
-  patterns, onDelete, typeLabel,
+  patterns, onDelete, onUpdateType, typeLabel,
 }: {
-  patterns: any[]; onDelete: (id: string) => void; typeLabel?: string;
+  patterns: any[]; onDelete: (id: string) => void; onUpdateType: (id: string, type: PatternType) => void; typeLabel?: string;
 }) {
   if (patterns.length === 0) {
     return (
@@ -130,9 +139,17 @@ function PatternTable({
               </Badge>
             </TableCell>
             <TableCell>
-              <Badge variant="outline" className={typeColors[p.type?.toLowerCase()] || typeColors.affiliate_platform}>
-                {p.type?.toLowerCase() === "retailer" ? "Retailer" : "Platform"}
-              </Badge>
+              <Select value={p.type?.toLowerCase() || "affiliate_platform"} onValueChange={(v) => onUpdateType(p.id, v as PatternType)}>
+                <SelectTrigger className="w-[130px] h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="affiliate_platform">Platform</SelectItem>
+                  <SelectItem value="retailer">Retailer</SelectItem>
+                  <SelectItem value="social">Social</SelectItem>
+                  <SelectItem value="neutral">Neutral</SelectItem>
+                </SelectContent>
+              </Select>
             </TableCell>
             <TableCell className="text-sm text-muted-foreground">
               {p.is_auto_discovered ? "Auto" : "Manual"}
@@ -151,8 +168,8 @@ function PatternTable({
 
 export default function Links() {
   const {
-    platformPatterns, retailerPatterns, discoveredPatterns, uniqueNames, isLoading,
-    addPattern, confirmPattern, deletePattern, processLinks, confirmedPatterns,
+    platformPatterns, retailerPatterns, socialPatterns, neutralPatterns, discoveredPatterns, uniqueNames, isLoading,
+    addPattern, confirmPattern, updatePatternType, deletePattern, processLinks, confirmedPatterns,
   } = useAffiliatePatterns();
 
   const addName = async (name: string) => {
@@ -164,7 +181,7 @@ export default function Links() {
       Pattern: p.pattern,
       Name: p.name,
       Classification: p.classification,
-      Type: p.type === "retailer" ? "Retailer" : "Affiliate Platform",
+      Type: typeLabels[p.type?.toLowerCase()] || p.type,
       Source: p.is_auto_discovered ? "Auto" : "Manual",
       "Created At": new Date(p.created_at).toLocaleDateString(),
     }));
@@ -219,12 +236,14 @@ export default function Links() {
                     <SelectContent>
                       <SelectItem value="affiliate_platform">Affiliate Platform</SelectItem>
                       <SelectItem value="retailer">Retailer</SelectItem>
+                      <SelectItem value="social">Social</SelectItem>
+                      <SelectItem value="neutral">Neutral</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
                   <Label>Domain / Pattern</Label>
-                  <Input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder={newType === "retailer" ? "e.g. amazon.in" : "e.g. impact.com"} />
+                  <Input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder={newType === "social" ? "e.g. instagram.com" : newType === "retailer" ? "e.g. amazon.in" : "e.g. impact.com"} />
                 </div>
                 <div>
                   <Label>Display Name</Label>
@@ -267,6 +286,9 @@ export default function Links() {
           <TabsTrigger value="retailers">
             <Store className="h-4 w-4 mr-1" /> Retailers ({retailerPatterns.length})
           </TabsTrigger>
+          <TabsTrigger value="socials">
+            <Share2 className="h-4 w-4 mr-1" /> Socials ({socialPatterns.length})
+          </TabsTrigger>
           <TabsTrigger value="discovered">
             <RefreshCw className="h-4 w-4 mr-1" /> Discovered ({discoveredPatterns.length})
           </TabsTrigger>
@@ -286,7 +308,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={platformPatterns} onDelete={deletePattern} typeLabel="affiliate platforms" />
+                <PatternTable patterns={platformPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="affiliate platforms" />
               )}
             </CardContent>
           </Card>
@@ -303,7 +325,24 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} typeLabel="retailers" />
+                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="retailers" />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="socials">
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-display flex items-center gap-2">
+                <Share2 className="h-5 w-5" /> Social Links
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
+              ) : (
+                <PatternTable patterns={socialPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="social links" />
               )}
             </CardContent>
           </Card>
@@ -349,6 +388,8 @@ export default function Links() {
                               <SelectContent>
                                 <SelectItem value="affiliate_platform">Platform</SelectItem>
                                 <SelectItem value="retailer">Retailer</SelectItem>
+                                <SelectItem value="social">Social</SelectItem>
+                                <SelectItem value="neutral">Neutral</SelectItem>
                               </SelectContent>
                             </Select>
                           </TableCell>
