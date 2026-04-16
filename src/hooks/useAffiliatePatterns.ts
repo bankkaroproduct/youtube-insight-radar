@@ -93,6 +93,7 @@ export function useAffiliatePatterns() {
     }
   };
 
+  const deletePattern = async (id: string) => {
     const { error } = await supabase.from("affiliate_patterns").delete().eq("id", id);
     if (error) {
       toast.error("Failed to delete pattern");
