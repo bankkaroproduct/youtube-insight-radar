@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe, Play, RotateCcw, Loader2, Download } from "lucide-react";
+import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe, Play, RotateCcw, Loader2, Download, Share2, CircleDot } from "lucide-react";
 import { BulkUploadDialog } from "@/components/links/BulkUploadDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
@@ -28,6 +28,15 @@ const classColors: Record<string, string> = {
 const typeColors: Record<string, string> = {
   affiliate_platform: "bg-blue-500/15 text-blue-700 border-blue-500/30",
   retailer: "bg-purple-500/15 text-purple-700 border-purple-500/30",
+  social: "bg-pink-500/15 text-pink-700 border-pink-500/30",
+  neutral: "bg-muted text-muted-foreground",
+};
+
+const typeLabels: Record<string, string> = {
+  affiliate_platform: "Platform",
+  retailer: "Retailer",
+  social: "Social",
+  neutral: "Neutral",
 };
 
 function NameDropdown({
