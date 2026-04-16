@@ -201,7 +201,7 @@ function PatternTable({
 export default function Links() {
   const {
     platformPatterns, retailerPatterns, socialPatterns, neutralPatterns, discoveredPatterns, uniqueNames, isLoading,
-    addPattern, confirmPattern, updatePatternType, deletePattern, processLinks, confirmedPatterns,
+    addPattern, confirmPattern, updatePatternType, updatePatternName, deletePattern, processLinks, confirmedPatterns,
   } = useAffiliatePatterns();
 
   const addName = async (name: string) => {
