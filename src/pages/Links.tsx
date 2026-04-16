@@ -168,8 +168,8 @@ function PatternTable({
 
 export default function Links() {
   const {
-    platformPatterns, retailerPatterns, discoveredPatterns, uniqueNames, isLoading,
-    addPattern, confirmPattern, deletePattern, processLinks, confirmedPatterns,
+    platformPatterns, retailerPatterns, socialPatterns, neutralPatterns, discoveredPatterns, uniqueNames, isLoading,
+    addPattern, confirmPattern, updatePatternType, deletePattern, processLinks, confirmedPatterns,
   } = useAffiliatePatterns();
 
   const addName = async (name: string) => {
@@ -181,7 +181,7 @@ export default function Links() {
       Pattern: p.pattern,
       Name: p.name,
       Classification: p.classification,
-      Type: p.type === "retailer" ? "Retailer" : "Affiliate Platform",
+      Type: typeLabels[p.type?.toLowerCase()] || p.type,
       Source: p.is_auto_discovered ? "Auto" : "Manual",
       "Created At": new Date(p.created_at).toLocaleDateString(),
     }));
@@ -236,12 +236,14 @@ export default function Links() {
                     <SelectContent>
                       <SelectItem value="affiliate_platform">Affiliate Platform</SelectItem>
                       <SelectItem value="retailer">Retailer</SelectItem>
+                      <SelectItem value="social">Social</SelectItem>
+                      <SelectItem value="neutral">Neutral</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
                   <Label>Domain / Pattern</Label>
-                  <Input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder={newType === "retailer" ? "e.g. amazon.in" : "e.g. impact.com"} />
+                  <Input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder={newType === "social" ? "e.g. instagram.com" : newType === "retailer" ? "e.g. amazon.in" : "e.g. impact.com"} />
                 </div>
                 <div>
                   <Label>Display Name</Label>
@@ -284,6 +286,9 @@ export default function Links() {
           <TabsTrigger value="retailers">
             <Store className="h-4 w-4 mr-1" /> Retailers ({retailerPatterns.length})
           </TabsTrigger>
+          <TabsTrigger value="socials">
+            <Share2 className="h-4 w-4 mr-1" /> Socials ({socialPatterns.length})
+          </TabsTrigger>
           <TabsTrigger value="discovered">
             <RefreshCw className="h-4 w-4 mr-1" /> Discovered ({discoveredPatterns.length})
           </TabsTrigger>
@@ -303,7 +308,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={platformPatterns} onDelete={deletePattern} typeLabel="affiliate platforms" />
+                <PatternTable patterns={platformPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="affiliate platforms" />
               )}
             </CardContent>
           </Card>
@@ -320,7 +325,7 @@ export default function Links() {
               {isLoading ? (
                 <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
               ) : (
-                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} typeLabel="retailers" />
+                <PatternTable patterns={retailerPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="retailers" />
               )}
             </CardContent>
           </Card>
