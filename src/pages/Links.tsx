@@ -105,9 +105,9 @@ function DiscoveredNamePicker({
 }
 
 function PatternTable({
-  patterns, onDelete, typeLabel,
+  patterns, onDelete, onUpdateType, typeLabel,
 }: {
-  patterns: any[]; onDelete: (id: string) => void; typeLabel?: string;
+  patterns: any[]; onDelete: (id: string) => void; onUpdateType: (id: string, type: PatternType) => void; typeLabel?: string;
 }) {
   if (patterns.length === 0) {
     return (
@@ -139,9 +139,17 @@ function PatternTable({
               </Badge>
             </TableCell>
             <TableCell>
-              <Badge variant="outline" className={typeColors[p.type?.toLowerCase()] || typeColors.affiliate_platform}>
-                {p.type?.toLowerCase() === "retailer" ? "Retailer" : "Platform"}
-              </Badge>
+              <Select value={p.type?.toLowerCase() || "affiliate_platform"} onValueChange={(v) => onUpdateType(p.id, v as PatternType)}>
+                <SelectTrigger className="w-[130px] h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="affiliate_platform">Platform</SelectItem>
+                  <SelectItem value="retailer">Retailer</SelectItem>
+                  <SelectItem value="social">Social</SelectItem>
+                  <SelectItem value="neutral">Neutral</SelectItem>
+                </SelectContent>
+              </Select>
             </TableCell>
             <TableCell className="text-sm text-muted-foreground">
               {p.is_auto_discovered ? "Auto" : "Manual"}
