@@ -331,6 +331,23 @@ export default function Links() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="socials">
+          <Card>
+            <CardHeader>
+              <CardTitle className="font-display flex items-center gap-2">
+                <Share2 className="h-5 w-5" /> Social Links
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => (<Skeleton key={i} className="h-10 w-full" />))}</div>
+              ) : (
+                <PatternTable patterns={socialPatterns} onDelete={deletePattern} onUpdateType={updatePatternType} typeLabel="social links" />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="discovered">
           <Card>
             <CardHeader>
