@@ -388,6 +388,8 @@ export default function Links() {
                               <SelectContent>
                                 <SelectItem value="affiliate_platform">Platform</SelectItem>
                                 <SelectItem value="retailer">Retailer</SelectItem>
+                                <SelectItem value="social">Social</SelectItem>
+                                <SelectItem value="neutral">Neutral</SelectItem>
                               </SelectContent>
                             </Select>
                           </TableCell>

@@ -35,7 +35,7 @@ function parseCSVContent(text: string, defaultType: PatternType): ParsedRow[] {
     const classification = (parts[2] || "NEUTRAL").toUpperCase();
     const rawType = (parts[3] || "").trim().toLowerCase();
     const type: PatternType = rawType === "affiliate_platform" || rawType === "platform"
-      ? "affiliate_platform" : rawType === "retailer" ? "retailer" : defaultType;
+      ? "affiliate_platform" : rawType === "retailer" ? "retailer" : rawType === "social" ? "social" : rawType === "neutral" ? "neutral" : defaultType;
 
     if (!pattern || !name) continue;
     if (!["OWN", "COMPETITOR", "NEUTRAL"].includes(classification)) continue;
@@ -116,6 +116,8 @@ export function BulkUploadDialog({ onUpload }: BulkUploadDialogProps) {
               <SelectContent>
                 <SelectItem value="affiliate_platform">Affiliate Platform</SelectItem>
                 <SelectItem value="retailer">Retailer</SelectItem>
+                <SelectItem value="social">Social</SelectItem>
+                <SelectItem value="neutral">Neutral</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -165,7 +167,9 @@ export function BulkUploadDialog({ onUpload }: BulkUploadDialogProps) {
                             {r.classification}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-sm">{r.type === "retailer" ? "Retailer" : "Platform"}</TableCell>
+                        <TableCell className="text-sm">
+                          {r.type === "retailer" ? "Retailer" : r.type === "social" ? "Social" : r.type === "neutral" ? "Neutral" : "Platform"}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
