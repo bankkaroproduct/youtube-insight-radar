@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
-export type PatternType = "affiliate_platform" | "retailer";
+export type PatternType = "affiliate_platform" | "retailer" | "social" | "neutral";
 
 export interface AffiliatePattern {
   id: string;
@@ -109,6 +109,8 @@ export function useAffiliatePatterns() {
   const discoveredPatterns = patterns.filter(p => !p.is_confirmed);
   const platformPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "affiliate_platform");
   const retailerPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "retailer");
+  const socialPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "social");
+  const neutralPatterns = confirmedPatterns.filter(p => p.type?.toLowerCase() === "neutral");
 
   const uniqueNames = [...new Set(confirmedPatterns.map(p => p.name).filter(Boolean))].sort();
 
@@ -118,6 +120,8 @@ export function useAffiliatePatterns() {
     discoveredPatterns,
     platformPatterns,
     retailerPatterns,
+    socialPatterns,
+    neutralPatterns,
     uniqueNames,
     isLoading,
     addPattern,
