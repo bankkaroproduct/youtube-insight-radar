@@ -127,6 +127,7 @@ export function useAffiliatePatterns() {
     addPattern,
     confirmPattern,
     updatePatternType,
+    updatePatternName,
     deletePattern,
     processLinks,
     refresh: fetchPatterns,
