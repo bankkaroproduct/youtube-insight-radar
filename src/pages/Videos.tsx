@@ -303,6 +303,7 @@ export default function Videos() {
   const [searchParams] = useSearchParams();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [filters, setFilters] = useState<VideoFilters>({ title: "", channel: searchParams.get("channel") || "", keyword: "", classification: "" });
   const [debouncedFilters, setDebouncedFilters] = useState<VideoFilters>(filters);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
