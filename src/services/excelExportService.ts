@@ -432,7 +432,9 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   // Sheet 2: Social=19, Excluded=20
   // Sheet 3: Social=15, Excluded=16
   // Sheet 5: Social=12, Excluded=13
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s1, null, null), "S1 - Video Channel Map");
+  const s1Ws = buildWorksheet(XLSX, s1, null, null);
+  s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
+  XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 19, 20), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
