@@ -414,7 +414,13 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const urlOccurrences = new Map<string, number>();
   for (const l of links) urlOccurrences.set(l.original_url, (urlOccurrences.get(l.original_url) || 0) + 1);
 
-  const s1 = buildSheet1(videos, vkMap, keywordsById, channelsByYTId);
+  // Per-keyword video counts for Sheet 1
+  const videoCountByKeyword = new Map<string, number>();
+  for (const vk of vks) {
+    videoCountByKeyword.set(vk.keyword_id, (videoCountByKeyword.get(vk.keyword_id) || 0) + 1);
+  }
+
+  const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
   const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, urlOccurrences);
   const s3 = buildSheet3(videos, vkMap, linksByVideo, urlOccurrences);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
