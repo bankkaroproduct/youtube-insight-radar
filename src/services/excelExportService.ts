@@ -439,5 +439,5 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
 
   onProgress?.("Downloading file...");
   const date = new Date().toISOString().split("T")[0];
-  XLSX.writeFile(wb, `youtube_full_report_${date}.xlsx`);
+  XLSX.writeFile(wb, `youtube_full_report_${date}.xlsx`, { compression: true });
 }
