@@ -35,6 +35,8 @@ type Keyword = {
   business_aim: string;
   priority: string | null;
   status: string;
+  estimated_volume: string | null;
+  last_priority_fetch_at: string | null;
 };
 
 type Channel = {
@@ -148,33 +150,29 @@ async function fetchAll<T>(table: string, select = "*"): Promise<T[]> {
 }
 
 // ===== Sheet builders =====
-function buildSheet1(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, channelsByYTId: Map<string, Channel>) {
-  const headers = ["Keyword", "Category", "Business Aim", "Priority", "KW Status", "Video Name", "Video Link", "Channel Name", "Channel Link", "Total Videos From Channel"];
-  const channelCounts = new Map<string, number>();
-  for (const v of videos) {
-    if (vkMap.has(v.id)) channelCounts.set(v.channel_id, (channelCounts.get(v.channel_id) || 0) + 1);
-  }
+function buildSheet1(keywords: Keyword[], videoCountByKeyword: Map<string, number>) {
+  const headers = ["Keyword", "Category", "Priority", "Search Volume", "Total Videos Fetched", "Last Fetch Date", "Days Since Last Fetch"];
   const rows: any[][] = [];
-  for (const v of videos) {
-    const kIds = vkMap.get(v.id);
-    if (!kIds || kIds.length === 0) continue;
-    const ch = channelsByYTId.get(v.channel_id);
-    for (const kId of kIds) {
-      const kw = keywordsById.get(kId);
-      if (!kw) continue;
-      rows.push([
-        kw.keyword,
-        kw.category || "N/A",
-        kw.business_aim || "N/A",
-        kw.priority || "N/A",
-        kw.status || "N/A",
-        v.title,
-        `https://www.youtube.com/watch?v=${v.video_id}`,
-        v.channel_name,
-        ch?.channel_url || `https://www.youtube.com/channel/${v.channel_id}`,
-        channelCounts.get(v.channel_id) || 0,
-      ]);
+  const today = Date.now();
+  for (const kw of keywords) {
+    let lastFetchDisplay: string | number = "Never";
+    let daysGap: string | number = "N/A";
+    if (kw.last_priority_fetch_at) {
+      const d = new Date(kw.last_priority_fetch_at);
+      if (!isNaN(d.getTime())) {
+        lastFetchDisplay = d.toISOString().slice(0, 10);
+        daysGap = Math.floor((today - d.getTime()) / 86400000);
+      }
     }
+    rows.push([
+      kw.keyword,
+      kw.category || "N/A",
+      kw.priority || "N/A",
+      kw.estimated_volume || "N/A",
+      videoCountByKeyword.get(kw.id) || 0,
+      lastFetchDisplay,
+      daysGap,
+    ]);
   }
   return { headers, rows };
 }
@@ -385,7 +383,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
 
   onProgress?.("Fetching keywords...");
   const vks = await fetchAll<VideoKeyword>("video_keywords", "video_id,keyword_id");
-  const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status");
+  const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
 
   onProgress?.("Fetching channels...");
   const channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status");
@@ -416,7 +414,13 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const urlOccurrences = new Map<string, number>();
   for (const l of links) urlOccurrences.set(l.original_url, (urlOccurrences.get(l.original_url) || 0) + 1);
 
-  const s1 = buildSheet1(videos, vkMap, keywordsById, channelsByYTId);
+  // Per-keyword video counts for Sheet 1
+  const videoCountByKeyword = new Map<string, number>();
+  for (const vk of vks) {
+    videoCountByKeyword.set(vk.keyword_id, (videoCountByKeyword.get(vk.keyword_id) || 0) + 1);
+  }
+
+  const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
   const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, urlOccurrences);
   const s3 = buildSheet3(videos, vkMap, linksByVideo, urlOccurrences);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
@@ -428,7 +432,9 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   // Sheet 2: Social=19, Excluded=20
   // Sheet 3: Social=15, Excluded=16
   // Sheet 5: Social=12, Excluded=13
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s1, null, null), "S1 - Video Channel Map");
+  const s1Ws = buildWorksheet(XLSX, s1, null, null);
+  s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
+  XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 19, 20), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
