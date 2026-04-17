@@ -383,7 +383,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
 
   onProgress?.("Fetching keywords...");
   const vks = await fetchAll<VideoKeyword>("video_keywords", "video_id,keyword_id");
-  const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status");
+  const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
 
   onProgress?.("Fetching channels...");
   const channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status");
