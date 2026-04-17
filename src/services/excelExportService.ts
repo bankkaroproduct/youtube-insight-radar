@@ -342,28 +342,27 @@ function buildWorksheet(XLSX: any, sheetData: { headers: string[]; rows: any[][]
   ws["!freeze"] = { xSplit: 0, ySplit: 1 };
   ws["!views"] = [{ state: "frozen", ySplit: 1, xSplit: 0, topLeftCell: "A2", activePane: "bottomLeft" }];
 
-  for (let r = 0; r < rowCount; r++) {
+  // Style ONLY header row + meaningful data cells (placeholder/red/blue).
+  // Leaving plain data cells unstyled drastically reduces file size.
+  // Header row
+  for (let c = 0; c < colCount; c++) {
+    const addr = XLSX.utils.encode_cell({ r: 0, c });
+    if (!ws[addr]) ws[addr] = { v: headers[c] ?? "", t: "s" };
+    ws[addr].s = headerStyle;
+  }
+  // Data rows: only style cells that need color/italic
+  for (let r = 1; r < rowCount; r++) {
     for (let c = 0; c < colCount; c++) {
       const addr = XLSX.utils.encode_cell({ r, c });
       const cell = ws[addr];
-      if (!cell) {
-        ws[addr] = { v: "", t: "s", s: r === 0 ? headerStyle : baseDataStyle };
-        continue;
-      }
-      if (r === 0) {
-        cell.s = headerStyle;
-      } else {
-        const val = cell.v;
-        const isPlaceholder = typeof val === "string" && PLACEHOLDERS.has(val);
-        if (excludedColIdx !== null && c === excludedColIdx && typeof val === "string" && val.startsWith("Excluded")) {
-          cell.s = redStyle;
-        } else if (socialColIdx !== null && c === socialColIdx && typeof val === "string" && val) {
-          cell.s = blueStyle;
-        } else if (isPlaceholder) {
-          cell.s = placeholderStyle;
-        } else {
-          cell.s = baseDataStyle;
-        }
+      if (!cell) continue;
+      const val = cell.v;
+      if (excludedColIdx !== null && c === excludedColIdx && typeof val === "string" && val.startsWith("Excluded")) {
+        cell.s = redStyle;
+      } else if (socialColIdx !== null && c === socialColIdx && typeof val === "string" && val) {
+        cell.s = blueStyle;
+      } else if (typeof val === "string" && PLACEHOLDERS.has(val)) {
+        cell.s = placeholderStyle;
       }
     }
   }
