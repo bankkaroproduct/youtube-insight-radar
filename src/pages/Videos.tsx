@@ -378,6 +378,19 @@ export default function Videos() {
           }}>
             <Download className="h-4 w-4 mr-2" /> {isDownloading ? "Exporting..." : "Download CSV"}
           </Button>
+          <Button variant="default" size="sm" disabled={isExporting} onClick={async () => {
+            setIsExporting(true);
+            const tId = toast.loading("Preparing export...");
+            try {
+              await exportFullReport((msg) => toast.loading(msg, { id: tId }));
+              toast.success("Excel report downloaded", { id: tId });
+            } catch (e: any) {
+              toast.error("Export failed: " + (e?.message || "Unknown error"), { id: tId });
+            }
+            setIsExporting(false);
+          }}>
+            <FileSpreadsheet className="h-4 w-4 mr-2" /> {isExporting ? "Exporting..." : "Export Full Report"}
+          </Button>
           <Button variant="outline" size="sm" onClick={refresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>
