@@ -8,11 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, ChevronLeft, Link2, Tag, Users, AlertTriangle, Globe, Store, Download } from "lucide-react";
+import { Video as VideoIcon, RefreshCw, ExternalLink, ChevronDown, ChevronRight, ChevronLeft, Link2, Tag, Users, AlertTriangle, Globe, Store, Download, FileSpreadsheet } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
+import { exportFullReport } from "@/services/excelExportService";
+import { toast } from "sonner";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -301,6 +303,7 @@ export default function Videos() {
   const [searchParams] = useSearchParams();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [filters, setFilters] = useState<VideoFilters>({ title: "", channel: searchParams.get("channel") || "", keyword: "", classification: "" });
   const [debouncedFilters, setDebouncedFilters] = useState<VideoFilters>(filters);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
@@ -374,6 +377,19 @@ export default function Videos() {
             setIsDownloading(false);
           }}>
             <Download className="h-4 w-4 mr-2" /> {isDownloading ? "Exporting..." : "Download CSV"}
+          </Button>
+          <Button variant="default" size="sm" disabled={isExporting} onClick={async () => {
+            setIsExporting(true);
+            const tId = toast.loading("Preparing export...");
+            try {
+              await exportFullReport((msg) => toast.loading(msg, { id: tId }));
+              toast.success("Excel report downloaded", { id: tId });
+            } catch (e: any) {
+              toast.error("Export failed: " + (e?.message || "Unknown error"), { id: tId });
+            }
+            setIsExporting(false);
+          }}>
+            <FileSpreadsheet className="h-4 w-4 mr-2" /> {isExporting ? "Exporting..." : "Export Full Report"}
           </Button>
           <Button variant="outline" size="sm" onClick={refresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
