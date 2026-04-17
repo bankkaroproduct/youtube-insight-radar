@@ -150,33 +150,29 @@ async function fetchAll<T>(table: string, select = "*"): Promise<T[]> {
 }
 
 // ===== Sheet builders =====
-function buildSheet1(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, channelsByYTId: Map<string, Channel>) {
-  const headers = ["Keyword", "Category", "Business Aim", "Priority", "KW Status", "Video Name", "Video Link", "Channel Name", "Channel Link", "Total Videos From Channel"];
-  const channelCounts = new Map<string, number>();
-  for (const v of videos) {
-    if (vkMap.has(v.id)) channelCounts.set(v.channel_id, (channelCounts.get(v.channel_id) || 0) + 1);
-  }
+function buildSheet1(keywords: Keyword[], videoCountByKeyword: Map<string, number>) {
+  const headers = ["Keyword", "Category", "Priority", "Search Volume", "Total Videos Fetched", "Last Fetch Date", "Days Since Last Fetch"];
   const rows: any[][] = [];
-  for (const v of videos) {
-    const kIds = vkMap.get(v.id);
-    if (!kIds || kIds.length === 0) continue;
-    const ch = channelsByYTId.get(v.channel_id);
-    for (const kId of kIds) {
-      const kw = keywordsById.get(kId);
-      if (!kw) continue;
-      rows.push([
-        kw.keyword,
-        kw.category || "N/A",
-        kw.business_aim || "N/A",
-        kw.priority || "N/A",
-        kw.status || "N/A",
-        v.title,
-        `https://www.youtube.com/watch?v=${v.video_id}`,
-        v.channel_name,
-        ch?.channel_url || `https://www.youtube.com/channel/${v.channel_id}`,
-        channelCounts.get(v.channel_id) || 0,
-      ]);
+  const today = Date.now();
+  for (const kw of keywords) {
+    let lastFetchDisplay: string | number = "Never";
+    let daysGap: string | number = "N/A";
+    if (kw.last_priority_fetch_at) {
+      const d = new Date(kw.last_priority_fetch_at);
+      if (!isNaN(d.getTime())) {
+        lastFetchDisplay = d.toISOString().slice(0, 10);
+        daysGap = Math.floor((today - d.getTime()) / 86400000);
+      }
     }
+    rows.push([
+      kw.keyword,
+      kw.category || "N/A",
+      kw.priority || "N/A",
+      kw.estimated_volume || "N/A",
+      videoCountByKeyword.get(kw.id) || 0,
+      lastFetchDisplay,
+      daysGap,
+    ]);
   }
   return { headers, rows };
 }
