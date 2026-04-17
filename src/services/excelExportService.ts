@@ -35,6 +35,8 @@ type Keyword = {
   business_aim: string;
   priority: string | null;
   status: string;
+  estimated_volume: string | null;
+  last_priority_fetch_at: string | null;
 };
 
 type Channel = {
