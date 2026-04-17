@@ -92,19 +92,16 @@ const SOCIAL_DOMAINS: Record<string, string> = {
 const PLACEHOLDERS = new Set(["No Links", "No Description", "No Email", "No Instagram", "N/A", "Last 50 Scraped Video"]);
 
 // ===== Style helpers =====
-const thinBorder = { style: "thin", color: { rgb: "000000" } };
-const allBorders = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
-
+// Note: borders intentionally omitted to keep file size small.
+// Only header + special data cells (placeholder/red/blue) get styled.
 const headerStyle = {
   font: { bold: true, name: "Arial", sz: 10 },
   fill: { fgColor: { rgb: "E0E0E0" }, patternType: "solid" },
-  border: allBorders,
   alignment: { vertical: "center", wrapText: true },
 };
-const baseDataStyle = { font: { name: "Arial", sz: 10 }, border: allBorders, alignment: { vertical: "top", wrapText: true } };
-const placeholderStyle = { font: { name: "Arial", sz: 10, italic: true, color: { rgb: "808080" } }, border: allBorders, alignment: { vertical: "top" } };
-const redStyle = { font: { name: "Arial", sz: 10, color: { rgb: "FF0000" } }, border: allBorders, alignment: { vertical: "top" } };
-const blueStyle = { font: { name: "Arial", sz: 10, color: { rgb: "0000FF" } }, border: allBorders, alignment: { vertical: "top" } };
+const placeholderStyle = { font: { name: "Arial", sz: 10, italic: true, color: { rgb: "808080" } } };
+const redStyle = { font: { name: "Arial", sz: 10, color: { rgb: "FF0000" } } };
+const blueStyle = { font: { name: "Arial", sz: 10, color: { rgb: "0000FF" } } };
 
 // ===== Helpers =====
 function extractDomain(url: string | null | undefined): string {
