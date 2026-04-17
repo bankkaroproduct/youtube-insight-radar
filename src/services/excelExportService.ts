@@ -92,19 +92,16 @@ const SOCIAL_DOMAINS: Record<string, string> = {
 const PLACEHOLDERS = new Set(["No Links", "No Description", "No Email", "No Instagram", "N/A", "Last 50 Scraped Video"]);
 
 // ===== Style helpers =====
-const thinBorder = { style: "thin", color: { rgb: "000000" } };
-const allBorders = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
-
+// Note: borders intentionally omitted to keep file size small.
+// Only header + special data cells (placeholder/red/blue) get styled.
 const headerStyle = {
   font: { bold: true, name: "Arial", sz: 10 },
   fill: { fgColor: { rgb: "E0E0E0" }, patternType: "solid" },
-  border: allBorders,
   alignment: { vertical: "center", wrapText: true },
 };
-const baseDataStyle = { font: { name: "Arial", sz: 10 }, border: allBorders, alignment: { vertical: "top", wrapText: true } };
-const placeholderStyle = { font: { name: "Arial", sz: 10, italic: true, color: { rgb: "808080" } }, border: allBorders, alignment: { vertical: "top" } };
-const redStyle = { font: { name: "Arial", sz: 10, color: { rgb: "FF0000" } }, border: allBorders, alignment: { vertical: "top" } };
-const blueStyle = { font: { name: "Arial", sz: 10, color: { rgb: "0000FF" } }, border: allBorders, alignment: { vertical: "top" } };
+const placeholderStyle = { font: { name: "Arial", sz: 10, italic: true, color: { rgb: "808080" } } };
+const redStyle = { font: { name: "Arial", sz: 10, color: { rgb: "FF0000" } } };
+const blueStyle = { font: { name: "Arial", sz: 10, color: { rgb: "0000FF" } } };
 
 // ===== Helpers =====
 function extractDomain(url: string | null | undefined): string {
@@ -342,28 +339,27 @@ function buildWorksheet(XLSX: any, sheetData: { headers: string[]; rows: any[][]
   ws["!freeze"] = { xSplit: 0, ySplit: 1 };
   ws["!views"] = [{ state: "frozen", ySplit: 1, xSplit: 0, topLeftCell: "A2", activePane: "bottomLeft" }];
 
-  for (let r = 0; r < rowCount; r++) {
+  // Style ONLY header row + meaningful data cells (placeholder/red/blue).
+  // Leaving plain data cells unstyled drastically reduces file size.
+  // Header row
+  for (let c = 0; c < colCount; c++) {
+    const addr = XLSX.utils.encode_cell({ r: 0, c });
+    if (!ws[addr]) ws[addr] = { v: headers[c] ?? "", t: "s" };
+    ws[addr].s = headerStyle;
+  }
+  // Data rows: only style cells that need color/italic
+  for (let r = 1; r < rowCount; r++) {
     for (let c = 0; c < colCount; c++) {
       const addr = XLSX.utils.encode_cell({ r, c });
       const cell = ws[addr];
-      if (!cell) {
-        ws[addr] = { v: "", t: "s", s: r === 0 ? headerStyle : baseDataStyle };
-        continue;
-      }
-      if (r === 0) {
-        cell.s = headerStyle;
-      } else {
-        const val = cell.v;
-        const isPlaceholder = typeof val === "string" && PLACEHOLDERS.has(val);
-        if (excludedColIdx !== null && c === excludedColIdx && typeof val === "string" && val.startsWith("Excluded")) {
-          cell.s = redStyle;
-        } else if (socialColIdx !== null && c === socialColIdx && typeof val === "string" && val) {
-          cell.s = blueStyle;
-        } else if (isPlaceholder) {
-          cell.s = placeholderStyle;
-        } else {
-          cell.s = baseDataStyle;
-        }
+      if (!cell) continue;
+      const val = cell.v;
+      if (excludedColIdx !== null && c === excludedColIdx && typeof val === "string" && val.startsWith("Excluded")) {
+        cell.s = redStyle;
+      } else if (socialColIdx !== null && c === socialColIdx && typeof val === "string" && val) {
+        cell.s = blueStyle;
+      } else if (typeof val === "string" && PLACEHOLDERS.has(val)) {
+        cell.s = placeholderStyle;
       }
     }
   }
@@ -443,5 +439,5 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
 
   onProgress?.("Downloading file...");
   const date = new Date().toISOString().split("T")[0];
-  XLSX.writeFile(wb, `youtube_full_report_${date}.xlsx`);
+  XLSX.writeFile(wb, `youtube_full_report_${date}.xlsx`, { compression: true });
 }
