@@ -1,44 +1,54 @@
 
 
-## Goal
-Add a "Forgot Password" flow so any user (including `shruti@cashkaro.com`) can reset their own password via email.
+The user wants 3 fixes to the Excel export:
 
-## What gets built
+1. **S5 Channel Deep Data**: missing "Channel Subscribers" column.
+2. **S2 / S3 Video Deep Data**: many haul/pack links are classified with an affiliate platform but no retailer — need to surface retailer better, OR ensure rows show retailer info even when only affiliate is present.
+3. **Excluded column logic**: currently excludes based on unshortened URL duplicate detection. Change to exclude based on affiliate platform usage (i.e. mark as Excluded when the link is an affiliate platform link without a resolved retailer, OR when no affiliate is used — need to clarify).
 
-### 1. "Forgot password?" link on the login form
-File: `src/pages/Auth.tsx` — add a small link under the password field on the Sign In tab that navigates to `/forgot-password`.
+Let me check the current export service to understand exactly what columns exist and how Excluded works.
 
-### 2. New page: `/forgot-password`
-File: `src/pages/ForgotPassword.tsx`
-- Simple form with one email field.
-- On submit, calls:
-  ```ts
-  supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${window.location.origin}/reset-password`
-  })
-  ```
-- Shows a success toast: "If an account exists for this email, a reset link has been sent." (Generic message — does not leak whether the email exists.)
-- Link back to `/auth`.
+I need to look at `src/services/excelExportService.ts` to confirm column structure and exclusion rules before planning.
 
-### 3. New page: `/reset-password` (REQUIRED public route)
-File: `src/pages/ResetPassword.tsx`
-- Reads the recovery token from the URL hash (Supabase puts it there automatically).
-- Shows a "New password" + "Confirm password" form.
-- On submit, calls `supabase.auth.updateUser({ password })`.
-- On success: toast + redirect to `/auth` to sign in with the new password.
-- Handles the case where the link is expired/invalid with a clear error message.
+Based on prior conversation context: the Excluded column currently uses "Single Use" detection — counting unshortened URL occurrences across all link rows and marking `Excluded - Single Use` when count === 1. The user wants this changed to be based on whether an affiliate is used.
 
-### 4. Route registration
-File: `src/App.tsx` — register both new routes as **public** (outside any auth guard), so users who are logged out can access them.
+# Plan: Fix Channel Subscribers, Retailer Display, and Excluded Logic
 
-## How you'll use it (for the `shruti@cashkaro.com` account)
-1. Go to `/auth`, click **Forgot password?**
-2. Enter `shruti@cashkaro.com`, submit.
-3. Check that inbox for the reset email from Lovable Cloud.
-4. Click the link → land on `/reset-password` → set a new password → sign in.
+## Fix 1 — Add "Channel Subscribers" to S5 Channel Deep Data
+Insert a new column right after Channel Name in `buildSheet5()`:
+- Header: `Channel Subscribers`
+- Value: `channel.subscriber_count` (formatted as number; "N/A" grey-italic if null/0)
+- Update column widths array to include `wch: 18` for the new column.
+
+## Fix 2 — Better retailer surfacing in S2 & S3 (Video Deep Data)
+Currently when a link has `affiliate_platform` set but `resolved_retailer` is null, the Retailer column shows "N/A" — making haul/pack videos look like they have no retailer.
+
+Change retailer column logic for S2 and S3:
+- If `resolved_retailer` exists → show it.
+- Else if `unshortened_url` (or `original_url`) domain matches a known retailer pattern from `affiliate_patterns` table (type = `retailer`) → show that retailer name.
+- Else if it's clearly an affiliate-only link (e.g. amzn.to, fkrt.it, bit.ly going through affiliate platform) → show `"Via {affiliate_platform}"` in grey italic instead of blank "N/A", so it's clear retailer wasn't resolved by the unshortener.
+- Else → "N/A" grey italic.
+
+This requires loading `affiliate_patterns` (already fetched in the export service per prior changes) and matching domains.
+
+## Fix 3 — Change "Excluded" logic from Single-Use to Affiliate-based
+Replace the current rule (`count === 1` → `Excluded - Single Use`) with:
+
+| Condition | Excluded value |
+|---|---|
+| No affiliate platform AND no retailer detected | `Excluded - No Affiliate` |
+| Social/neutral domain (instagram, t.me, wa.me, etc.) | `Excluded - Social` (already handled — keep) |
+| Has affiliate platform OR retailer | (blank — included) |
+
+So the Excluded column flags links that don't monetize (no affiliate involvement). Red text styling on the Excluded column stays the same.
+
+Apply this to S2 and S3 (the two sheets with the Excluded column).
+
+## Files to edit
+- `src/services/excelExportService.ts` — only file that needs changes.
 
 ## Notes
-- Uses the default Lovable Cloud auth emails (no custom domain or template scaffolding needed). The reset email will arrive from the default sender.
-- No DB changes, no new dependencies.
-- If the reset email doesn't arrive, the most common causes are: spam folder, or the email isn't actually registered in the system — I can help diagnose either after we ship this.
+- No DB schema changes, no new dependencies.
+- "Single Use" detection logic and the cross-row URL counting can be removed entirely — simplifies code and reduces memory.
+- Sheet 5 column reorder: `Channel Name | Channel Subscribers | Channel URL | …` (subscribers right after name for readability).
 
