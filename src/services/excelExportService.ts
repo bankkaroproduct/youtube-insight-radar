@@ -564,14 +564,14 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const wb = XLSX.utils.book_new();
   // Sheet 2: 22 cols → Social=20, Excluded=21 (added Search Rank at idx 4)
   // Sheet 3: 17 cols → Social=15, Excluded=16 (unchanged)
-  // Sheet 5: 16 cols → Social=14, Excluded=15 (added Best Video Rank at idx 3)
+  // Sheet 5: 17 cols → Social=15, Excluded=16 (added Link Header at idx 9)
   const s1Ws = buildWorksheet(XLSX, s1, null, null);
   s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 20, 21), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 14, 15), "S5 - Channel Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 15, 16), "S5 - Channel Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
 
   onProgress?.("Downloading file...");
