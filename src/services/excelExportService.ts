@@ -134,6 +134,20 @@ function getSocialPlatform(domain: string): string {
   return "";
 }
 
+// Infer a friendly header label from a URL when no scraped header is available.
+// e.g. instagram.com -> "Instagram", haulpack.com -> "Haulpack".
+function inferHeaderFromUrl(url: string): string {
+  const domain = extractDomain(url);
+  if (!domain) return "Link";
+  const social = getSocialPlatform(domain);
+  if (social) return social;
+  // Take the second-level domain word, title-case it.
+  const parts = domain.split(".");
+  const root = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
+  if (!root) return "Link";
+  return root.charAt(0).toUpperCase() + root.slice(1);
+}
+
 async function fetchAll<T>(table: string, select = "*"): Promise<T[]> {
   const BATCH = 1000;
   let all: T[] = [];
