@@ -1,42 +1,44 @@
-The user wants to redefine Sheet 1 of the Excel export. Instead of one row per video, S1 becomes a per-keyword summary with 7 specific columns.
-
-Let me check the current S1 implementation and the keywords data shape.
-
-Looking at `keywords_search_runs` schema: has `keyword`, `category`, `priority`, `estimated_volume`, `last_priority_fetch_at`, `created_at`, `status`. "Search volume" maps to `estimated_volume`. "Last day of fetching" → `last_priority_fetch_at` (or fall back to most recent video `created_at` linked through `video_keywords`). "Days gap since last fetched till today" = computed.
-
-"Total videos fetched across that keyword" = count from `video_keywords` per `keyword_id` (already available via `get_keyword_stats` RPC).
-
-# Plan: Redefine Sheet 1 as Per-Keyword Summary
-
-## New Sheet 1 columns (one row per keyword)
 
 
-| #   | Column                | Source                                                                                    |
-| --- | --------------------- | ----------------------------------------------------------------------------------------- |
-| 1   | Keyword               | `keywords_search_runs.keyword`                                                            |
-| 2   | Category              | `keywords_search_runs.category`                                                           |
-| 3   | Priority              | `keywords_search_runs.priority` (blank if null)                                           |
-| 4   | Search Volume         | `keywords_search_runs.estimated_volume` (Find the search voloume for keyword through AI ) |
-| 5   | Total Videos Fetched  | count from `video_keywords` grouped by `keyword_id`                                       |
-| 6   | Last Fetch Date       | `keywords_search_runs.last_priority_fetch_at` formatted YYYY-MM-DD, or "Never"            |
-| 7   | Days Since Last Fetch | `today - last_priority_fetch_at` in days, or "N/A" if never fetched                       |
+## Goal
+Add a "Forgot Password" flow so any user (including `shruti@cashkaro.com`) can reset their own password via email.
 
+## What gets built
 
-## Implementation
+### 1. "Forgot password?" link on the login form
+File: `src/pages/Auth.tsx` — add a small link under the password field on the Sign In tab that navigates to `/forgot-password`.
 
-**File: `src/services/excelExportService.ts**`
+### 2. New page: `/forgot-password`
+File: `src/pages/ForgotPassword.tsx`
+- Simple form with one email field.
+- On submit, calls:
+  ```ts
+  supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password`
+  })
+  ```
+- Shows a success toast: "If an account exists for this email, a reset link has been sent." (Generic message — does not leak whether the email exists.)
+- Link back to `/auth`.
 
-1. **Fetch additions in `fetchAllExportData()**`: already fetches `keywords_search_runs`. Add a per-keyword video count via the existing `get_keyword_stats` RPC (or aggregate from already-fetched `video_keywords`).
-2. **Rewrite `buildSheet1()**`:
-  - Iterate over all `keywords_search_runs` rows (not videos).
-  - For each keyword, compute video count from `video_keywords` map.
-  - Format `last_priority_fetch_at` → "YYYY-MM-DD" or grey-italic "Never".
-  - Compute days gap: `Math.floor((Date.now() - lastFetch) / 86400000)` → number, or grey-italic "N/A".
-3. **Formatting**: keep existing styles (bold grey header, frozen row 1, thin black borders, Arial 10). Apply grey-italic placeholder style to "Never" / "N/A" cells.
-4. **Column widths**: Keyword 30, Category 20, Priority 12, Search Volume 18, Total Videos Fetched 22, Last Fetch Date 18, Days Since Last Fetch 22.
+### 3. New page: `/reset-password` (REQUIRED public route)
+File: `src/pages/ResetPassword.tsx`
+- Reads the recovery token from the URL hash (Supabase puts it there automatically).
+- Shows a "New password" + "Confirm password" form.
+- On submit, calls `supabase.auth.updateUser({ password })`.
+- On success: toast + redirect to `/auth` to sign in with the new password.
+- Handles the case where the link is expired/invalid with a clear error message.
+
+### 4. Route registration
+File: `src/App.tsx` — register both new routes as **public** (outside any auth guard), so users who are logged out can access them.
+
+## How you'll use it (for the `shruti@cashkaro.com` account)
+1. Go to `/auth`, click **Forgot password?**
+2. Enter `shruti@cashkaro.com`, submit.
+3. Check that inbox for the reset email from Lovable Cloud.
+4. Click the link → land on `/reset-password` → set a new password → sign in.
 
 ## Notes
+- Uses the default Lovable Cloud auth emails (no custom domain or template scaffolding needed). The reset email will arrive from the default sender.
+- No DB changes, no new dependencies.
+- If the reset email doesn't arrive, the most common causes are: spam folder, or the email isn't actually registered in the system — I can help diagnose either after we ship this.
 
-- Sheets 2–6 remain unchanged.
-- No DB schema changes.
-- No new dependencies.
