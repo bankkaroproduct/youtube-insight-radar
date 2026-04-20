@@ -470,11 +470,23 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   onProgress?.("Building sheets...");
 
   // Maps
-  const vkMap = new Map<string, string[]>(); // video.id -> keyword_ids
+  const vkMap = new Map<string, VkEntry[]>(); // video.id -> [{keyword_id, search_rank}]
   for (const vk of vks) {
     const list = vkMap.get(vk.video_id) || [];
-    list.push(vk.keyword_id);
+    list.push({ keyword_id: vk.keyword_id, search_rank: vk.search_rank ?? null });
     vkMap.set(vk.video_id, list);
+  }
+
+  // Per-channel best (min) search rank, keyed by YouTube channel_id
+  const videoYTChannelById = new Map<string, string>();
+  for (const v of videos) videoYTChannelById.set(v.id, v.channel_id);
+  const channelBestRank = new Map<string, number>();
+  for (const vk of vks) {
+    if (vk.search_rank == null) continue;
+    const ytId = videoYTChannelById.get(vk.video_id);
+    if (!ytId) continue;
+    const cur = channelBestRank.get(ytId);
+    if (cur == null || vk.search_rank < cur) channelBestRank.set(ytId, vk.search_rank);
   }
   const keywordsById = new Map(keywordsAll.map(k => [k.id, k]));
   const linksByVideo = new Map<string, VideoLink[]>();
