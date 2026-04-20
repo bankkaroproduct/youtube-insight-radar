@@ -26,7 +26,9 @@ type VideoLink = {
   classification: string | null;
 };
 
-type VideoKeyword = { video_id: string; keyword_id: string };
+type VideoKeyword = { video_id: string; keyword_id: string; search_rank: number | null };
+
+type VkEntry = { keyword_id: string; search_rank: number | null };
 
 type Keyword = {
   id: string;
