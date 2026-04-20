@@ -285,7 +285,7 @@ function buildSheet4(videos: Video[], vkMap: Map<string, string[]>, channelsByYT
 }
 
 function buildSheet5(channels: Channel[]) {
-  const headers = ["Channel Link", "Channel Name", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
     const description = ch.description?.trim() ? ch.description : "No Description";
@@ -293,6 +293,7 @@ function buildSheet5(channels: Channel[]) {
     const base = [
       ch.channel_url || `https://www.youtube.com/channel/${ch.channel_id}`,
       ch.channel_name,
+      ch.subscriber_count ?? 0,
       ch.median_views ?? 0,
       ch.median_likes ?? 0,
       ch.median_comments ?? 0,
