@@ -254,20 +254,21 @@ function computeExcluded(link: VideoLink, social: string, affiliateCounts: Map<s
   return "";
 }
 
-function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
-  const headers = ["Keyword", "Category", "Business Aim", "Priority", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+function buildSheet2(videos: Video[], vkMap: Map<string, VkEntry[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
+  const headers = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
-    const kIds = vkMap.get(v.id);
-    if (!kIds || kIds.length === 0) continue;
+    const entries = vkMap.get(v.id);
+    if (!entries || entries.length === 0) continue;
     const links = linksByVideo.get(v.id) || [];
     const description = v.description?.trim() ? v.description : "No Description";
     const totalLinks = links.length;
-    for (const kId of kIds) {
-      const kw = keywordsById.get(kId);
+    for (const entry of entries) {
+      const kw = keywordsById.get(entry.keyword_id);
       if (!kw) continue;
+      const rank = entry.search_rank != null ? entry.search_rank : "N/A";
       const baseRow = [
-        kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A", kw.status || "N/A",
+        kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A", rank, kw.status || "N/A",
         `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
         v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0, description, totalLinks,
       ];
@@ -288,7 +289,7 @@ function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById
   return { headers, rows };
 }
 
-function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
+function buildSheet3(videos: Video[], vkMap: Map<string, VkEntry[]>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
   const headers = ["Keyword", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
