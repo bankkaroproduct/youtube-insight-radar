@@ -56,6 +56,7 @@ type Channel = {
   country: string | null;
   youtube_category: string | null;
   affiliate_status: string | null;
+  custom_links: Array<{ header: string; url: string }> | null;
 };
 
 type IGProfile = {
