@@ -195,11 +195,10 @@ function resolveRetailerDisplay(link: VideoLink, retailerByDomain: Map<string, s
   return "N/A";
 }
 
-function computeExcluded(link: VideoLink, social: string, retailerDisplay: string): string {
+function computeExcluded(link: VideoLink, social: string, affiliateCounts: Map<string, number>): string {
   if (social) return `Excluded - Social (${social})`;
-  const hasAffiliate = !!link.affiliate_platform;
-  const hasRetailer = !!link.resolved_retailer || (retailerDisplay !== "N/A" && !retailerDisplay.startsWith("Via "));
-  if (!hasAffiliate && !hasRetailer) return "Excluded - No Affiliate";
+  const aff = link.affiliate_platform;
+  if (aff && (affiliateCounts.get(aff) ?? 0) === 1) return "Excluded - Single Affiliate";
   return "";
 }
 
