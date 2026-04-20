@@ -352,11 +352,10 @@ function buildSheet4(videos: Video[], vkMap: Map<string, VkEntry[]>, channelsByY
 }
 
 function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) {
-  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link Header", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
     const description = ch.description?.trim() ? ch.description : "No Description";
-    const urls = extractUrls(ch.description);
     const bestRank = channelBestRank.get(ch.channel_id);
     const base = [
       ch.channel_url || `https://www.youtube.com/channel/${ch.channel_id}`,
@@ -368,14 +367,24 @@ function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) 
       ch.median_comments ?? 0,
       description,
     ];
-    if (urls.length === 0) {
-      rows.push([...base, "No Links", "No Links", "N/A", "N/A", "", "", "", ""]);
+
+    // Prefer scraped custom_links (creator-set headers); fall back to URLs from description with inferred headers.
+    const scraped = Array.isArray(ch.custom_links) ? ch.custom_links.filter(l => l && l.url) : [];
+    let linkPairs: Array<{ header: string; url: string }>;
+    if (scraped.length > 0) {
+      linkPairs = scraped.map(l => ({ header: (l.header || "").trim() || inferHeaderFromUrl(l.url), url: l.url }));
     } else {
-      urls.forEach((url, idx) => {
+      linkPairs = extractUrls(ch.description).map(url => ({ header: inferHeaderFromUrl(url), url }));
+    }
+
+    if (linkPairs.length === 0) {
+      rows.push([...base, "No Links", "No Links", "No Links", "N/A", "N/A", "", "", "", ""]);
+    } else {
+      linkPairs.forEach(({ header, url }, idx) => {
         const domain = extractDomain(url);
         const social = getSocialPlatform(domain);
         const excluded = social ? `Excluded - Social (${social})` : "";
-        rows.push([...base, `L${idx + 1}`, url, "N/A", domain || "N/A", "", "", social, excluded]);
+        rows.push([...base, `L${idx + 1}`, header, url, "N/A", domain || "N/A", "", "", social, excluded]);
       });
     }
   }
