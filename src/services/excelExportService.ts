@@ -174,7 +174,36 @@ function buildSheet1(keywords: Keyword[], videoCountByKeyword: Map<string, numbe
   return { headers, rows };
 }
 
-function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, urlOccurrences: Map<string, number>) {
+function resolveRetailerDisplay(link: VideoLink, retailerByDomain: Map<string, string>): string {
+  if (link.resolved_retailer) return link.resolved_retailer;
+  // Try matching unshortened or original domain against known retailer patterns
+  const candidates = [
+    extractDomain(link.unshortened_url),
+    link.domain,
+    link.original_domain,
+    extractDomain(link.original_url),
+  ].filter(Boolean) as string[];
+  for (const d of candidates) {
+    const r = retailerByDomain.get(d);
+    if (r) return r;
+    // suffix match
+    for (const [pat, name] of retailerByDomain) {
+      if (d === pat || d.endsWith("." + pat)) return name;
+    }
+  }
+  if (link.affiliate_platform) return `Via ${link.affiliate_platform}`;
+  return "N/A";
+}
+
+function computeExcluded(link: VideoLink, social: string, retailerDisplay: string): string {
+  if (social) return `Excluded - Social (${social})`;
+  const hasAffiliate = !!link.affiliate_platform;
+  const hasRetailer = !!link.resolved_retailer || (retailerDisplay !== "N/A" && !retailerDisplay.startsWith("Via "));
+  if (!hasAffiliate && !hasRetailer) return "Excluded - No Affiliate";
+  return "";
+}
+
+function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>) {
   const headers = ["Keyword", "Category", "Business Aim", "Priority", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
@@ -198,11 +227,9 @@ function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById
           const unshort = link.unshortened_url || "N/A";
           const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
           const social = getSocialPlatform(domain);
-          let excluded = "";
-          if (social) excluded = `Excluded - Social (${social})`;
-          else if (urlOccurrences.get(link.original_url) === 1) excluded = "Excluded - Single Use";
-          else if (!link.affiliate_platform && !link.resolved_retailer && domain) excluded = "Excluded - Unknown Domain";
-          rows.push([...baseRow, `L${idx + 1}`, link.original_url, unshort, domain || "N/A", link.affiliate_platform || "", link.resolved_retailer || "", social, excluded]);
+          const retailer = resolveRetailerDisplay(link, retailerByDomain);
+          const excluded = computeExcluded(link, social, retailer);
+          rows.push([...baseRow, `L${idx + 1}`, link.original_url, unshort, domain || "N/A", link.affiliate_platform || "", retailer, social, excluded]);
         });
       }
     }
@@ -210,7 +237,7 @@ function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById
   return { headers, rows };
 }
 
-function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo: Map<string, VideoLink[]>, urlOccurrences: Map<string, number>) {
+function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>) {
   const headers = ["Keyword", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
@@ -229,11 +256,9 @@ function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo
         const unshort = link.unshortened_url || "N/A";
         const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
         const social = getSocialPlatform(domain);
-        let excluded = "";
-        if (social) excluded = `Excluded - Social (${social})`;
-        else if (urlOccurrences.get(link.original_url) === 1) excluded = "Excluded - Single Use";
-        else if (!link.affiliate_platform && !link.resolved_retailer && domain) excluded = "Excluded - Unknown Domain";
-        rows.push([...baseRow, `L${idx + 1}`, link.original_url, unshort, domain || "N/A", link.affiliate_platform || "", link.resolved_retailer || "", social, excluded]);
+        const retailer = resolveRetailerDisplay(link, retailerByDomain);
+        const excluded = computeExcluded(link, social, retailer);
+        rows.push([...baseRow, `L${idx + 1}`, link.original_url, unshort, domain || "N/A", link.affiliate_platform || "", retailer, social, excluded]);
       });
     }
   }
@@ -260,7 +285,7 @@ function buildSheet4(videos: Video[], vkMap: Map<string, string[]>, channelsByYT
 }
 
 function buildSheet5(channels: Channel[]) {
-  const headers = ["Channel Link", "Channel Name", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
     const description = ch.description?.trim() ? ch.description : "No Description";
@@ -268,6 +293,7 @@ function buildSheet5(channels: Channel[]) {
     const base = [
       ch.channel_url || `https://www.youtube.com/channel/${ch.channel_id}`,
       ch.channel_name,
+      ch.subscriber_count ?? 0,
       ch.median_views ?? 0,
       ch.median_likes ?? 0,
       ch.median_comments ?? 0,
@@ -406,9 +432,22 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const channelsByYTId = new Map(channels.map(c => [c.channel_id, c]));
   const igByChannelId = new Map(igs.map(i => [i.channel_id, i]));
 
-  // URL occurrence count for "Single Use" detection
-  const urlOccurrences = new Map<string, number>();
-  for (const l of links) urlOccurrences.set(l.original_url, (urlOccurrences.get(l.original_url) || 0) + 1);
+  // Build retailer-domain map from affiliate_patterns (type='retailer')
+  const retailerByDomain = new Map<string, string>();
+  try {
+    const patterns = await fetchAll<{ pattern: string; name: string; type: string; is_confirmed: boolean }>(
+      "affiliate_patterns",
+      "pattern,name,type,is_confirmed"
+    );
+    for (const p of patterns) {
+      if (!p.is_confirmed) continue;
+      if ((p.type || "").toLowerCase() !== "retailer") continue;
+      const d = (p.pattern || "").replace(/^www\./, "").toLowerCase();
+      if (d) retailerByDomain.set(d, p.name);
+    }
+  } catch {
+    // non-fatal: retailer fallback just won't fire
+  }
 
   // Per-keyword video counts for Sheet 1
   const videoCountByKeyword = new Map<string, number>();
@@ -417,8 +456,8 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   }
 
   const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
-  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, urlOccurrences);
-  const s3 = buildSheet3(videos, vkMap, linksByVideo, urlOccurrences);
+  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain);
+  const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
   const s5 = buildSheet5(channels);
   const s6 = buildSheet6(channels, igByChannelId);
@@ -427,14 +466,14 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const wb = XLSX.utils.book_new();
   // Sheet 2: Social=19, Excluded=20
   // Sheet 3: Social=15, Excluded=16
-  // Sheet 5: Social=12, Excluded=13
+  // Sheet 5: Social=13, Excluded=14 (shifted +1 after adding Channel Subscribers)
   const s1Ws = buildWorksheet(XLSX, s1, null, null);
   s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 19, 20), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 12, 13), "S5 - Channel Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 13, 14), "S5 - Channel Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
 
   onProgress?.("Downloading file...");
