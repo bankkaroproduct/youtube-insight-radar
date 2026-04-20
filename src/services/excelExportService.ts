@@ -432,9 +432,22 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const channelsByYTId = new Map(channels.map(c => [c.channel_id, c]));
   const igByChannelId = new Map(igs.map(i => [i.channel_id, i]));
 
-  // URL occurrence count for "Single Use" detection
-  const urlOccurrences = new Map<string, number>();
-  for (const l of links) urlOccurrences.set(l.original_url, (urlOccurrences.get(l.original_url) || 0) + 1);
+  // Build retailer-domain map from affiliate_patterns (type='retailer')
+  const retailerByDomain = new Map<string, string>();
+  try {
+    const patterns = await fetchAll<{ pattern: string; name: string; type: string; is_confirmed: boolean }>(
+      "affiliate_patterns",
+      "pattern,name,type,is_confirmed"
+    );
+    for (const p of patterns) {
+      if (!p.is_confirmed) continue;
+      if ((p.type || "").toLowerCase() !== "retailer") continue;
+      const d = (p.pattern || "").replace(/^www\./, "").toLowerCase();
+      if (d) retailerByDomain.set(d, p.name);
+    }
+  } catch {
+    // non-fatal: retailer fallback just won't fire
+  }
 
   // Per-keyword video counts for Sheet 1
   const videoCountByKeyword = new Map<string, number>();
@@ -443,8 +456,8 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   }
 
   const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
-  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, urlOccurrences);
-  const s3 = buildSheet3(videos, vkMap, linksByVideo, urlOccurrences);
+  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain);
+  const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
   const s5 = buildSheet5(channels);
   const s6 = buildSheet6(channels, igByChannelId);
@@ -453,14 +466,14 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const wb = XLSX.utils.book_new();
   // Sheet 2: Social=19, Excluded=20
   // Sheet 3: Social=15, Excluded=16
-  // Sheet 5: Social=12, Excluded=13
+  // Sheet 5: Social=13, Excluded=14 (shifted +1 after adding Channel Subscribers)
   const s1Ws = buildWorksheet(XLSX, s1, null, null);
   s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 19, 20), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 12, 13), "S5 - Channel Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 13, 14), "S5 - Channel Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
 
   onProgress?.("Downloading file...");
