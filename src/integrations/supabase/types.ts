@@ -109,6 +109,8 @@ export type Database = {
           contact_email: string | null
           country: string | null
           created_at: string
+          custom_links: Json | null
+          custom_links_scraped_at: string | null
           description: string | null
           id: string
           instagram_url: string | null
@@ -139,6 +141,8 @@ export type Database = {
           contact_email?: string | null
           country?: string | null
           created_at?: string
+          custom_links?: Json | null
+          custom_links_scraped_at?: string | null
           description?: string | null
           id?: string
           instagram_url?: string | null
@@ -169,6 +173,8 @@ export type Database = {
           contact_email?: string | null
           country?: string | null
           created_at?: string
+          custom_links?: Json | null
+          custom_links_scraped_at?: string | null
           description?: string | null
           id?: string
           instagram_url?: string | null

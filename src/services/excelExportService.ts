@@ -56,6 +56,7 @@ type Channel = {
   country: string | null;
   youtube_category: string | null;
   affiliate_status: string | null;
+  custom_links: Array<{ header: string; url: string }> | null;
 };
 
 type IGProfile = {
@@ -131,6 +132,20 @@ function getSocialPlatform(domain: string): string {
     if (domain === d || domain.endsWith("." + d)) return name;
   }
   return "";
+}
+
+// Infer a friendly header label from a URL when no scraped header is available.
+// e.g. instagram.com -> "Instagram", haulpack.com -> "Haulpack".
+function inferHeaderFromUrl(url: string): string {
+  const domain = extractDomain(url);
+  if (!domain) return "Link";
+  const social = getSocialPlatform(domain);
+  if (social) return social;
+  // Take the second-level domain word, title-case it.
+  const parts = domain.split(".");
+  const root = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
+  if (!root) return "Link";
+  return root.charAt(0).toUpperCase() + root.slice(1);
 }
 
 async function fetchAll<T>(table: string, select = "*"): Promise<T[]> {
@@ -337,11 +352,10 @@ function buildSheet4(videos: Video[], vkMap: Map<string, VkEntry[]>, channelsByY
 }
 
 function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) {
-  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link Header", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
     const description = ch.description?.trim() ? ch.description : "No Description";
-    const urls = extractUrls(ch.description);
     const bestRank = channelBestRank.get(ch.channel_id);
     const base = [
       ch.channel_url || `https://www.youtube.com/channel/${ch.channel_id}`,
@@ -353,14 +367,24 @@ function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) 
       ch.median_comments ?? 0,
       description,
     ];
-    if (urls.length === 0) {
-      rows.push([...base, "No Links", "No Links", "N/A", "N/A", "", "", "", ""]);
+
+    // Prefer scraped custom_links (creator-set headers); fall back to URLs from description with inferred headers.
+    const scraped = Array.isArray(ch.custom_links) ? ch.custom_links.filter(l => l && l.url) : [];
+    let linkPairs: Array<{ header: string; url: string }>;
+    if (scraped.length > 0) {
+      linkPairs = scraped.map(l => ({ header: (l.header || "").trim() || inferHeaderFromUrl(l.url), url: l.url }));
     } else {
-      urls.forEach((url, idx) => {
+      linkPairs = extractUrls(ch.description).map(url => ({ header: inferHeaderFromUrl(url), url }));
+    }
+
+    if (linkPairs.length === 0) {
+      rows.push([...base, "No Links", "No Links", "No Links", "N/A", "N/A", "", "", "", ""]);
+    } else {
+      linkPairs.forEach(({ header, url }, idx) => {
         const domain = extractDomain(url);
         const social = getSocialPlatform(domain);
         const excluded = social ? `Excluded - Social (${social})` : "";
-        rows.push([...base, `L${idx + 1}`, url, "N/A", domain || "N/A", "", "", social, excluded]);
+        rows.push([...base, `L${idx + 1}`, header, url, "N/A", domain || "N/A", "", "", social, excluded]);
       });
     }
   }
@@ -462,7 +486,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
 
   onProgress?.("Fetching channels...");
-  const channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status");
+  const channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links");
 
   onProgress?.("Fetching Instagram...");
   const igs = await fetchAll<IGProfile>("instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category");
@@ -540,14 +564,14 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const wb = XLSX.utils.book_new();
   // Sheet 2: 22 cols → Social=20, Excluded=21 (added Search Rank at idx 4)
   // Sheet 3: 17 cols → Social=15, Excluded=16 (unchanged)
-  // Sheet 5: 16 cols → Social=14, Excluded=15 (added Best Video Rank at idx 3)
+  // Sheet 5: 17 cols → Social=15, Excluded=16 (added Link Header at idx 9)
   const s1Ws = buildWorksheet(XLSX, s1, null, null);
   s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 20, 21), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 14, 15), "S5 - Channel Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 15, 16), "S5 - Channel Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
 
   onProgress?.("Downloading file...");

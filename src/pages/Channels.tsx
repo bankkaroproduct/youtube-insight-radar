@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon, Loader2 } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon, Loader2, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
@@ -111,6 +111,7 @@ export default function Channels() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const [fetchingNew, setFetchingNew] = useState(false);
+  const [scrapingLinks, setScrapingLinks] = useState(false);
   
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
 
@@ -150,6 +151,30 @@ export default function Channels() {
       toast.error("Failed to fetch new channel videos: " + e.message);
     } finally {
       setFetchingNew(false);
+    }
+  };
+
+  const scrapeChannelLinks = async () => {
+    setScrapingLinks(true);
+    let totalProcessed = 0;
+    try {
+      const t = toast.loading("Scraping channel links…");
+      while (true) {
+        const { data, error } = await supabase.functions.invoke("scrape-channel-links", {
+          body: { batch_size: 10 },
+        });
+        if (error) throw error;
+        if (!data?.success) throw new Error(data?.error || "Failed");
+        totalProcessed += data.processed || 0;
+        toast.loading(`Scraped ${totalProcessed} channels (${data.remaining} remaining)…`, { id: t });
+        if (!data.processed || data.remaining === 0) break;
+      }
+      toast.success(`Done. Scraped links for ${totalProcessed} channels.`, { id: t });
+      refresh();
+    } catch (e: any) {
+      toast.error("Failed to scrape links: " + e.message);
+    } finally {
+      setScrapingLinks(false);
     }
   };
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
@@ -221,6 +246,10 @@ export default function Channels() {
           <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
+          </Button>
+          <Button variant="outline" size="sm" onClick={scrapeChannelLinks} disabled={scrapingLinks}>
+            {scrapingLinks ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Link2 className="h-4 w-4 mr-2" />}
+            Scrape Channel Links
           </Button>
           <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted, igProfiles)}>
             <Download className="h-4 w-4 mr-2" /> Download CSV
