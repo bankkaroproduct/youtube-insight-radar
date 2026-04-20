@@ -317,7 +317,7 @@ function buildSheet3(videos: Video[], vkMap: Map<string, VkEntry[]>, linksByVide
   return { headers, rows };
 }
 
-function buildSheet4(videos: Video[], vkMap: Map<string, string[]>, channelsByYTId: Map<string, Channel>) {
+function buildSheet4(videos: Video[], vkMap: Map<string, VkEntry[]>, channelsByYTId: Map<string, Channel>) {
   const headers = ["Keyword", "Video Name", "Video Link", "Channel Name", "Channel Link", "Total Videos From Channel"];
   const last50 = videos.filter(v => !vkMap.has(v.id));
   const channelCounts = new Map<string, number>();
