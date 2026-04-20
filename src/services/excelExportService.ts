@@ -256,7 +256,7 @@ function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo
         const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
         const social = getSocialPlatform(domain);
         const retailer = resolveRetailerDisplay(link, retailerByDomain);
-        const excluded = computeExcluded(link, social, retailer);
+        const excluded = computeExcluded(link, social, affiliateCounts);
         rows.push([...baseRow, `L${idx + 1}`, link.original_url, unshort, domain || "N/A", link.affiliate_platform || "", retailer, social, excluded]);
       });
     }
