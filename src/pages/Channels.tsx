@@ -247,6 +247,10 @@ export default function Channels() {
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
           </Button>
+          <Button variant="outline" size="sm" onClick={scrapeChannelLinks} disabled={scrapingLinks}>
+            {scrapingLinks ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Link2 className="h-4 w-4 mr-2" />}
+            Scrape Channel Links
+          </Button>
           <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted, igProfiles)}>
             <Download className="h-4 w-4 mr-2" /> Download CSV
           </Button>
