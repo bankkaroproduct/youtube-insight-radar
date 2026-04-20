@@ -153,6 +153,30 @@ export default function Channels() {
       setFetchingNew(false);
     }
   };
+
+  const scrapeChannelLinks = async () => {
+    setScrapingLinks(true);
+    let totalProcessed = 0;
+    try {
+      const t = toast.loading("Scraping channel links…");
+      while (true) {
+        const { data, error } = await supabase.functions.invoke("scrape-channel-links", {
+          body: { batch_size: 10 },
+        });
+        if (error) throw error;
+        if (!data?.success) throw new Error(data?.error || "Failed");
+        totalProcessed += data.processed || 0;
+        toast.loading(`Scraped ${totalProcessed} channels (${data.remaining} remaining)…`, { id: t });
+        if (!data.processed || data.remaining === 0) break;
+      }
+      toast.success(`Done. Scraped links for ${totalProcessed} channels.`, { id: t });
+      refresh();
+    } catch (e: any) {
+      toast.error("Failed to scrape links: " + e.message);
+    } finally {
+      setScrapingLinks(false);
+    }
+  };
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
   const [dbTotalChannels, setDbTotalChannels] = useState<number | null>(null);
 
