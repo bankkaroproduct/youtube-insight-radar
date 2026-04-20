@@ -454,9 +454,17 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
     videoCountByKeyword.set(vk.keyword_id, (videoCountByKeyword.get(vk.keyword_id) || 0) + 1);
   }
 
+  // Affiliate platform frequency map across all links (for "Single Affiliate" exclusion)
+  const affiliateCounts = new Map<string, number>();
+  for (const l of links) {
+    if (l.affiliate_platform) {
+      affiliateCounts.set(l.affiliate_platform, (affiliateCounts.get(l.affiliate_platform) ?? 0) + 1);
+    }
+  }
+
   const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
-  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain);
-  const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain);
+  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
+  const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
   const s5 = buildSheet5(channels);
   const s6 = buildSheet6(channels, igByChannelId);
