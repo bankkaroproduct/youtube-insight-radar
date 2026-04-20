@@ -1,51 +1,33 @@
 
 
-The user has 2 issues from the screenshot:
+## Understanding the request
 
-1. **Haul Pack retailer wrong**: Links like `https://www.haulpack.com/deeplink?dl=https%3A%2F%2Fwww.myntra.com%2F37002996%3F...` show `Retailer = "Via Haul Pack"`, but the actual retailer is **Myntra** (URL-encoded inside the `dl=` query param). The "Via Haul Pack" fallback fires because the unshortener never decoded the `dl=` parameter.
+In your screenshot, YouTube's "More info" → "Links" panel shows:
+- **Instagram** → `instagram.com/mee_praveena_vlogs?igshid=...`
+- **Haulpack** → `haulpack.com/c/praveena`
 
-2. **Add Rank column** to S2 Video Deep Data and S5 Channel Deep Data. Rank already exists in the DB as `video_keywords.search_rank` (per keyword) and a derived `best_rank` (min across keywords). For S5 (channels), rank doesn't exist directly — we'll use the channel's best video rank (min `search_rank` across all that channel's videos that came from a keyword search).
+Each link has a **custom header name** the creator set (e.g. "Haulpack"). You want these in S5 Channel Deep Data, classified as L1, L2, etc.
 
-# Plan: Decode Haul Pack Retailer + Add Rank Columns
+## Current state
 
-## Fix 1 — Decode retailer from deeplink/redirect URLs
+S5 already extracts URLs from the channel **description text** and labels them L1, L2…  but it's missing two things:
+1. The **custom header name** ("Instagram", "Haulpack") that the creator set in the YouTube "Links" section.
+2. Links that appear **only** in the YouTube "Links" panel and not in the description.
 
-In `src/services/excelExportService.ts`, enhance `resolveRetailerDisplay()`:
+## The challenge
 
-- Before falling back to `"Via {affiliate_platform}"`, scan the `original_url` and `unshortened_url` query string for any `dl`, `url`, `u`, `r`, `redirect`, `target`, `to`, `link`, `dest` parameters.
-- If found, URL-decode the value, extract its hostname, and look it up in `retailerByDomain`.
-- Also handle the case where the param value contains a full encoded URL (e.g., `dl=https%3A%2F%2Fwww.myntra.com%2F...` → decode → `myntra.com` → match).
-- If matched → return the real retailer name (e.g., "Myntra").
-- Only if no embedded retailer can be found → fall back to "Via {affiliate}".
+YouTube Data API v3 **does not expose** the "Links" panel data (header + URL pairs) — that section is rendered from data only available by scraping the channel "About" page (`/about` or `/@handle`). This means:
 
-This fixes Haul Pack → Myntra, and also helps for similar redirector patterns (myhaulstore, etc. — though `myhaulstore.com` may need to be added as an affiliate platform / retailer pattern manually).
+- **API-only path (free)**: We can only use what's already in the description — no custom header names, just the URL itself. We can *infer* a label from the domain (e.g. `instagram.com` → "Instagram", `haulpack.com` → "Haulpack").
+- **Scraping path (more accurate, slower)**: Add an edge function that fetches `https://www.youtube.com/channel/{id}/about` and parses out the Links section with their custom headers. Slower (1 HTTP request per channel), occasionally blocked, but matches exactly what you see in the screenshot.
 
-**Note**: For URLs without a `dl=` style param (e.g. `https://www.haulpack.com/p/haulpackinfluencer/neha-singhs-myntra-haul-19032026` — a landing page, not a deeplink), there's no retailer to extract. Those will keep showing "Via Haul Pack" which is correct, since the actual product retailer can't be inferred from a landing-page URL.
+## Recommended approach (two questions before I plan in detail)
 
-## Fix 2 — Add Rank column
+Before writing the plan, I need to clarify:
 
-### S2 (Video Deep Data) — per-keyword rank
-- Add column `Search Rank` after `Priority` (since rank is per-keyword for the video).
-- Source: `video_keywords.search_rank` for the (video, keyword) pair already being iterated.
-- Display: number, or grey-italic "N/A" when null.
-- Update `excelExportService.ts`:
-  - Fetch `search_rank` in the `video_keywords` query.
-  - Change `vkMap` to store `{ keyword_id, search_rank }` instead of just `keyword_id`.
-  - Insert rank into the row.
-  - Bump `socialColIdx` (19 → 20) and `excludedColIdx` (20 → 21) for S2.
+**Q1 — Header source**: Do you want exact creator-set headers ("Haulpack", "My Store") which require scraping the YouTube About page, OR is auto-inferred labels from the domain ("Instagram", "Haulpack" derived from `haulpack.com`) good enough?
 
-### S5 (Channel Deep Data) — channel's best rank
-- Add column `Best Video Rank` after `Channel Subscribers`.
-- Compute: for each channel, find the minimum `search_rank` across all videos belonging to that channel that have any `video_keywords.search_rank` set.
-- Display: number, or grey-italic "N/A".
-- Bump `socialColIdx` (13 → 14) and `excludedColIdx` (14 → 15) for S5.
+**Q2 — Sheet shape**: Should each link be its own row (current pattern: one channel spans N rows, one per L1/L2/L3…) with a new "Link Header" column? Or should links be flattened into wide columns (`L1 Header | L1 URL | L2 Header | L2 URL …`) on a single row per channel?
 
-## Files to edit
-- `src/services/excelExportService.ts` (only)
-
-## Notes
-- No DB schema or migration changes.
-- No new dependencies.
-- Sheets 1, 3, 4, 6 untouched.
-- Column-width arrays stay auto-sized via the existing logic (no manual width changes needed except S1 which is already explicit).
+Once you answer these, I'll write the implementation plan.
 
