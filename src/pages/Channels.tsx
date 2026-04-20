@@ -111,6 +111,7 @@ export default function Channels() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const [fetchingNew, setFetchingNew] = useState(false);
+  const [scrapingLinks, setScrapingLinks] = useState(false);
   
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
 
