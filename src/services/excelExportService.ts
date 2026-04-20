@@ -26,7 +26,9 @@ type VideoLink = {
   classification: string | null;
 };
 
-type VideoKeyword = { video_id: string; keyword_id: string };
+type VideoKeyword = { video_id: string; keyword_id: string; search_rank: number | null };
+
+type VkEntry = { keyword_id: string; search_rank: number | null };
 
 type Keyword = {
   id: string;
@@ -174,6 +176,56 @@ function buildSheet1(keywords: Keyword[], videoCountByKeyword: Map<string, numbe
   return { headers, rows };
 }
 
+const REDIRECT_PARAMS = ["dl", "url", "u", "r", "redirect", "target", "to", "link", "dest", "destination"];
+
+function tryMatchRetailerFromDomain(domain: string, retailerByDomain: Map<string, string>): string | null {
+  if (!domain) return null;
+  const r = retailerByDomain.get(domain);
+  if (r) return r;
+  for (const [pat, name] of retailerByDomain) {
+    if (domain === pat || domain.endsWith("." + pat)) return name;
+  }
+  return null;
+}
+
+function extractEmbeddedRetailer(url: string | null | undefined, retailerByDomain: Map<string, string>): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    for (const key of REDIRECT_PARAMS) {
+      const raw = u.searchParams.get(key);
+      if (!raw) continue;
+      // Decode possibly multiple times
+      let decoded = raw;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const d = decodeURIComponent(decoded);
+          if (d === decoded) break;
+          decoded = d;
+        } catch { break; }
+      }
+      // Try parsing as URL
+      try {
+        const inner = new URL(decoded.startsWith("http") ? decoded : `https://${decoded}`);
+        const host = inner.hostname.replace(/^www\./, "").toLowerCase();
+        const match = tryMatchRetailerFromDomain(host, retailerByDomain);
+        if (match) return match;
+      } catch {
+        // Not a parseable URL — try domain regex extraction
+        const m = decoded.match(/([a-z0-9-]+\.)+[a-z]{2,}/i);
+        if (m) {
+          const host = m[0].replace(/^www\./, "").toLowerCase();
+          const match = tryMatchRetailerFromDomain(host, retailerByDomain);
+          if (match) return match;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function resolveRetailerDisplay(link: VideoLink, retailerByDomain: Map<string, string>): string {
   if (link.resolved_retailer) return link.resolved_retailer;
   // Try matching unshortened or original domain against known retailer patterns
@@ -184,13 +236,13 @@ function resolveRetailerDisplay(link: VideoLink, retailerByDomain: Map<string, s
     extractDomain(link.original_url),
   ].filter(Boolean) as string[];
   for (const d of candidates) {
-    const r = retailerByDomain.get(d);
-    if (r) return r;
-    // suffix match
-    for (const [pat, name] of retailerByDomain) {
-      if (d === pat || d.endsWith("." + pat)) return name;
-    }
+    const match = tryMatchRetailerFromDomain(d, retailerByDomain);
+    if (match) return match;
   }
+  // Try decoding embedded redirect params (e.g. haulpack.com/deeplink?dl=https%3A%2F%2Fmyntra.com...)
+  const embedded = extractEmbeddedRetailer(link.unshortened_url, retailerByDomain)
+    ?? extractEmbeddedRetailer(link.original_url, retailerByDomain);
+  if (embedded) return embedded;
   if (link.affiliate_platform) return `Via ${link.affiliate_platform}`;
   return "N/A";
 }
@@ -202,20 +254,21 @@ function computeExcluded(link: VideoLink, social: string, affiliateCounts: Map<s
   return "";
 }
 
-function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
-  const headers = ["Keyword", "Category", "Business Aim", "Priority", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+function buildSheet2(videos: Video[], vkMap: Map<string, VkEntry[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
+  const headers = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
-    const kIds = vkMap.get(v.id);
-    if (!kIds || kIds.length === 0) continue;
+    const entries = vkMap.get(v.id);
+    if (!entries || entries.length === 0) continue;
     const links = linksByVideo.get(v.id) || [];
     const description = v.description?.trim() ? v.description : "No Description";
     const totalLinks = links.length;
-    for (const kId of kIds) {
-      const kw = keywordsById.get(kId);
+    for (const entry of entries) {
+      const kw = keywordsById.get(entry.keyword_id);
       if (!kw) continue;
+      const rank = entry.search_rank != null ? entry.search_rank : "N/A";
       const baseRow = [
-        kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A", kw.status || "N/A",
+        kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A", rank, kw.status || "N/A",
         `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
         v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0, description, totalLinks,
       ];
@@ -236,7 +289,7 @@ function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById
   return { headers, rows };
 }
 
-function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
+function buildSheet3(videos: Video[], vkMap: Map<string, VkEntry[]>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
   const headers = ["Keyword", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
@@ -264,7 +317,7 @@ function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo
   return { headers, rows };
 }
 
-function buildSheet4(videos: Video[], vkMap: Map<string, string[]>, channelsByYTId: Map<string, Channel>) {
+function buildSheet4(videos: Video[], vkMap: Map<string, VkEntry[]>, channelsByYTId: Map<string, Channel>) {
   const headers = ["Keyword", "Video Name", "Video Link", "Channel Name", "Channel Link", "Total Videos From Channel"];
   const last50 = videos.filter(v => !vkMap.has(v.id));
   const channelCounts = new Map<string, number>();
@@ -283,16 +336,18 @@ function buildSheet4(videos: Video[], vkMap: Map<string, string[]>, channelsByYT
   return { headers, rows };
 }
 
-function buildSheet5(channels: Channel[]) {
-  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) {
+  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
     const description = ch.description?.trim() ? ch.description : "No Description";
     const urls = extractUrls(ch.description);
+    const bestRank = channelBestRank.get(ch.channel_id);
     const base = [
       ch.channel_url || `https://www.youtube.com/channel/${ch.channel_id}`,
       ch.channel_name,
       ch.subscriber_count ?? 0,
+      bestRank != null ? bestRank : "N/A",
       ch.median_views ?? 0,
       ch.median_likes ?? 0,
       ch.median_comments ?? 0,
@@ -403,7 +458,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const links = await fetchAll<VideoLink>("video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification");
 
   onProgress?.("Fetching keywords...");
-  const vks = await fetchAll<VideoKeyword>("video_keywords", "video_id,keyword_id");
+  const vks = await fetchAll<VideoKeyword>("video_keywords", "video_id,keyword_id,search_rank");
   const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
 
   onProgress?.("Fetching channels...");
@@ -415,11 +470,23 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   onProgress?.("Building sheets...");
 
   // Maps
-  const vkMap = new Map<string, string[]>(); // video.id -> keyword_ids
+  const vkMap = new Map<string, VkEntry[]>(); // video.id -> [{keyword_id, search_rank}]
   for (const vk of vks) {
     const list = vkMap.get(vk.video_id) || [];
-    list.push(vk.keyword_id);
+    list.push({ keyword_id: vk.keyword_id, search_rank: vk.search_rank ?? null });
     vkMap.set(vk.video_id, list);
+  }
+
+  // Per-channel best (min) search rank, keyed by YouTube channel_id
+  const videoYTChannelById = new Map<string, string>();
+  for (const v of videos) videoYTChannelById.set(v.id, v.channel_id);
+  const channelBestRank = new Map<string, number>();
+  for (const vk of vks) {
+    if (vk.search_rank == null) continue;
+    const ytId = videoYTChannelById.get(vk.video_id);
+    if (!ytId) continue;
+    const cur = channelBestRank.get(ytId);
+    if (cur == null || vk.search_rank < cur) channelBestRank.set(ytId, vk.search_rank);
   }
   const keywordsById = new Map(keywordsAll.map(k => [k.id, k]));
   const linksByVideo = new Map<string, VideoLink[]>();
@@ -466,21 +533,21 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
   const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
-  const s5 = buildSheet5(channels);
+  const s5 = buildSheet5(channels, channelBestRank);
   const s6 = buildSheet6(channels, igByChannelId);
 
   onProgress?.("Formatting workbook...");
   const wb = XLSX.utils.book_new();
-  // Sheet 2: Social=19, Excluded=20
-  // Sheet 3: Social=15, Excluded=16
-  // Sheet 5: Social=13, Excluded=14 (shifted +1 after adding Channel Subscribers)
+  // Sheet 2: 22 cols → Social=20, Excluded=21 (added Search Rank at idx 4)
+  // Sheet 3: 17 cols → Social=15, Excluded=16 (unchanged)
+  // Sheet 5: 16 cols → Social=14, Excluded=15 (added Best Video Rank at idx 3)
   const s1Ws = buildWorksheet(XLSX, s1, null, null);
   s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 19, 20), "S2 - Video Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 20, 21), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 13, 14), "S5 - Channel Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 14, 15), "S5 - Channel Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
 
   onProgress?.("Downloading file...");
