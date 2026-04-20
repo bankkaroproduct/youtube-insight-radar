@@ -533,21 +533,21 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
   const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
-  const s5 = buildSheet5(channels);
+  const s5 = buildSheet5(channels, channelBestRank);
   const s6 = buildSheet6(channels, igByChannelId);
 
   onProgress?.("Formatting workbook...");
   const wb = XLSX.utils.book_new();
-  // Sheet 2: Social=19, Excluded=20
-  // Sheet 3: Social=15, Excluded=16
-  // Sheet 5: Social=13, Excluded=14 (shifted +1 after adding Channel Subscribers)
+  // Sheet 2: 22 cols → Social=20, Excluded=21 (added Search Rank at idx 4)
+  // Sheet 3: 17 cols → Social=15, Excluded=16 (unchanged)
+  // Sheet 5: 16 cols → Social=14, Excluded=15 (added Best Video Rank at idx 3)
   const s1Ws = buildWorksheet(XLSX, s1, null, null);
   s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 19, 20), "S2 - Video Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 20, 21), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 13, 14), "S5 - Channel Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 14, 15), "S5 - Channel Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
 
   onProgress?.("Downloading file...");
