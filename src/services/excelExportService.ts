@@ -176,6 +176,56 @@ function buildSheet1(keywords: Keyword[], videoCountByKeyword: Map<string, numbe
   return { headers, rows };
 }
 
+const REDIRECT_PARAMS = ["dl", "url", "u", "r", "redirect", "target", "to", "link", "dest", "destination"];
+
+function tryMatchRetailerFromDomain(domain: string, retailerByDomain: Map<string, string>): string | null {
+  if (!domain) return null;
+  const r = retailerByDomain.get(domain);
+  if (r) return r;
+  for (const [pat, name] of retailerByDomain) {
+    if (domain === pat || domain.endsWith("." + pat)) return name;
+  }
+  return null;
+}
+
+function extractEmbeddedRetailer(url: string | null | undefined, retailerByDomain: Map<string, string>): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    for (const key of REDIRECT_PARAMS) {
+      const raw = u.searchParams.get(key);
+      if (!raw) continue;
+      // Decode possibly multiple times
+      let decoded = raw;
+      for (let i = 0; i < 3; i++) {
+        try {
+          const d = decodeURIComponent(decoded);
+          if (d === decoded) break;
+          decoded = d;
+        } catch { break; }
+      }
+      // Try parsing as URL
+      try {
+        const inner = new URL(decoded.startsWith("http") ? decoded : `https://${decoded}`);
+        const host = inner.hostname.replace(/^www\./, "").toLowerCase();
+        const match = tryMatchRetailerFromDomain(host, retailerByDomain);
+        if (match) return match;
+      } catch {
+        // Not a parseable URL — try domain regex extraction
+        const m = decoded.match(/([a-z0-9-]+\.)+[a-z]{2,}/i);
+        if (m) {
+          const host = m[0].replace(/^www\./, "").toLowerCase();
+          const match = tryMatchRetailerFromDomain(host, retailerByDomain);
+          if (match) return match;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function resolveRetailerDisplay(link: VideoLink, retailerByDomain: Map<string, string>): string {
   if (link.resolved_retailer) return link.resolved_retailer;
   // Try matching unshortened or original domain against known retailer patterns
@@ -186,13 +236,13 @@ function resolveRetailerDisplay(link: VideoLink, retailerByDomain: Map<string, s
     extractDomain(link.original_url),
   ].filter(Boolean) as string[];
   for (const d of candidates) {
-    const r = retailerByDomain.get(d);
-    if (r) return r;
-    // suffix match
-    for (const [pat, name] of retailerByDomain) {
-      if (d === pat || d.endsWith("." + pat)) return name;
-    }
+    const match = tryMatchRetailerFromDomain(d, retailerByDomain);
+    if (match) return match;
   }
+  // Try decoding embedded redirect params (e.g. haulpack.com/deeplink?dl=https%3A%2F%2Fmyntra.com...)
+  const embedded = extractEmbeddedRetailer(link.unshortened_url, retailerByDomain)
+    ?? extractEmbeddedRetailer(link.original_url, retailerByDomain);
+  if (embedded) return embedded;
   if (link.affiliate_platform) return `Via ${link.affiliate_platform}`;
   return "N/A";
 }
