@@ -9,6 +9,8 @@ import { AppLayout } from "@/components/AppLayout";
 import { checkIpAccess } from "@/hooks/useIpWhitelist";
 import { Shield } from "lucide-react";
 import Auth from "@/pages/Auth";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 import Index from "@/pages/Index";
 import Keywords from "@/pages/Keywords";
 import KeywordTable from "@/pages/KeywordTable";
@@ -66,6 +68,8 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/auth" element={<Auth />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
       <Route path="/keywords" element={<ProtectedRoute><Keywords /></ProtectedRoute>} />
       <Route path="/keyword-table" element={<ProtectedRoute><KeywordTable /></ProtectedRoute>} />
