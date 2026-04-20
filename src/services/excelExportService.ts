@@ -57,6 +57,7 @@ type Channel = {
   youtube_category: string | null;
   affiliate_status: string | null;
   custom_links: Array<{ header: string; url: string }> | null;
+  custom_links_scraped_at: string | null;
 };
 
 type IGProfile = {
@@ -161,6 +162,29 @@ async function fetchAll<T>(table: string, select = "*"): Promise<T[]> {
     from += BATCH;
   }
   return all;
+}
+
+async function ensureChannelLinksScraped(channels: Channel[], onProgress?: (msg: string) => void): Promise<Channel[]> {
+  const pending = channels.filter((channel) => !channel.custom_links_scraped_at).map((channel) => channel.channel_id);
+  if (pending.length === 0) return channels;
+
+  let processed = 0;
+  for (let i = 0; i < pending.length; i += 25) {
+    const batch = pending.slice(i, i + 25);
+    onProgress?.(`Scraping channel link headers (${processed + 1}-${processed + batch.length} of ${pending.length})...`);
+    const { data, error } = await supabase.functions.invoke("scrape-channel-links", {
+      body: { channel_ids: batch, batch_size: batch.length },
+    });
+    if (error) throw error;
+    if (!data?.success) throw new Error(data?.error || "Failed to scrape channel link headers");
+    processed += batch.length;
+  }
+
+  onProgress?.("Refreshing channels...");
+  return fetchAll<Channel>(
+    "channels",
+    "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at"
+  );
 }
 
 // ===== Sheet builders =====
@@ -486,7 +510,8 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
 
   onProgress?.("Fetching channels...");
-  const channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links");
+  let channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at");
+  channels = await ensureChannelLinksScraped(channels, onProgress);
 
   onProgress?.("Fetching Instagram...");
   const igs = await fetchAll<IGProfile>("instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category");
