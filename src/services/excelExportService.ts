@@ -195,15 +195,14 @@ function resolveRetailerDisplay(link: VideoLink, retailerByDomain: Map<string, s
   return "N/A";
 }
 
-function computeExcluded(link: VideoLink, social: string, retailerDisplay: string): string {
+function computeExcluded(link: VideoLink, social: string, affiliateCounts: Map<string, number>): string {
   if (social) return `Excluded - Social (${social})`;
-  const hasAffiliate = !!link.affiliate_platform;
-  const hasRetailer = !!link.resolved_retailer || (retailerDisplay !== "N/A" && !retailerDisplay.startsWith("Via "));
-  if (!hasAffiliate && !hasRetailer) return "Excluded - No Affiliate";
+  const aff = link.affiliate_platform;
+  if (aff && (affiliateCounts.get(aff) ?? 0) === 1) return "Excluded - Single Affiliate";
   return "";
 }
 
-function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>) {
+function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
   const headers = ["Keyword", "Category", "Business Aim", "Priority", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
@@ -228,7 +227,7 @@ function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById
           const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
           const social = getSocialPlatform(domain);
           const retailer = resolveRetailerDisplay(link, retailerByDomain);
-          const excluded = computeExcluded(link, social, retailer);
+          const excluded = computeExcluded(link, social, affiliateCounts);
           rows.push([...baseRow, `L${idx + 1}`, link.original_url, unshort, domain || "N/A", link.affiliate_platform || "", retailer, social, excluded]);
         });
       }
@@ -237,7 +236,7 @@ function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById
   return { headers, rows };
 }
 
-function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>) {
+function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
   const headers = ["Keyword", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
@@ -257,7 +256,7 @@ function buildSheet3(videos: Video[], vkMap: Map<string, string[]>, linksByVideo
         const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
         const social = getSocialPlatform(domain);
         const retailer = resolveRetailerDisplay(link, retailerByDomain);
-        const excluded = computeExcluded(link, social, retailer);
+        const excluded = computeExcluded(link, social, affiliateCounts);
         rows.push([...baseRow, `L${idx + 1}`, link.original_url, unshort, domain || "N/A", link.affiliate_platform || "", retailer, social, excluded]);
       });
     }
@@ -455,9 +454,17 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
     videoCountByKeyword.set(vk.keyword_id, (videoCountByKeyword.get(vk.keyword_id) || 0) + 1);
   }
 
+  // Affiliate platform frequency map across all links (for "Single Affiliate" exclusion)
+  const affiliateCounts = new Map<string, number>();
+  for (const l of links) {
+    if (l.affiliate_platform) {
+      affiliateCounts.set(l.affiliate_platform, (affiliateCounts.get(l.affiliate_platform) ?? 0) + 1);
+    }
+  }
+
   const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
-  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain);
-  const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain);
+  const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
+  const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
   const s5 = buildSheet5(channels);
   const s6 = buildSheet6(channels, igByChannelId);
