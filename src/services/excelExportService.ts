@@ -202,7 +202,7 @@ function computeExcluded(link: VideoLink, social: string, affiliateCounts: Map<s
   return "";
 }
 
-function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>) {
+function buildSheet2(videos: Video[], vkMap: Map<string, string[]>, keywordsById: Map<string, Keyword>, linksByVideo: Map<string, VideoLink[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
   const headers = ["Keyword", "Category", "Business Aim", "Priority", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const v of videos) {
