@@ -13,16 +13,28 @@ class LinkProcessingService {
   private batchNum = 0;
   private startedAt: string | null = null;
   private logs: LogEntry[] = [];
+  private lastBatchCompletedAt = 0;
   private listeners = new Set<Listener>();
-  private snapshot: { running: boolean; logs: LogEntry[]; startedAt: string | null } = {
+  private snapshot: {
+    running: boolean;
+    logs: LogEntry[];
+    startedAt: string | null;
+    lastBatchCompletedAt: number;
+  } = {
     running: false,
     logs: [],
     startedAt: null,
+    lastBatchCompletedAt: 0,
   };
 
   constructor() {
     this.loadState();
-    this.snapshot = { running: this.running, logs: this.logs, startedAt: this.startedAt };
+    this.snapshot = {
+      running: this.running,
+      logs: this.logs,
+      startedAt: this.startedAt,
+      lastBatchCompletedAt: this.lastBatchCompletedAt,
+    };
   }
 
   subscribe(fn: Listener) {
@@ -31,7 +43,12 @@ class LinkProcessingService {
   }
 
   private notify() {
-    this.snapshot = { running: this.running, logs: this.logs, startedAt: this.startedAt };
+    this.snapshot = {
+      running: this.running,
+      logs: this.logs,
+      startedAt: this.startedAt,
+      lastBatchCompletedAt: this.lastBatchCompletedAt,
+    };
     this.listeners.forEach((fn) => fn());
     this.saveState();
   }
@@ -164,6 +181,8 @@ class LinkProcessingService {
       this.addLog(
         `✅ Batch #${batchNum}: ${result.processed} processed${breakdown}, ${result.remaining?.toLocaleString()} remaining`,
       );
+      this.lastBatchCompletedAt = Date.now();
+      this.notify();
       onStatsRefresh?.();
 
       if (result.remaining === 0) {

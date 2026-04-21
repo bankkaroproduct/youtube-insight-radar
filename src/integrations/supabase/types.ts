@@ -917,6 +917,17 @@ export type Database = {
           video_count: number
         }[]
       }
+      get_video_links_processing_stats: {
+        Args: never
+        Returns: {
+          failed: number
+          pending: number
+          processed: number
+          total: number
+          with_platform: number
+          with_retailer: number
+        }[]
+      }
       get_video_links_stats: {
         Args: { video_ids?: string[] }
         Returns: {
