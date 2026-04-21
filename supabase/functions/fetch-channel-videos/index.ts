@@ -1,39 +1,15 @@
 // Use built-in Deno.serve
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  getAvailableApiKeys,
+  incrementQuota,
+  fetchYouTubeWithRotation,
+} from "../_shared/youtube-rotation.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
-
-async function getAvailableApiKeys(supabase: any, count: number) {
-  const { data, error } = await supabase
-    .from("youtube_api_keys")
-    .select("id, api_key, quota_used_today, daily_quota_limit")
-    .eq("is_active", true)
-    .order("quota_used_today", { ascending: true })
-    .limit(count);
-  if (error || !data) return [];
-  return data.filter((k: any) => k.daily_quota_limit === 0 || k.quota_used_today < k.daily_quota_limit);
-}
-
-async function markKeyExhausted(supabase: any, keyId: string) {
-  await supabase.from("youtube_api_keys").update({
-    is_active: false,
-    last_test_status: "quota_exceeded",
-    last_tested_at: new Date().toISOString(),
-  }).eq("id", keyId);
-}
-
-async function incrementQuota(supabase: any, keyId: string, units: number, quotaCache: Map<string, number>) {
-  const current = quotaCache.get(keyId) || 0;
-  const newVal = current + units;
-  quotaCache.set(keyId, newVal);
-  await supabase.from("youtube_api_keys").update({
-    quota_used_today: newVal,
-    last_used_at: new Date().toISOString(),
-  }).eq("id", keyId);
-}
 
 function extractUrls(text: string): string[] {
   if (!text) return [];
