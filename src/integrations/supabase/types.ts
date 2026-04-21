@@ -703,10 +703,13 @@ export type Database = {
           domain: string | null
           id: string
           is_shortened: boolean | null
+          last_resolution_error: string | null
           link_type: string | null
           matched_pattern_id: string | null
           original_domain: string | null
           original_url: string
+          resolution_attempts: number | null
+          resolution_status: string | null
           resolved_retailer: string | null
           resolved_retailer_domain: string | null
           retailer_pattern_id: string | null
@@ -723,10 +726,13 @@ export type Database = {
           domain?: string | null
           id?: string
           is_shortened?: boolean | null
+          last_resolution_error?: string | null
           link_type?: string | null
           matched_pattern_id?: string | null
           original_domain?: string | null
           original_url: string
+          resolution_attempts?: number | null
+          resolution_status?: string | null
           resolved_retailer?: string | null
           resolved_retailer_domain?: string | null
           retailer_pattern_id?: string | null
@@ -743,10 +749,13 @@ export type Database = {
           domain?: string | null
           id?: string
           is_shortened?: boolean | null
+          last_resolution_error?: string | null
           link_type?: string | null
           matched_pattern_id?: string | null
           original_domain?: string | null
           original_url?: string
+          resolution_attempts?: number | null
+          resolution_status?: string | null
           resolved_retailer?: string | null
           resolved_retailer_domain?: string | null
           retailer_pattern_id?: string | null
