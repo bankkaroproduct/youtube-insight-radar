@@ -4,20 +4,27 @@ import { KeyRound, CheckCircle, XCircle, AlertTriangle, Gauge, ShieldAlert } fro
 interface Props {
   total: number;
   healthy: number;
+  untested: number;
   invalid: number;
   restricted: number;
   exhausted: number;
   quotaUsed: number;
 }
 
-export function ApiKeyStatsCards({ total, healthy, invalid, restricted, exhausted, quotaUsed }: Props) {
+export function ApiKeyStatsCards({ total, healthy, untested, invalid, restricted, exhausted, quotaUsed }: Props) {
   const cards = [
-    { label: "Total Keys", value: total, icon: KeyRound, color: "text-primary" },
-    { label: "Healthy Keys", value: healthy, icon: CheckCircle, color: "text-green-500" },
-    { label: "Invalid Keys", value: invalid, icon: XCircle, color: "text-destructive" },
-    { label: "Restricted Keys", value: restricted, icon: ShieldAlert, color: "text-orange-500" },
-    { label: "Exhausted Today", value: exhausted, icon: AlertTriangle, color: "text-amber-500" },
-    { label: "Quota Used Today", value: quotaUsed.toLocaleString(), icon: Gauge, color: "text-blue-500" },
+    { label: "Total Keys", value: total, icon: KeyRound, color: "text-primary", subtitle: null as string | null },
+    {
+      label: "Healthy Keys",
+      value: healthy,
+      icon: CheckCircle,
+      color: "text-green-500",
+      subtitle: untested > 0 ? `${untested} untested` : null,
+    },
+    { label: "Invalid Keys", value: invalid, icon: XCircle, color: "text-destructive", subtitle: null },
+    { label: "Restricted Keys", value: restricted, icon: ShieldAlert, color: "text-orange-500", subtitle: null },
+    { label: "Exhausted Today", value: exhausted, icon: AlertTriangle, color: "text-amber-500", subtitle: null },
+    { label: "Quota Used Today", value: quotaUsed.toLocaleString(), icon: Gauge, color: "text-blue-500", subtitle: null },
   ];
 
   return (
@@ -30,6 +37,9 @@ export function ApiKeyStatsCards({ total, healthy, invalid, restricted, exhauste
               <div>
                 <p className="text-2xl font-bold">{c.value}</p>
                 <p className="text-sm text-muted-foreground">{c.label}</p>
+                {c.subtitle && (
+                  <p className="text-xs text-muted-foreground/80 mt-0.5">{c.subtitle}</p>
+                )}
               </div>
             </div>
           </CardContent>

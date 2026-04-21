@@ -769,6 +769,7 @@ export type Database = {
           last_test_status: string | null
           last_tested_at: string | null
           last_used_at: string | null
+          quota_reset_at: string | null
           quota_used_today: number
         }
         Insert: {
@@ -781,6 +782,7 @@ export type Database = {
           last_test_status?: string | null
           last_tested_at?: string | null
           last_used_at?: string | null
+          quota_reset_at?: string | null
           quota_used_today?: number
         }
         Update: {
@@ -793,6 +795,7 @@ export type Database = {
           last_test_status?: string | null
           last_tested_at?: string | null
           last_used_at?: string | null
+          quota_reset_at?: string | null
           quota_used_today?: number
         }
         Relationships: []
@@ -818,6 +821,7 @@ export type Database = {
         Returns: boolean
       }
       reset_daily_quotas: { Args: never; Returns: undefined }
+      reset_daily_quotas_if_stale: { Args: never; Returns: boolean }
     }
     Enums: {
       app_role: "super_admin" | "admin" | "manager" | "analyst" | "viewer"
