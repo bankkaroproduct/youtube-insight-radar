@@ -22,7 +22,7 @@ const statusVariant = (status: string): "default" | "secondary" | "destructive" 
 
 export default function Index() {
   useEffect(() => { document.title = "Dashboard | YT Intel"; }, []);
-  const { counts, recent, affiliates, isLoading, lastUpdated, refresh } = useDashboard();
+  const { counts, recent, affiliates, isLoading, lastUpdated, error, refresh } = useDashboard();
   const navigate = useNavigate();
 
   const stats = [
@@ -51,6 +51,12 @@ export default function Index() {
           </Button>
         </div>
       </div>
+
+      {error && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 px-4 py-3 text-sm">
+          {error}. Some widgets may show partial data.
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (

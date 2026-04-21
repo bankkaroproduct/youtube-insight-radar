@@ -42,7 +42,7 @@ export interface KeywordFilters {
   priority: string;
 }
 
-const defaultFilters: KeywordFilters = {
+export const defaultKeywordFilters: KeywordFilters = {
   keyword: "",
   category: "",
   businessAim: "",
@@ -52,11 +52,32 @@ const defaultFilters: KeywordFilters = {
   priority: "",
 };
 
-export function useKeywords() {
+export const KEYWORDS_PAGE_SIZE = 50;
+
+export async function fetchAllKeywordsForAnalytics(): Promise<KeywordSearchRun[]> {
+  const BATCH = 1000;
+  let all: KeywordSearchRun[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("keywords_search_runs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .range(from, from + BATCH - 1);
+    if (error) throw error;
+    const rows = (data as KeywordSearchRun[]) ?? [];
+    all = all.concat(rows);
+    if (rows.length < BATCH) break;
+    from += BATCH;
+  }
+  return all;
+}
+
+export function useKeywords(filters: KeywordFilters = defaultKeywordFilters, page: number = 0) {
   const { user } = useAuth();
   const [keywords, setKeywords] = useState<KeywordSearchRun[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [categories, setCategories] = useState<ChannelCategory[]>([]);
-  const [filters, setFilters] = useState<KeywordFilters>(defaultFilters);
   const [isLoading, setIsLoading] = useState(true);
   const [userProfiles, setUserProfiles] = useState<{ user_id: string; full_name: string | null }[]>([]);
   const [keywordStats, setKeywordStats] = useState<Map<string, KeywordStats>>(new Map());
@@ -68,21 +89,52 @@ export function useKeywords() {
 
   const fetchKeywords = useCallback(async () => {
     setIsLoading(true);
-    const { data, error } = await supabase
-      .from("keywords_search_runs")
-      .select("*")
-      .order("created_at", { ascending: false });
+    const from = page * KEYWORDS_PAGE_SIZE;
+    const to = from + KEYWORDS_PAGE_SIZE - 1;
+
+    let q: any = supabase.from("keywords_search_runs").select("*", { count: "exact" });
+    if (filters.keyword) q = q.ilike("keyword", `%${filters.keyword}%`);
+    if (filters.category) q = q.eq("category", filters.category);
+    if (filters.businessAim) q = q.eq("business_aim", filters.businessAim);
+    if (filters.status) q = q.eq("status", filters.status);
+    if (filters.source === "manual") q = q.eq("source", "manual");
+    else if (filters.source) q = q.eq("source_name", filters.source);
+    if (filters.uploadedBy) q = q.eq("user_id", filters.uploadedBy);
+    if (filters.priority === "unclassified") q = q.is("priority", null);
+    else if (filters.priority) q = q.eq("priority", filters.priority);
+
+    q = q.order("created_at", { ascending: false }).range(from, to);
+    const { data, error, count } = await q;
     if (error) {
       toast.error("Failed to load keywords");
     } else {
-      setKeywords(data ?? []);
+      setKeywords((data as KeywordSearchRun[]) ?? []);
+      setTotalCount(count ?? 0);
     }
     setIsLoading(false);
-  }, []);
+  }, [filters, page]);
 
   const fetchUserProfiles = useCallback(async () => {
     const { data } = await supabase.from("user_profiles").select("user_id, full_name");
     if (data) setUserProfiles(data);
+  }, []);
+
+  const fetchSourceFiles = useCallback(async () => {
+    // Fetched separately because filtered listing won't expose all source names
+  }, []);
+
+  const [sourceFiles, setSourceFiles] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("keywords_search_runs")
+        .select("source_name")
+        .eq("source", "excel")
+        .not("source_name", "is", null);
+      if (data) {
+        setSourceFiles([...new Set(data.map((d: any) => d.source_name).filter(Boolean))]);
+      }
+    })();
   }, []);
 
   const fetchKeywordStats = useCallback(async () => {
@@ -90,7 +142,11 @@ export function useKeywords() {
     if (!error && data) {
       const map = new Map<string, KeywordStats>();
       for (const row of data) {
-        map.set(row.keyword_id, { keyword_id: row.keyword_id, video_count: Number(row.video_count), link_count: Number(row.link_count) });
+        map.set(row.keyword_id, {
+          keyword_id: row.keyword_id,
+          video_count: Number(row.video_count),
+          link_count: Number(row.link_count),
+        });
       }
       setKeywordStats(map);
     }
@@ -98,10 +154,13 @@ export function useKeywords() {
 
   useEffect(() => {
     fetchCategories();
-    fetchKeywords();
     fetchUserProfiles();
     fetchKeywordStats();
-  }, [fetchCategories, fetchKeywords, fetchUserProfiles, fetchKeywordStats]);
+  }, [fetchCategories, fetchUserProfiles, fetchKeywordStats]);
+
+  useEffect(() => {
+    fetchKeywords();
+  }, [fetchKeywords]);
 
   const addKeyword = async (keyword: string, category: string) => {
     if (!user) return;
@@ -141,34 +200,10 @@ export function useKeywords() {
     }
   };
 
-  const clearFilters = () => setFilters(defaultFilters);
-
-  const filteredKeywords = keywords.filter((k) => {
-    if (filters.keyword && !k.keyword.toLowerCase().includes(filters.keyword.toLowerCase())) return false;
-    if (filters.category && k.category !== filters.category) return false;
-    if (filters.businessAim && k.business_aim !== filters.businessAim) return false;
-    if (filters.status && k.status !== filters.status) return false;
-    if (filters.source) {
-      if (filters.source === "manual" && k.source !== "manual") return false;
-      if (filters.source !== "manual" && k.source_name !== filters.source) return false;
-    }
-    if (filters.uploadedBy && k.user_id !== filters.uploadedBy) return false;
-    if (filters.priority) {
-      if (filters.priority === "unclassified" && k.priority) return false;
-      if (filters.priority !== "unclassified" && k.priority !== filters.priority) return false;
-    }
-    return true;
-  });
-
-  const sourceFiles = [...new Set(keywords.filter((k) => k.source === "excel" && k.source_name).map((k) => k.source_name!))];
-
   return {
-    keywords: filteredKeywords,
-    allKeywords: keywords,
+    keywords,
+    totalCount,
     categories,
-    filters,
-    setFilters,
-    clearFilters,
     isLoading,
     addKeyword,
     addKeywordsBulk,
