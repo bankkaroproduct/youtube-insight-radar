@@ -35,6 +35,7 @@ const ACTION_VARIANTS: Record<string, "default" | "secondary" | "destructive" | 
   keyword_deleted: "destructive",
   video_links_reset: "destructive",
   fetch_jobs_killed: "destructive",
+  user_active_toggled: "secondary",
 };
 
 export default function AuditLog() {
