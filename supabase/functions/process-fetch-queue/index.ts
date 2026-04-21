@@ -345,29 +345,7 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Check global YouTube rate limit before processing any jobs
-    const { data: ytQuota } = await supabase
-      .from("rate_limits")
-      .select("requests_today, quota_limit, last_reset")
-      .eq("key", "youtube_api")
-      .single();
-
-    if (ytQuota) {
-      const lastReset = new Date(ytQuota.last_reset);
-      const now = new Date();
-      if (lastReset.toDateString() !== now.toDateString()) {
-        await supabase.from("rate_limits").update({ requests_today: 0, last_reset: now.toISOString() }).eq("key", "youtube_api");
-      } else if (ytQuota.requests_today >= ytQuota.quota_limit) {
-        // Mark all pending jobs as failed due to quota
-        await supabase.from("fetch_jobs")
-          .update({ status: "failed", error_message: "YouTube API quota exhausted for today.", completed_at: new Date().toISOString() })
-          .eq("status", "pending");
-        return new Response(JSON.stringify({ error: "YouTube API quota exhausted" }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-    }
+    // Per-key quota is the sole source of truth (see _shared/youtube-rotation.ts).
 
     const { data: pendingJobs, error: fetchError } = await supabase
       .from("fetch_jobs")
