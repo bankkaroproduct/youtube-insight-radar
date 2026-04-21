@@ -266,7 +266,9 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     const body = await req.json().catch(() => ({}));
-    const limit = Math.min(Math.max(parseInteger(body.limit, 50) ?? 50, 1), 1000);
+    // Hard-cap per-invocation limit to stay under the 150s edge timeout.
+    // Client loops calling this function until backfill completes.
+    const limit = Math.min(Math.max(parseInteger(body.limit, 10) ?? 10, 1), 10);
     const videosPerChannel = body.videos_per_channel || 50;
     const minVideos = parseInteger(body.min_videos, null);
     const maxVideos = parseInteger(body.max_videos, null);
@@ -322,7 +324,7 @@ Deno.serve(async (req) => {
     const keyIndex = { val: 0 };
     let totalVideos = 0;
     let processedChannels = 0;
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 10;
     const channelIds = channels.map((c: any) => c.channel_id);
 
     for (let i = 0; i < channelIds.length; i += BATCH_SIZE) {
