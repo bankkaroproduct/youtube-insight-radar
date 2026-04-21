@@ -1,0 +1,1 @@
+UPDATE public.channels SET youtube_total_videos = NULL WHERE youtube_total_videos IS NOT NULL AND youtube_total_videos < total_videos_fetched;
