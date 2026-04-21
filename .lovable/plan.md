@@ -1,45 +1,44 @@
 
 
-## Fix: Blank screen on load
+## Diagnose: Settings menu not visible
 
-### Root cause
+The DB confirms you have the `admin` role, so the issue is on the client side. Either roles aren't reaching the sidebar, or the sidebar is rendering with the wrong state. Need to add diagnostics to find out which.
 
-`ProtectedRoute` in `src/App.tsx` renders `null` while either `isLoading` is true or `ipCheck.checked` is false. In `src/hooks/useAuth.tsx`, the initial-session bootstrap (`supabase.auth.getSession().then(async ...)`) has **no try/catch**. If any await inside throws (network blip, IP check rejection, profile query error), the promise rejects silently and `setIsLoading(false)` is never called — leaving the app stuck on a permanent blank screen.
+### Step 1 — Add temporary diagnostic logging
 
-The console even shows `[vite] server connection lost` around the same window, which is exactly the kind of transient that would cause one of those awaits to reject mid-bootstrap.
+**`src/hooks/useAuth.tsx`** — in `loadUserData`, log the actual query results and the resolved roles array, plus surface any RLS/network error from the `user_roles` query (which is currently swallowed):
 
-Secondary issues found:
-- The deactivation check re-queries `user_profiles` even though `loadUserData` already loaded the profile a line earlier — wasteful and adds another failure point.
-- `loadUserData` itself has no error handling; a single failed query throws and bubbles up.
-- The `onAuthStateChange` async handler also lacks try/catch around `loadUserData`, which can leave `isLoading` true after a token refresh failure.
+```ts
+if (profileRes.error) console.warn("[useAuth] profile query error", profileRes.error);
+if (rolesRes.error) console.warn("[useAuth] roles query error", rolesRes.error);
+console.log("[useAuth] loaded roles:", newRoles, "for user", userId);
+```
 
-### Changes
+**`src/components/AppSidebar.tsx`** — log what the sidebar sees right before it filters:
 
-**`src/hooks/useAuth.tsx`**
+```ts
+console.log("[AppSidebar] roles snapshot:", { isAdmin, roleCount: settingsItems.filter(i => !i.adminOnly || isAdmin).length });
+```
 
-1. Wrap the entire `getSession().then(async ...)` body in `try/catch/finally`. The `finally` block always sets `initialized = true` and `setIsLoading(false)`, plus marks `ipCheck` as checked with a safe fallback (`{ checked: true, allowed: true, ip: "unknown", error: true }` if the IP check never ran), so the app is never stranded.
+### Step 2 — Reload, then read the console
 
-2. Wrap the `onAuthStateChange` async handler body the same way — guarantee `setIsLoading(false)` runs.
+Once these logs are in, on reload we'll see exactly one of three states:
+- **`loaded roles: ["viewer", "admin"]`** + `isAdmin: true` → roles are fine; sidebar bug (e.g., stale `useAuth` instance, render order). I'll fix the sidebar.
+- **`loaded roles: ["viewer"]`** (missing admin) → RLS or query is filtering admin out somehow. I'll check the `user_roles` RLS read path.
+- **`roles query error: ...`** → a real error (RLS / network). I'll patch based on the message.
 
-3. Use the already-loaded `profile` from `loadUserData` for the deactivation check instead of re-querying. Removes the duplicate `user_profiles` fetch.
+### Step 3 — Apply the targeted fix
 
-4. Add a try/catch inside `loadUserData` so a single failed sub-query doesn't poison the whole auth bootstrap. Default to empty profile/roles on failure and surface a toast.
+Based on what the logs show, fix the actual root cause. Then remove the temporary `console.log` lines.
 
-5. Add a safety timeout (e.g. 8 seconds): if bootstrap hasn't finished by then, force `setIsLoading(false)` and mark `ipCheck.checked = true` so the user sees either the IP-blocked screen, the auth screen, or the app — never an indefinite blank.
+### Step 4 — As a parallel safety net (optional)
 
-**`src/App.tsx`** (small belt-and-braces change)
-
-- Replace the two `return null` branches in `ProtectedRoute` with a tiny centered loading spinner so even if something hangs, the user sees a visible state instead of a white screen. This also helps debugging future regressions.
-
-### Verification
-
-After the fix:
-- Hard reload `/` — should show spinner briefly, then the dashboard.
-- Throttle network in DevTools and reload — should still resolve to either dashboard, IP-blocked screen, or `/auth`, never a permanent blank.
-- The existing `useDashboard` 60s auto-refresh and error banner continue to work unchanged.
+While we're in here, also make the Settings group hide its label when empty so that even when a non-admin loads the app, they don't see a stray "SETTINGS" header with nothing under it. In `AppSidebar.tsx`, change `renderGroup` to early-return `null` when the filtered list is empty.
 
 ### Files touched
 
-- `src/hooks/useAuth.tsx` — error-hardened bootstrap, dedup deactivation check, safety timeout
-- `src/App.tsx` — replace `return null` with a small loading state in `ProtectedRoute`
+- `src/hooks/useAuth.tsx` — temporary diagnostic logging
+- `src/components/AppSidebar.tsx` — temporary log + hide empty group
+
+Once we read the next round of console output we'll know the exact fix in one more iteration.
 
