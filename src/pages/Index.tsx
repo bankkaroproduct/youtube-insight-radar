@@ -1,14 +1,35 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Search, Video, Users, Link, TrendingUp, Activity, ArrowUpRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Search, Video, Users, Link as LinkIcon, TrendingUp, Activity, ArrowUpRight, RefreshCw } from "lucide-react";
+import { useDashboard } from "@/hooks/useDashboard";
+import { formatDistanceToNow } from "date-fns";
+import { useNavigate } from "react-router-dom";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 
-const stats = [
-  { title: "Keywords", value: "0", icon: Search, description: "Active keywords tracked", trend: "+0%", color: "bg-primary/10 text-primary" },
-  { title: "Videos", value: "0", icon: Video, description: "Videos discovered", trend: "+0%", color: "bg-info/10 text-info" },
-  { title: "Channels", value: "0", icon: Users, description: "Channels analyzed", trend: "+0%", color: "bg-success/10 text-success" },
-  { title: "Links", value: "0", icon: Link, description: "Links processed", trend: "+0%", color: "bg-warning/10 text-warning" },
-];
+const CLASSIFICATION_COLORS: Record<string, string> = {
+  OWN: "hsl(var(--success))",
+  COMPETITOR: "hsl(var(--destructive))",
+  NEUTRAL: "hsl(var(--muted-foreground))",
+};
+
+const statusVariant = (status: string): "default" | "secondary" | "destructive" | "outline" => {
+  if (status === "completed") return "default";
+  if (status === "failed" || status === "dead_letter") return "destructive";
+  return "secondary";
+};
 
 export default function Index() {
+  const { counts, recent, affiliates, isLoading, lastUpdated, refresh } = useDashboard();
+  const navigate = useNavigate();
+
+  const stats = [
+    { title: "Keywords", value: counts.keywords, icon: Search, description: "Active keywords tracked", color: "bg-primary/10 text-primary" },
+    { title: "Videos", value: counts.videos, icon: Video, description: "Videos discovered", color: "bg-info/10 text-info" },
+    { title: "Channels", value: counts.channels, icon: Users, description: "Channels analyzed", color: "bg-success/10 text-success" },
+    { title: "Links", value: counts.links, icon: LinkIcon, description: "Links processed", color: "bg-warning/10 text-warning" },
+  ];
+
   return (
     <div className="space-y-8">
       <div className="flex items-end justify-between">
@@ -16,9 +37,16 @@ export default function Index() {
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground mt-1">Overview of your competitor intelligence pipeline.</p>
         </div>
-        <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground bg-muted rounded-lg px-3 py-2">
-          <Activity className="h-3.5 w-3.5" />
-          <span>Last updated: just now</span>
+        <div className="hidden sm:flex items-center gap-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted rounded-lg px-3 py-2">
+            <Activity className="h-3.5 w-3.5" />
+            <span>
+              {lastUpdated ? `Updated ${formatDistanceToNow(lastUpdated, { addSuffix: true })}` : "Loading…"}
+            </span>
+          </div>
+          <Button variant="outline" size="icon" onClick={refresh} disabled={isLoading} aria-label="Refresh">
+            <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+          </Button>
         </div>
       </div>
 
@@ -29,13 +57,9 @@ export default function Index() {
               <div className={`h-10 w-10 rounded-xl flex items-center justify-center ${stat.color}`}>
                 <stat.icon className="h-5 w-5" />
               </div>
-              <span className="flex items-center gap-1 text-xs font-medium text-success">
-                <TrendingUp className="h-3 w-3" />
-                {stat.trend}
-              </span>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="text-3xl font-bold tracking-tight">{stat.value}</div>
+              <div className="text-3xl font-bold tracking-tight">{stat.value.toLocaleString()}</div>
               <p className="text-sm text-muted-foreground mt-1">{stat.description}</p>
             </CardContent>
           </Card>
@@ -46,33 +70,97 @@ export default function Index() {
         <Card className="border-border/60">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg font-semibold">Affiliate Distribution</CardTitle>
-            <button className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+            <button
+              onClick={() => navigate("/keyword-table")}
+              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+            >
               View all <ArrowUpRight className="h-3 w-3" />
             </button>
           </CardHeader>
           <CardContent>
-            <div className="h-48 flex flex-col items-center justify-center text-muted-foreground gap-3">
-              <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center">
-                <TrendingUp className="h-6 w-6" />
+            {affiliates.length === 0 ? (
+              <div className="h-48 flex flex-col items-center justify-center text-muted-foreground gap-3">
+                <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center">
+                  <TrendingUp className="h-6 w-6" />
+                </div>
+                <p className="text-sm">Charts will appear once data is collected.</p>
               </div>
-              <p className="text-sm">Charts will appear once data is collected.</p>
-            </div>
+            ) : (
+              <div className="h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={affiliates}
+                      dataKey="count"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={70}
+                      innerRadius={40}
+                      paddingAngle={2}
+                    >
+                      {affiliates.map((entry) => (
+                        <Cell
+                          key={entry.name}
+                          fill={CLASSIFICATION_COLORS[entry.name] ?? "hsl(var(--muted-foreground))"}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        background: "hsl(var(--popover))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "0.5rem",
+                        color: "hsl(var(--popover-foreground))",
+                      }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </CardContent>
         </Card>
         <Card className="border-border/60">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg font-semibold">Recent Activity</CardTitle>
-            <button className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+            <button
+              onClick={() => navigate("/keywords")}
+              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+            >
               View all <ArrowUpRight className="h-3 w-3" />
             </button>
           </CardHeader>
           <CardContent>
-            <div className="h-48 flex flex-col items-center justify-center text-muted-foreground gap-3">
-              <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center">
-                <Activity className="h-6 w-6" />
+            {recent.length === 0 ? (
+              <div className="h-48 flex flex-col items-center justify-center text-muted-foreground gap-3">
+                <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center">
+                  <Activity className="h-6 w-6" />
+                </div>
+                <p className="text-sm">No recent activity yet.</p>
               </div>
-              <p className="text-sm">No recent activity yet.</p>
-            </div>
+            ) : (
+              <div className="divide-y divide-border/60">
+                {recent.map((job) => (
+                  <button
+                    key={job.id}
+                    onClick={() => navigate("/keywords")}
+                    className="w-full flex items-center justify-between gap-3 py-2.5 text-left hover:bg-muted/50 rounded-md px-2 -mx-2 transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-sm truncate">{job.keyword}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {job.videos_found ?? 0} videos
+                        {job.completed_at && ` · ${formatDistanceToNow(new Date(job.completed_at), { addSuffix: true })}`}
+                      </div>
+                    </div>
+                    <Badge variant={statusVariant(job.status)} className="shrink-0">
+                      {job.status}
+                    </Badge>
+                  </button>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
