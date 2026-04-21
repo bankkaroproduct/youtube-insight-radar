@@ -850,6 +850,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_orphaned_videos: { Args: never; Returns: number }
       get_affiliate_classification_stats: {
         Args: never
         Returns: {
