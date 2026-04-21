@@ -93,11 +93,16 @@ async function processChannel(
     .eq("channel_id", channelId);
 
   const existingVideoIds = new Set((existingVideos || []).map((video: any) => String(video.video_id)));
-  const targetStoredVideos = Math.min(videosPerChannel, youtubeTotal ?? videosPerChannel);
+  // Sanity guard: if YouTube total is below what we've already fetched, the cached count is wrong.
+  // Treat it as unknown so we don't artificially cap the backfill target.
+  const trustedYoutubeTotal = (youtubeTotal !== null && youtubeTotal >= existingVideoIds.size)
+    ? youtubeTotal
+    : null;
+  const targetStoredVideos = Math.min(videosPerChannel, trustedYoutubeTotal ?? videosPerChannel);
   const missingVideos = Math.max(targetStoredVideos - existingVideoIds.size, 0);
 
-  if (youtubeTotal !== null) {
-    await supabase.from("channels").update({ youtube_total_videos: youtubeTotal }).eq("channel_id", channelId);
+  if (trustedYoutubeTotal !== null) {
+    await supabase.from("channels").update({ youtube_total_videos: trustedYoutubeTotal }).eq("channel_id", channelId);
   }
 
   if (missingVideos === 0) {
@@ -311,8 +316,9 @@ Deno.serve(async (req) => {
           : Number(channel.youtube_total_videos);
         if (backfillUnder50) {
           if (fetched >= 50) return false;
-          // Skip channels already fully covered (YouTube has fewer than 50 total).
-          if (ytTotal !== null && fetched >= ytTotal) return false;
+          // Skip only when we trust the YouTube total: it must be >= what we've already fetched.
+          // A stale/under-count (ytTotal < fetched) means the cached value is wrong — re-process.
+          if (ytTotal !== null && ytTotal >= fetched && fetched >= ytTotal) return false;
         }
         if (minVideos !== null && fetched < minVideos) return false;
         if (maxVideos !== null && fetched > maxVideos) return false;
