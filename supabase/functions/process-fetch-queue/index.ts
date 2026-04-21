@@ -205,14 +205,20 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
       return;
     }
 
-    const params = new URLSearchParams({
-      part: "snippet,statistics,brandingSettings,topicDetails",
-      id: channelIds.join(","),
-      key: apiKeyData.api_key,
-    });
+    const buildChannelsUrl = (apiKey: string) => {
+      const params = new URLSearchParams({
+        part: "snippet,statistics,brandingSettings,topicDetails",
+        id: channelIds.join(","),
+        key: apiKey,
+      });
+      return `https://www.googleapis.com/youtube/v3/channels?${params}`;
+    };
 
-    const resp = await fetch(`https://www.googleapis.com/youtube/v3/channels?${params}`);
-    if (!resp.ok) return;
+    const { resp, key: rotatedKey, exhausted } = await fetchYouTubeWithRotation(
+      supabase, buildChannelsUrl, apiKeyData, quotaCache,
+    );
+    if (exhausted || !resp) return;
+    apiKeyData = rotatedKey;
 
     await incrementQuota(supabase, apiKeyData.id, 1, quotaCache);
 
