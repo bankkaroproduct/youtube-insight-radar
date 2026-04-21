@@ -1,35 +1,61 @@
 
 
-## Root cause found
+## Fix: Link processing reports success but persists nothing
 
-Console shows `[AppSidebar] roles snapshot: { roles: Array(0), isAdmin: false }` but **`[useAuth] loaded roles:` never appeared**. That means `loadUserData` either deadlocked or never ran for the active session — which is why `isAdmin` is `false` even though the database confirms you have the `admin` role.
+### Root cause (confirmed from Postgres logs)
 
-Two real bugs in `src/hooks/useAuth.tsx`:
+Every `video_links` upsert inside `process-video-links` is being silently rejected. Two distinct DB errors are firing on every batch:
 
-1. **Supabase deadlock inside `onAuthStateChange`.** The handler does `await loadUserData(...)` directly inside the auth callback. Supabase explicitly warns this can deadlock the auth client because Supabase DB calls inside auth callbacks can hang while the auth lock is held. That matches what we see: no `loaded roles:` log at all.
+1. **`null value in column "video_id" violates not-null constraint`** — `supabase.from("video_links").upsert(rows, { onConflict: "id" })` is sent by PostgREST as an `INSERT ... ON CONFLICT (id) DO UPDATE`. Postgres validates NOT NULL on the *incoming* row before the conflict swap. The failure-row payload (`{ id, resolution_attempts, resolution_status, last_resolution_error }`) and several other code paths omit `video_id` and `original_url`, so the whole chunk is rejected.
 
-2. **No retry on empty roles.** Even if `loadUserData` does run, the `user_roles` RLS policy is `auth.uid() = user_id`. On a freshly activated JWT there's a brief window where PostgREST doesn't yet see the user and returns `[]` with no error. We then set roles to `[]` and never recover until the 5-min poll.
+2. **`canceling statement due to statement timeout`** — the large success-row upserts (chunks of 500, ~17 columns each) exceed Postgres' statement timeout. Whole chunks are dropped.
+
+The function never checks `error` on its upserts, so the loop happily reports `success: true, processed: 235`, but the DB is unchanged. That's why `remaining` stays pinned at 96,158 across every batch and `updated_at` on resolved rows is frozen at 17:53:14 from one earlier successful pass.
 
 ### Fix
 
-**`src/hooks/useAuth.tsx`**
+All changes are in `supabase/functions/process-video-links/index.ts`.
 
-1. Inside `onAuthStateChange`, defer all Supabase calls with `setTimeout(..., 0)` so the auth callback returns immediately and the lock is released. This is the official Supabase pattern.
+**1. Stop using `upsert` for partial updates — use `update().in("id", ...)` instead.**
 
-2. In `loadUserData`, if the roles query returns `data.length === 0` and no error, wait 400 ms and retry once. If the retry returns rows, use those.
+Five upsert sites currently rely on conflict-update behavior but only carry partial payloads. Convert each to a real UPDATE keyed by `id`, which has no NOT NULL pressure since it touches existing rows only:
 
-3. Remove the temporary `console.log` lines once the fix is verified.
+- Skip-domain fast path (line ~497): change to `.update({...}).eq("id", link.id)` per row, or use `.update(common).in("id", batchIds)` after grouping rows that share the same payload (they do — all skip rows get the same `classification/is_shortened/link_type/resolution_status` plus a per-row `unshortened_url/domain/original_domain`).
+  - Cleanest: keep per-row but issue them via `Promise.all` chunks of 100, OR build a single SQL via `rpc` — simplest is to loop and `.update(...)` per row in batched parallelism.
+- Skip-batch inside while loop (line ~595): same treatment.
+- Success-row write (line ~842): split each row into an UPDATE by id. To preserve throughput, group rows whose payloads are identical except for id (rare here), or run updates in `Promise.all` chunks of 25.
+- Failure-row write (line ~866): replace upsert with per-id UPDATE — already keyed by id only.
+- Step-3 unmatched-link write (line ~937): same.
 
-**`src/components/AppSidebar.tsx`**
+**2. Reduce chunk size and add error logging.**
 
-- Remove the temporary diagnostic log added in the previous step.
+- Drop chunk size from 500 → 100 to stay well under statement timeout.
+- After every DB write, check `error` and `console.error` it. Right now failures are invisible. Add at minimum:
+  ```
+  const { error } = await supabase.from("video_links").update(...).eq("id", id);
+  if (error) console.error("video_links update failed", { id, error: error.message });
+  ```
 
-### Expected outcome
+**3. Surface DB write failures to the caller.**
 
-On reload: console shows `[useAuth] loaded roles: ["viewer", "admin"]` (possibly preceded by `roles retry succeeded`), `isAdmin` becomes `true`, and the Settings group with all four items (User Management, API Keys, IP Whitelist, Audit Log) appears in the sidebar.
+Track `dbErrors` count alongside `totalProcessed/totalCached/totalFailed` and include it in the response JSON. The client log will then show e.g. `(107 cached, 1 failed, 5 db errors)` instead of pretending everything worked.
+
+**4. One-time cleanup (no migration needed).**
+
+Once the function writes correctly, the next batch run will start draining the 96,158 pending links naturally. No data backfill required.
+
+### Why not just add `video_id`/`original_url` to the failure payload?
+
+Two reasons: (a) the function doesn't always have `original_url` in scope at the failure-write site without re-plumbing, and (b) statement-timeout failures on the 500-row success chunks would still happen. Switching to UPDATE + smaller chunks fixes both classes of failure with one change and removes the fragile "remember to include every NOT NULL column on every upsert" footgun for future edits.
+
+### Expected outcome after fix
+
+- Console log shows: `Batch #1: 235 processed (107 cached, 1 failed), 95,923 remaining` — `remaining` actually decreases.
+- `resolution_status='pending'` count drops by ~200/batch.
+- Stuck `bit.ly`/`myshlf.us` rows get `resolution_attempts` incremented and eventually move to `resolution_status='failed'` after 3 tries (current code already does this, it just wasn't persisting).
+- If anything still fails to write, the response includes `dbErrors > 0` and the edge logs show the exact reason.
 
 ### Files touched
 
-- `src/hooks/useAuth.tsx` — defer DB calls in `onAuthStateChange`, add empty-roles retry in `loadUserData`, drop debug log
-- `src/components/AppSidebar.tsx` — drop debug log
+- `supabase/functions/process-video-links/index.ts` — replace 5 `upsert` calls with `update`, reduce chunk size, add error logging, add `dbErrors` to response.
 
