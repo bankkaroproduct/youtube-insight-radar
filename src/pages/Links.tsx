@@ -520,25 +520,20 @@ function ProcessingTab() {
 
   const handleReset = async () => {
     setResetting(true);
+    let nextId: string | null = null;
+    let totalProcessed = 0;
     try {
-      const { error } = await supabase.from("video_links").update({
-        unshortened_url: null,
-        domain: null,
-        original_domain: null,
-        classification: "NEUTRAL",
-        matched_pattern_id: null,
-        affiliate_platform_id: null,
-        retailer_pattern_id: null,
-        is_shortened: null,
-        link_type: null,
-        affiliate_platform: null,
-        affiliate_domain: null,
-        resolved_retailer: null,
-        resolved_retailer_domain: null,
-      }).not("id", "is", null);
-
-      if (error) throw error;
-      toast({ title: "Reset complete", description: "All links have been reset to unprocessed state." });
+      while (true) {
+        const { data, error } = await supabase.functions.invoke("reset-video-links", {
+          body: nextId ? { before_id: nextId } : {},
+        });
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+        totalProcessed += data.processed || 0;
+        nextId = data.next_before_id;
+        if (data.done) break;
+      }
+      toast({ title: "Reset complete", description: `Reset ${totalProcessed.toLocaleString()} links.` });
       linkProcessingService.clearLogs();
       await fetchStats();
     } catch (e: any) {
