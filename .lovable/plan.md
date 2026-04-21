@@ -1,64 +1,50 @@
-## Goal
 
-Make **Backfill to 50 Videos** smarter so it stops re-fetching channels that already have 50 total uploads on YouTube, and surface that "complete" state visually so reviewers know the count is the channel's true total — not an incomplete backfill.
 
-## Problem today
+## Issue
 
-The backfill filter is `total_videos_fetched < 50`. A channel that has only 12 videos on YouTube and 12 fetched still matches this filter forever, so:
+After **Backfill to 50 Videos** runs, new videos are correctly inserted into the `videos` table, but the `channels.total_videos_fetched` column is never updated by the backfill itself. That column is the only thing the Channels page displays — so the count appears unchanged even though videos *were* fetched.
 
-- It keeps getting selected on every backfill pass and burns YouTube API quota.
-- The `while` loop in `backfillTo50` never reliably terminates for these channels.
-- Reviewers can't tell from the UI whether "12 videos" means "incomplete backfill" or "this channel only has 12 videos total".
+Today, `total_videos_fetched` is only refreshed by the separate **Recompute Stats** action (the `compute-channel-stats` edge function on line 100–101). Until you click that, the Channels page shows stale counts.
 
-## Changes
+## Fix
 
-### 1. `supabase/functions/fetch-channel-videos/index.ts` — smarter backfill filter
+Make `fetch-channel-videos` update `channels.total_videos_fetched` for every channel it processes, so the Channels page reflects reality immediately after each backfill batch.
 
-Update the in-memory filter so a channel is only backfilled when there's actually more to fetch:
+### 1. `supabase/functions/fetch-channel-videos/index.ts`
+
+After upserting videos for a channel (around line 226), recount that channel's videos in the DB and write the result back:
 
 ```ts
-const channels = (rawChannels || [])
-  .filter((channel: any) => {
-    const fetched = Number(channel.total_videos_fetched ?? 0);
-    const ytTotal = channel.youtube_total_videos == null
-      ? null
-      : Number(channel.youtube_total_videos);
+// After videos are upserted for the channel
+const { count: newTotal } = await supabase
+  .from("videos")
+  .select("id", { count: "exact", head: true })
+  .eq("channel_id", channelId);
 
-    if (backfillUnder50) {
-      if (fetched >= 50) return false;
-      // Skip channels we've already fully covered (YouTube has fewer than 50 total).
-      if (ytTotal !== null && fetched >= ytTotal) return false;
-    }
-    if (minVideos !== null && fetched < minVideos) return false;
-    if (maxVideos !== null && fetched > maxVideos) return false;
-    return true;
-  })
-  .slice(0, limit);
+await supabase
+  .from("channels")
+  .update({ total_videos_fetched: newTotal ?? 0 })
+  .eq("channel_id", channelId);
 ```
 
-Channels with unknown `youtube_total_videos` still get processed once — that pass populates `youtube_total_videos`, so the next pass can skip them if they're already complete.
+Also do this when `missingVideos === 0` (channel was already complete) — currently we early-return without syncing the count, so a channel that has 12 stored but `total_videos_fetched=8` from old data stays wrong forever. Sync the count in that branch too.
 
-### 2. `src/pages/Channels.tsx` — UI clarity for "small channels"
+### 2. Client-side refresh in `src/pages/Channels.tsx`
 
-In the channels table, where we show the fetched-video count, render:
+The `backfillTo50` loop should call `refresh()` from `useChannels` after each batch (not just at the end), so the user sees counts climbing live instead of all-at-once.
 
-- `12 / 12 (complete)` when `total_videos_fetched >= youtube_total_videos` and YouTube total < 50
-- `34 / 50` (or similar) when still backfilling
-- `50` when fully backfilled and YouTube total ≥ 50
+## Why the previous fix didn't address this
 
-Use a muted badge for "complete" so reviewers immediately recognize that 12 isn't an error — it's the channel's lifetime upload count.
+Earlier work focused on:
+- The backfill *filter* (skip already-complete small channels)
+- The `youtube_total_videos` accuracy
+- The "till date" UI badge
 
-### 3. `src/services/excelExportService.ts` — match column semantics in S5
-
-The existing **Videos Fetched (max 50)** column already shows `total_videos_fetched`. Rename it to **Videos Fetched (Till Date)** and append a `(complete)` marker in the same cell when `total_videos_fetched >= youtube_total_videos` and `youtube_total_videos < 50`. The neighboring **Total Videos on YouTube** column stays as-is so the discrepancy is still obvious at a glance.
-
-### 4. Backfill loop termination safety
-
-`backfillTo50` in `Channels.tsx` already breaks when `channels_processed === 0`. With change #1, channels that are "complete despite < 50" will no longer be selected, so the loop now terminates correctly instead of spinning on the same small channels.
+None of those touch `total_videos_fetched`, which is the actual number rendered in the Channels table cell. That's why videos increase in the database but the channel row looks frozen.
 
 ## Acceptance
 
-- Running **Backfill to 50 Videos** never re-selects a channel whose YouTube total is below 50 once it has been fully fetched.
-- Backfill loop terminates cleanly even when many channels have < 50 total uploads.
-- Channels list visibly distinguishes "small channel, fully covered" from "still backfilling".
-- S5 export carries the same distinction so downstream reviewers don't flag complete-but-small channels as missing data.
+- After running Backfill to 50, each processed channel's row on `/channels` shows the new count without needing to click Recompute Stats.
+- Channels page count refreshes between backfill batches, not only at the end.
+- Channels that were already at their YouTube max (e.g. 12/12) get their `total_videos_fetched` corrected if it was previously understated.
+
