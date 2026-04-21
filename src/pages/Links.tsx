@@ -582,9 +582,12 @@ function ProcessingTab() {
             <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Stop Processing
           </Button>
         ) : (
-          <Button onClick={startProcessing} disabled={stats.unprocessed === 0} size="lg">
+          <Button onClick={startProcessing} disabled={stats.unprocessed === 0 || resetting} size="lg">
             <Play className="h-4 w-4 mr-2" /> {logs.length > 0 ? "Resume Processing" : "Start Processing"}
           </Button>
+        )}
+        {resetting && !running && (
+          <span className="text-xs text-amber-500 self-center">Reset in progress — wait for completion</span>
         )}
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">Batch size</Label>

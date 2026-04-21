@@ -59,26 +59,22 @@ export interface VideoFilters {
 
 const PAGE_SIZE = 50;
 
-async function resolveFilteredVideoIds(filters: VideoFilters): Promise<string[] | null> {
-  // Returns null if no cross-table filters active (meaning "no restriction")
-  // Returns array of video IDs if keyword or classification filters are active
+async function resolveFilteredVideoIdsForStats(filters: VideoFilters): Promise<string[] | null> {
+  // Used only by fetchStats to scope link/channel aggregations.
+  // Returns null if no cross-table filters active (no restriction).
   const needsKeywordFilter = filters.keyword.trim().length > 0;
   const needsClassificationFilter = filters.classification.length > 0;
-
   if (!needsKeywordFilter && !needsClassificationFilter) return null;
 
   const sets: Set<string>[] = [];
 
   if (needsKeywordFilter) {
-    // Find keyword IDs matching the filter
     const { data: kwRows } = await supabase
       .from("keywords_search_runs")
       .select("id")
       .ilike("keyword", `%${filters.keyword.trim()}%`);
     const kwIds = kwRows?.map(k => k.id) ?? [];
-    if (kwIds.length === 0) return []; // No matching keywords → no videos
-
-    // Find video IDs linked to those keywords
+    if (kwIds.length === 0) return [];
     const { data: vkRows } = await supabase
       .from("video_keywords")
       .select("video_id")
@@ -94,7 +90,6 @@ async function resolveFilteredVideoIds(filters: VideoFilters): Promise<string[] 
     sets.push(new Set((linkRows ?? []).map(l => l.video_id)));
   }
 
-  // Intersect all sets
   if (sets.length === 0) return null;
   let result = sets[0];
   for (let i = 1; i < sets.length; i++) {
@@ -121,7 +116,7 @@ export function useVideos(filters?: VideoFilters) {
       const f = currentFilters ?? { title: "", channel: "", keyword: "", classification: "" };
 
       // Resolve filtered video IDs (same logic as fetchPage).
-      const filteredIds = await resolveFilteredVideoIds(f);
+      const filteredIds = await resolveFilteredVideoIdsForStats(f);
       if (filteredIds !== null && filteredIds.length === 0) {
         setStats({ totalVideos: 0, totalLinks: 0, uniqueChannels: 0, uniquePlatforms: 0, uniqueRetailers: 0 });
         setIsStatsLoading(false);
@@ -204,42 +199,52 @@ export function useVideos(filters?: VideoFilters) {
     try {
       const f = currentFilters ?? { title: "", channel: "", keyword: "", classification: "" };
 
-      // Resolve cross-table filter IDs first
-      const filteredIds = await resolveFilteredVideoIds(f);
-      // If cross-table filters returned empty array, no results possible
-      if (filteredIds !== null && filteredIds.length === 0) {
-        if (thisId === fetchIdRef.current) {
-          setVideos([]);
-          setTotalCount(0);
-          setHasMore(false);
-          setIsLoading(false);
+      const hasCrossTableFilter = f.keyword.trim().length > 0 || f.classification.length > 0;
+
+      let videoRows: any[] = [];
+      let totalCountValue = 0;
+
+      if (hasCrossTableFilter) {
+        const { data, error } = await supabase.rpc("search_videos_filtered", {
+          _title_q: f.title.trim() || null,
+          _channel_q: f.channel.trim() || null,
+          _keyword_q: f.keyword.trim() || null,
+          _classification: f.classification || null,
+          _limit: PAGE_SIZE,
+          _offset: pageNum * PAGE_SIZE,
+        });
+        if (thisId !== fetchIdRef.current) return;
+        if (error) throw error;
+        const rpcRows = (data as any[]) ?? [];
+        const ids = rpcRows.map((r) => r.id);
+        totalCountValue = rpcRows[0]?.total_count ? Number(rpcRows[0].total_count) : 0;
+        if (ids.length > 0) {
+          const { data: rows } = await supabase.from("videos").select("*").in("id", ids);
+          if (thisId !== fetchIdRef.current) return;
+          const rowById = new Map((rows ?? []).map((r: any) => [r.id, r]));
+          videoRows = ids.map((id) => rowById.get(id)).filter(Boolean);
         }
-        return;
+      } else {
+        const from = pageNum * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        let countQuery = supabase.from("videos").select("*", { count: "exact", head: true });
+        let dataQuery = supabase.from("videos").select("*").order("created_at", { ascending: false }).range(from, to);
+        if (f.title.trim()) {
+          countQuery = countQuery.ilike("title", `%${f.title.trim()}%`);
+          dataQuery = dataQuery.ilike("title", `%${f.title.trim()}%`);
+        }
+        if (f.channel.trim()) {
+          countQuery = countQuery.ilike("channel_name", `%${f.channel.trim()}%`);
+          dataQuery = dataQuery.ilike("channel_name", `%${f.channel.trim()}%`);
+        }
+        const [countRes, dataRes] = await Promise.all([countQuery, dataQuery]);
+        if (thisId !== fetchIdRef.current) return;
+        if (dataRes.error) throw dataRes.error;
+        videoRows = dataRes.data ?? [];
+        totalCountValue = countRes.count ?? 0;
       }
 
-      const from = pageNum * PAGE_SIZE;
-      const to = from + PAGE_SIZE - 1;
-
-      // Build filtered count query
-      let countQuery = supabase.from("videos").select("*", { count: "exact", head: true });
-      if (f.title.trim()) countQuery = countQuery.ilike("title", `%${f.title.trim()}%`);
-      if (f.channel.trim()) countQuery = countQuery.ilike("channel_name", `%${f.channel.trim()}%`);
-      if (filteredIds !== null) countQuery = countQuery.in("id", filteredIds);
-
-      // Build data query
-      let dataQuery = supabase.from("videos").select("*").order("created_at", { ascending: false }).range(from, to);
-      if (f.title.trim()) dataQuery = dataQuery.ilike("title", `%${f.title.trim()}%`);
-      if (f.channel.trim()) dataQuery = dataQuery.ilike("channel_name", `%${f.channel.trim()}%`);
-      if (filteredIds !== null) dataQuery = dataQuery.in("id", filteredIds);
-
-      const [countRes, dataRes] = await Promise.all([countQuery, dataQuery]);
-
-      if (thisId !== fetchIdRef.current) return; // stale request
-
-      if (dataRes.error) throw dataRes.error;
-      const videoRows = dataRes.data ?? [];
-
-      setTotalCount(countRes.count ?? 0);
+      setTotalCount(totalCountValue);
 
       if (videoRows.length === 0) {
         setVideos([]);
