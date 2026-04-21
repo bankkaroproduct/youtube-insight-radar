@@ -74,89 +74,104 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const runIpCheck = async (userRoles: AppRole[]) => {
-    if (userRoles.includes("super_admin")) {
-      setIpCheck({ checked: true, allowed: true, ip: "bypassed" });
-      return;
-    }
-    const res = await checkIpAccess();
-    setIpCheck({ checked: true, allowed: res.allowed, ip: res.ip, error: res.error });
-  };
-
   useEffect(() => {
     let initialized = false;
     let lastUserId: string | null = null;
+    let cancelled = false;
+
+    const finishBootstrap = () => {
+      if (cancelled) return;
+      initialized = true;
+      setIsLoading(false);
+      // Guarantee ProtectedRoute can render — even if IP check never finished.
+      setIpCheck((prev) => (prev.checked ? prev : { checked: true, allowed: true, ip: "unknown", error: true }));
+    };
+
+    // Safety net: never let the app hang on a blank screen.
+    const safetyTimeout = setTimeout(() => {
+      if (!initialized) {
+        console.warn("[useAuth] bootstrap safety timeout fired");
+        finishBootstrap();
+      }
+    }, 8000);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, newSession) => {
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
-        if (newSession?.user) {
-          const userChanged = newSession.user.id !== lastUserId;
-          lastUserId = newSession.user.id;
-          const { roles: newRoles } = await loadUserData(newSession.user.id);
-          if (initialized && userChanged) {
-            // Reset ip check on user switch and re-run.
+        try {
+          setSession(newSession);
+          setUser(newSession?.user ?? null);
+          if (newSession?.user) {
+            const userChanged = newSession.user.id !== lastUserId;
+            lastUserId = newSession.user.id;
+            const { roles: newRoles } = await loadUserData(newSession.user.id);
+            if (initialized && userChanged) {
+              setIpCheck({ allowed: true, ip: "", checked: false });
+              runIpCheckSafe(newRoles);
+            }
+          } else {
+            setProfile(null);
+            setRoles([]);
+            rolesRef.current = [];
+            lastUserId = null;
             setIpCheck({ allowed: true, ip: "", checked: false });
-            runIpCheck(newRoles);
           }
-        } else {
-          setProfile(null);
-          setRoles([]);
-          rolesRef.current = [];
-          lastUserId = null;
-          setIpCheck({ allowed: true, ip: "", checked: false });
+        } catch (e) {
+          console.error("[useAuth] onAuthStateChange handler failed", e);
+        } finally {
+          if (initialized) setIsLoading(false);
         }
-        if (initialized) setIsLoading(false);
       }
     );
 
-    supabase.auth.getSession().then(async ({ data: { session: initialSession } }) => {
-      setSession(initialSession);
-      setUser(initialSession?.user ?? null);
-      if (initialSession?.user) {
-        lastUserId = initialSession.user.id;
-        const { roles: newRoles } = await loadUserData(initialSession.user.id);
+    (async () => {
+      try {
+        const { data: { session: initialSession } } = await supabase.auth.getSession();
+        setSession(initialSession);
+        setUser(initialSession?.user ?? null);
+        if (initialSession?.user) {
+          lastUserId = initialSession.user.id;
+          const { profile: loadedProfile, roles: newRoles } = await loadUserData(initialSession.user.id);
 
-        // Hard-enforce deactivated accounts
-        const { data: prof } = await supabase
-          .from("user_profiles")
-          .select("is_active")
-          .eq("user_id", initialSession.user.id)
-          .single();
-        if (prof && prof.is_active === false) {
-          await supabase.auth.signOut();
-          toast.error("Your account has been deactivated. Contact an admin.");
-          initialized = true;
-          setIsLoading(false);
-          return;
+          if (loadedProfile && loadedProfile.is_active === false) {
+            await supabase.auth.signOut();
+            toast.error("Your account has been deactivated. Contact an admin.");
+            return;
+          }
+
+          await runIpCheckSafe(newRoles);
         }
-
-        await runIpCheck(newRoles);
+      } catch (e) {
+        console.error("[useAuth] initial bootstrap failed", e);
+      } finally {
+        finishBootstrap();
       }
-      initialized = true;
-      setIsLoading(false);
-    });
+    })();
 
     // Poll every 5 minutes for role changes mid-session.
     const roleCheckInterval = setInterval(async () => {
-      const currentSession = (await supabase.auth.getSession()).data.session;
-      if (!currentSession?.user) return;
-      const { data } = await supabase.from("user_roles").select("role").eq("user_id", currentSession.user.id);
-      const currentRoles = ((data ?? []) as { role: AppRole }[]).map((r) => r.role);
-      const prev = rolesRef.current;
-      const hasChanged =
-        currentRoles.length !== prev.length ||
-        currentRoles.some((r) => !prev.includes(r));
-      if (hasChanged) {
-        rolesRef.current = currentRoles;
-        setRoles(currentRoles);
-        toast.info("Your permissions were updated. The page will refresh.");
-        setTimeout(() => window.location.reload(), 2000);
+      try {
+        const currentSession = (await supabase.auth.getSession()).data.session;
+        if (!currentSession?.user) return;
+        const { data } = await supabase.from("user_roles").select("role").eq("user_id", currentSession.user.id);
+        const currentRoles = ((data ?? []) as { role: AppRole }[]).map((r) => r.role);
+        const prev = rolesRef.current;
+        const hasChanged =
+          currentRoles.length !== prev.length ||
+          currentRoles.some((r) => !prev.includes(r));
+        if (hasChanged) {
+          rolesRef.current = currentRoles;
+          setRoles(currentRoles);
+          toast.info("Your permissions were updated. The page will refresh.");
+          setTimeout(() => window.location.reload(), 2000);
+        }
+      } catch (e) {
+        console.error("[useAuth] role poll failed", e);
       }
     }, 5 * 60_000);
 
     return () => {
+      cancelled = true;
+      clearTimeout(safetyTimeout);
       subscription.unsubscribe();
       clearInterval(roleCheckInterval);
     };
