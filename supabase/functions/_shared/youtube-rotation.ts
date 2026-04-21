@@ -14,11 +14,17 @@ export async function getAvailableApiKeys(supabase: any, count: number) {
     .select("id, api_key_last_4, quota_used_today, daily_quota_limit")
     .eq("is_active", true)
     .or("last_test_status.is.null,last_test_status.neq.restricted")
-    .or("daily_quota_limit.eq.0,quota_used_today.lt.daily_quota_limit")
     .order("quota_used_today", { ascending: true })
-    .limit(count);
-  if (error || !data) return [];
-  return data;
+    .limit(Math.max(count * 3, 50));
+  if (error || !data) {
+    if (error) console.error("[getAvailableApiKeys] query error:", error);
+    return [];
+  }
+  // Filter quota client-side: chained .or() in PostgREST overwrites the previous one.
+  const available = data.filter((k: any) =>
+    !k.daily_quota_limit || k.daily_quota_limit === 0 || k.quota_used_today < k.daily_quota_limit
+  );
+  return available.slice(0, count);
 }
 
 // Rotate the current key. Marks status, optionally deactivates, and returns next available key (or null).
