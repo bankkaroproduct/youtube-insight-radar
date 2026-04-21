@@ -396,7 +396,12 @@ function buildSheet5(
       ch.median_views ?? 0,
       ch.median_likes ?? 0,
       ch.median_comments ?? 0,
-      ch.total_videos_fetched ?? 0,
+      (() => {
+        const fetched = ch.total_videos_fetched ?? 0;
+        const yt = ch.youtube_total_videos;
+        if (yt != null && yt < 50 && fetched >= yt) return `${fetched} (complete)`;
+        return fetched;
+      })(),
       ch.youtube_total_videos ?? "N/A",
       description,
     ];
