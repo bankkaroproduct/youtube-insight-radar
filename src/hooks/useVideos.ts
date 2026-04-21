@@ -331,7 +331,7 @@ export function useVideos(filters?: VideoFilters) {
   }, [fetchPage, filters]);
 
   const refresh = useCallback(() => {
-    fetchStats();
+    fetchStats(filters);
     fetchPage(page, filters);
   }, [fetchStats, fetchPage, page, filters]);
 
@@ -342,12 +342,13 @@ export function useVideos(filters?: VideoFilters) {
     if (prevFiltersRef.current !== key) {
       prevFiltersRef.current = key;
       setPage(0);
+      fetchStats(filters);
       fetchPage(0, filters);
     }
-  }, [filters, fetchPage]);
+  }, [filters, fetchPage, fetchStats]);
 
   useEffect(() => {
-    fetchStats();
+    fetchStats(filters);
     fetchPage(0, filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

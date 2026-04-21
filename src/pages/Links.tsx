@@ -503,6 +503,12 @@ function ProcessingTab() {
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
+  useEffect(() => {
+    if (!running) return;
+    const interval = setInterval(fetchStats, 5000);
+    return () => clearInterval(interval);
+  }, [running, fetchStats]);
+
   const startProcessing = () => {
     linkProcessingService.start(fetchStats);
   };
