@@ -106,6 +106,11 @@ async function processChannel(
   }
 
   if (missingVideos === 0) {
+    // Sync stale total_videos_fetched even when nothing new to fetch
+    await supabase
+      .from("channels")
+      .update({ total_videos_fetched: existingVideoIds.size })
+      .eq("channel_id", channelId);
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
@@ -243,6 +248,16 @@ async function processChannel(
       await supabase.from("video_links").upsert(linkRecords.slice(i, i + 500), { onConflict: "video_id,original_url" });
     }
   }
+
+  // Sync the channel's stored count with the actual videos table after upserts
+  const { count: newTotal } = await supabase
+    .from("videos")
+    .select("id", { count: "exact", head: true })
+    .eq("channel_id", channelId);
+  await supabase
+    .from("channels")
+    .update({ total_videos_fetched: newTotal ?? 0 })
+    .eq("channel_id", channelId);
 
   keyIndex.val++;
   return { videosInserted: videoRecords.length, youtubeTotal };

@@ -181,6 +181,8 @@ export default function Channels() {
         totalProcessed += processed;
         totalVideos += result.total_videos_inserted || 0;
         toast.loading(`Backfilled ${totalProcessed} channels (${totalVideos} videos)…`, { id: t });
+        // Live-refresh between batches so users see counts climbing
+        refresh();
       }
       toast.success(`Done. Backfilled ${totalProcessed} channels with ${totalVideos} videos.`, { id: t });
       refresh();
