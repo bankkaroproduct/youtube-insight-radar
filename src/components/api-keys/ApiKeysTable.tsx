@@ -56,7 +56,7 @@ export function ApiKeysTable({ keys, selectedIds, onSelectChange, onToggleActive
               <Checkbox checked={allSelected} onCheckedChange={toggleAll} />
             </TableHead>
             <TableHead>Label</TableHead>
-            <TableHead>API Key</TableHead>
+            <TableHead>Last 4</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Quota Used</TableHead>
             <TableHead>Last Test</TableHead>

@@ -53,8 +53,11 @@ export default function Index() {
       </div>
 
       {error && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 px-4 py-3 text-sm">
-          {error}. Some widgets may show partial data.
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 px-4 py-3 text-sm flex items-center justify-between gap-3">
+          <span>Some dashboard data failed to load. {error}</span>
+          <Button size="sm" variant="outline" onClick={refresh} disabled={isLoading}>
+            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${isLoading ? "animate-spin" : ""}`} /> Retry
+          </Button>
         </div>
       )}
 
