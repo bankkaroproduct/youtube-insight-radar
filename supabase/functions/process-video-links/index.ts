@@ -30,7 +30,31 @@ function isJsRedirectDomain(domain: string): boolean {
   return JS_REDIRECT_DOMAINS.some(d => domain.includes(d));
 }
 
+// Per-domain extractors for JS redirects (Item 4)
+const DOMAIN_EXTRACTORS: Record<string, (html: string) => string | null> = {
+  "wishlink.com": (html) => {
+    const m = html.match(/data-url=["']([^"']+)["']/) || html.match(/product[Uu]rl["']?\s*[:=]\s*["']([^"']+)["']/);
+    return m?.[1] ?? null;
+  },
+  "earnkaro.com": (html) => {
+    const m = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
+    return m?.[1] ?? null;
+  },
+  "cuelinks.com": (html) => {
+    const m = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
+    return m?.[1] ?? null;
+  },
+};
+
 function extractRedirectFromHtml(html: string, sourceDomain: string): string | null {
+  // Try domain-specific extractor first
+  for (const [d, extractor] of Object.entries(DOMAIN_EXTRACTORS)) {
+    if (sourceDomain.includes(d)) {
+      const result = extractor(html);
+      if (result?.startsWith("http")) return result;
+    }
+  }
+
   const jsMatch = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/);
   if (jsMatch && jsMatch[1]?.startsWith("http")) return jsMatch[1];
 
@@ -53,7 +77,6 @@ function extractRedirectFromHtml(html: string, sourceDomain: string): string | n
   return null;
 }
 
-// Fetch with AbortController timeout
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -64,7 +87,6 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
-// Stream only first 20KB of HTML body
 async function fetchHtmlPartial(url: string, timeoutMs = 8000): Promise<string> {
   const resp = await fetchWithTimeout(url, {
     method: "GET",
@@ -142,13 +164,6 @@ const SKIP_DOMAINS = new Set([
   "mobile.twitter.com", "wa.link", "x.com",
 ]);
 
-function lookupAffiliatePlatform(domain: string): string | null {
-  for (const [d, name] of Object.entries(AFFILIATE_SHORT_DOMAINS)) {
-    if (domain.includes(d)) return name;
-  }
-  return null;
-}
-
 function lookupRetailer(domain: string): { name: string; domain: string } | null {
   for (const [d, name] of Object.entries(RETAILER_DOMAINS)) {
     if (domain.includes(d)) return { name, domain: d };
@@ -161,7 +176,6 @@ async function fallbackUnshorten(url: string): Promise<string> {
     const resp = await fetchWithTimeout(url, { method: "HEAD", redirect: "follow" }, 5000);
     let resolved = resp.url || url;
     const resolvedDomain = extractDomain(resolved);
-    // Only do JS redirect parsing if we landed on a JS-redirect domain AND it's still the same as input
     if (isJsRedirectDomain(resolvedDomain) && resolved === url) {
       resolved = await resolveJsRedirect(resolved);
     }
@@ -205,8 +219,6 @@ async function unshortenUrl(url: string): Promise<string> {
     const data = await resp.json();
     if (data.success && data.unshortened_url) {
       let resolved = data.unshortened_url;
-      // Only parse JS redirect if the resolved URL is still on a JS-redirect domain
-      // AND it's not already a known retailer (optimization: skip HTML fetch when not needed)
       const resolvedDomain = extractDomain(resolved);
       if (isJsRedirectDomain(resolvedDomain) && !lookupRetailer(resolvedDomain)) {
         resolved = await resolveJsRedirect(resolved);
@@ -253,38 +265,6 @@ interface Pattern {
   id: string; pattern: string; name: string; classification: string; is_confirmed: boolean; type: string;
 }
 
-function matchPattern(domain: string, url: string, patterns: Pattern[], filterType?: string): Pattern | null {
-  for (const p of patterns) {
-    if (filterType && p.type?.toLowerCase() !== filterType) continue;
-    if (domain.includes(p.pattern) || url.includes(p.pattern)) return p;
-  }
-  return null;
-}
-
-// Batched parallel processing: groups of RESOLVE_BATCH with delay between
-const RESOLVE_BATCH = 10;
-const RESOLVE_DELAY_MS = 200;
-
-// Rate limit helper for unshorten API
-async function checkUnshortenQuota(supabase: any, cost: number): Promise<boolean> {
-  const { data } = await supabase
-    .from("rate_limits")
-    .select("requests_today, quota_limit, last_reset")
-    .eq("key", "unshorten_api")
-    .single();
-  if (!data) return true;
-  const lastReset = new Date(data.last_reset);
-  const now = new Date();
-  let current = data.requests_today;
-  if (lastReset.toDateString() !== now.toDateString()) {
-    await supabase.from("rate_limits").update({ requests_today: 0, last_reset: now.toISOString() }).eq("key", "unshorten_api");
-    current = 0;
-  }
-  if (current + cost > data.quota_limit) return false;
-  await supabase.from("rate_limits").update({ requests_today: current + cost }).eq("key", "unshorten_api");
-  return true;
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -292,7 +272,7 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Auth guard: require service role key or valid admin JWT
+    // Auth guard
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -329,7 +309,7 @@ Deno.serve(async (req) => {
 
     const allPatterns: Pattern[] = (patterns || []) as Pattern[];
 
-    // Clone module-level constants into local variables to avoid cross-invocation mutation
+    // Local clones (don't mutate module-level)
     const localAffiliateShortDomains: Record<string, string> = { ...AFFILIATE_SHORT_DOMAINS };
     const localRetailerDomains: Record<string, string> = { ...RETAILER_DOMAINS };
 
@@ -338,20 +318,15 @@ Deno.serve(async (req) => {
       if (!p.is_confirmed || !p.name) continue;
       const pType = (p.type || "").toLowerCase();
       if (pType === "affiliate_platform") {
-        if (!localAffiliateShortDomains[p.pattern]) {
-          localAffiliateShortDomains[p.pattern] = p.name;
-        }
+        if (!localAffiliateShortDomains[p.pattern]) localAffiliateShortDomains[p.pattern] = p.name;
         affiliatePlatformDomains.add(p.pattern);
       }
       if (pType === "retailer" && !localRetailerDomains[p.pattern]) {
         localRetailerDomains[p.pattern] = p.name;
       }
     }
-    for (const d of Object.keys(localAffiliateShortDomains)) {
-      affiliatePlatformDomains.add(d);
-    }
+    for (const d of Object.keys(localAffiliateShortDomains)) affiliatePlatformDomains.add(d);
 
-    // Use local clones for lookups within this request
     function localLookupAffiliatePlatform(domain: string): string | null {
       for (const [d, name] of Object.entries(localAffiliateShortDomains)) {
         if (domain.includes(d)) return name;
@@ -374,6 +349,31 @@ Deno.serve(async (req) => {
       return false;
     }
 
+    // Item 3: Pattern lookup tables built once per invocation
+    const patternsByExactDomain = new Map<string, Pattern>();
+    const patternsByType: Record<string, Pattern[]> = { affiliate_platform: [], retailer: [], social: [], neutral: [] };
+    const rebuildPatternIndex = () => {
+      patternsByExactDomain.clear();
+      for (const k of Object.keys(patternsByType)) patternsByType[k] = [];
+      for (const p of allPatterns) {
+        patternsByExactDomain.set(p.pattern, p);
+        const t = (p.type || "").toLowerCase();
+        if (patternsByType[t]) patternsByType[t].push(p);
+      }
+    };
+    rebuildPatternIndex();
+
+    function matchFast(domain: string, filterType?: string): Pattern | null {
+      if (!domain) return null;
+      const exact = patternsByExactDomain.get(domain);
+      if (exact && (!filterType || exact.type?.toLowerCase() === filterType)) return exact;
+      const pool = filterType ? (patternsByType[filterType] ?? allPatterns) : allPatterns;
+      for (const p of pool) {
+        if (domain.endsWith(p.pattern) || domain.includes(p.pattern)) return p;
+      }
+      return null;
+    }
+
     let requestedBatchSize: number | null = null;
     let isManualBatch = false;
     try {
@@ -393,9 +393,52 @@ Deno.serve(async (req) => {
     const BATCH_SIZE = 50;
     const videoChannelCache = new Map<string, string>();
 
-    // In-memory URL cache: original_url → resolved_url
+    // Item 5: Local quota counter
+    const { data: rlRow } = await supabase
+      .from("rate_limits")
+      .select("requests_today, quota_limit, last_reset")
+      .eq("key", "unshorten_api")
+      .single();
+    const nowDate = new Date();
+    const lastReset = rlRow ? new Date(rlRow.last_reset) : nowDate;
+    const needsReset = lastReset.toDateString() !== nowDate.toDateString();
+    let localUsed = needsReset ? 0 : (rlRow?.requests_today ?? 0);
+    const localLimit = rlRow?.quota_limit ?? 500;
+
+    function localCheckQuota(): boolean {
+      if (localUsed + 1 > localLimit) return false;
+      localUsed++;
+      return true;
+    }
+
+    // Item 2: Per-domain circuit breaker
+    const domainCircuit = new Map<string, { fails: number; openUntil: number }>();
+    function circuitAllows(domain: string): boolean {
+      const c = domainCircuit.get(domain);
+      if (!c) return true;
+      if (c.fails < 3) return true;
+      return Date.now() > c.openUntil;
+    }
+    function recordFailure(domain: string) {
+      const c = domainCircuit.get(domain) ?? { fails: 0, openUntil: 0 };
+      c.fails++;
+      if (c.fails >= 3) c.openUntil = Date.now() + 5 * 60_000;
+      domainCircuit.set(domain, c);
+    }
+    function recordSuccess(domain: string) {
+      domainCircuit.delete(domain);
+    }
+
+    // Item 9: Per-domain metrics
+    const metricsByDomain: Record<string, { count: number; resolved: number; failed: number; cached: number; totalMs: number }> = {};
+    function recordMetric(domain: string, outcome: "resolved" | "failed" | "cached", ms: number) {
+      if (!metricsByDomain[domain]) metricsByDomain[domain] = { count: 0, resolved: 0, failed: 0, cached: 0, totalMs: 0 };
+      metricsByDomain[domain].count++;
+      metricsByDomain[domain][outcome]++;
+      metricsByDomain[domain].totalMs += ms;
+    }
+
     const urlCache = new Map<string, string>();
-    // Queue of cache writes to flush at the end (avoid per-link DB calls)
     const cacheWritesQueue: Array<{
       normalized_url: string;
       unshortened_url: string;
@@ -403,21 +446,36 @@ Deno.serve(async (req) => {
       resolution_method: string;
     }> = [];
 
+    // Item 7: Recursive chain resolution
+    async function resolveFullChain(url: string, maxHops = 3): Promise<string> {
+      let current = url;
+      for (let i = 0; i < maxHops; i++) {
+        const next = unshortenKeys.length > 0 && localCheckQuota()
+          ? await unshortenUrl(current)
+          : await fallbackUnshorten(current);
+        if (next === current) return current;
+        const nextDomain = extractDomain(next);
+        if (lookupRetailer(nextDomain) || localLookupRetailer(nextDomain)) return next;
+        if (!needsUnshortening(nextDomain)) return next;
+        current = next;
+      }
+      return current;
+    }
+
     // Step 0: Fast-path skip-domain links
     {
       const { data: skipLinks } = await supabase
         .from("video_links")
         .select("id, original_url, video_id")
         .is("unshortened_url", null)
+        .in("resolution_status", ["pending"])
         .limit(5000);
 
       if (skipLinks && skipLinks.length > 0) {
         const skipUpdates: { id: string; original_url: string; video_id: string }[] = [];
         for (const link of skipLinks) {
           const domain = extractDomain(link.original_url);
-          if (SKIP_DOMAINS.has(domain)) {
-            skipUpdates.push(link);
-          }
+          if (SKIP_DOMAINS.has(domain)) skipUpdates.push(link);
         }
         if (skipUpdates.length > 0) {
           console.log(`Fast-pathing ${skipUpdates.length} skip-domain links`);
@@ -431,6 +489,7 @@ Deno.serve(async (req) => {
               classification: "NEUTRAL",
               is_shortened: false,
               link_type: "unknown",
+              resolution_status: "resolved",
             };
           });
           for (let i = 0; i < skipRows.length; i += 500) {
@@ -442,11 +501,60 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Item 10: resolveOne extracted; handles cache, quota, circuit, recursive chain
+    interface LinkRow { id: string; original_url: string; video_id: string; domain: string; }
+
+    async function resolveOne(link: LinkRow): Promise<{ id: string; original_url: string; video_id: string; finalUrl: string; domain: string; outcome: "cached" | "resolved" | "failed"; method: string; error?: string }> {
+      const start = Date.now();
+      const domain = link.domain;
+
+      // In-memory cache hit
+      const cached = urlCache.get(link.original_url);
+      if (cached) {
+        recordMetric(domain, "cached", Date.now() - start);
+        return { ...link, finalUrl: cached, outcome: "cached", method: "memory" };
+      }
+
+      // Circuit breaker
+      if (!circuitAllows(domain)) {
+        recordMetric(domain, "failed", Date.now() - start);
+        return { ...link, finalUrl: link.original_url, outcome: "failed", method: "circuit_open", error: "circuit breaker open" };
+      }
+
+      try {
+        const finalUrl = await resolveFullChain(link.original_url);
+        urlCache.set(link.original_url, finalUrl);
+        const resolved = finalUrl !== link.original_url;
+        const method = unshortenKeys.length > 0 ? "api" : "fallback";
+
+        if (resolved) {
+          recordSuccess(domain);
+          cacheWritesQueue.push({
+            normalized_url: normalizeForCache(link.original_url),
+            unshortened_url: finalUrl,
+            final_domain: extractDomain(finalUrl) || null,
+            resolution_method: method,
+          });
+          recordMetric(domain, "resolved", Date.now() - start);
+          return { ...link, finalUrl, outcome: "resolved", method };
+        } else {
+          recordFailure(domain);
+          recordMetric(domain, "failed", Date.now() - start);
+          return { ...link, finalUrl, outcome: "failed", method, error: "no resolution" };
+        }
+      } catch (e: any) {
+        recordFailure(domain);
+        recordMetric(domain, "failed", Date.now() - start);
+        return { ...link, finalUrl: link.original_url, outcome: "failed", method: "error", error: e?.message || "unknown" };
+      }
+    }
+
     while (totalProcessed < MAX_TOTAL) {
       const { data: links, error } = await supabase
         .from("video_links")
         .select("id, original_url, video_id")
         .is("unshortened_url", null)
+        .in("resolution_status", ["pending"])
         .limit(BATCH_SIZE);
 
       if (error) throw error;
@@ -459,34 +567,29 @@ Deno.serve(async (req) => {
         for (const v of (videoData || [])) videoChannelCache.set(v.id, v.channel_id);
       }
 
-      const shortenedLinks: typeof links = [];
-      const normalLinks: typeof links = [];
-      const skipLinks: typeof links = [];
-      for (const link of links) {
-        const domain = extractDomain(link.original_url);
-        if (SKIP_DOMAINS.has(domain)) {
-          skipLinks.push(link);
-        } else if (needsUnshortening(domain)) {
-          shortenedLinks.push(link);
-        } else {
-          normalLinks.push(link);
-        }
+      // Item 8: Enrich once with domain
+      const enriched: LinkRow[] = links.map(l => ({ ...l, domain: extractDomain(l.original_url) }));
+
+      const shortenedLinks: LinkRow[] = [];
+      const normalLinks: LinkRow[] = [];
+      const skipLinks: LinkRow[] = [];
+      for (const link of enriched) {
+        if (SKIP_DOMAINS.has(link.domain)) skipLinks.push(link);
+        else if (needsUnshortening(link.domain)) shortenedLinks.push(link);
+        else normalLinks.push(link);
       }
 
-      // Fast-path skip-domain links found in main loop
       if (skipLinks.length > 0) {
-        const skipRows = skipLinks.map(link => {
-          const domain = extractDomain(link.original_url);
-          return {
-            id: link.id,
-            unshortened_url: link.original_url,
-            domain,
-            original_domain: domain,
-            classification: "NEUTRAL",
-            is_shortened: false,
-            link_type: "unknown",
-          };
-        });
+        const skipRows = skipLinks.map(link => ({
+          id: link.id,
+          unshortened_url: link.original_url,
+          domain: link.domain,
+          original_domain: link.domain,
+          classification: "NEUTRAL",
+          is_shortened: false,
+          link_type: "unknown",
+          resolution_status: "resolved",
+        }));
         for (let i = 0; i < skipRows.length; i += 500) {
           const chunk = skipRows.slice(i, i + 500);
           await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
@@ -494,7 +597,7 @@ Deno.serve(async (req) => {
         totalProcessed += skipLinks.length;
       }
 
-      // Cross-run cache: check url_resolution_cache for previously-resolved URLs.
+      // Cross-run cache lookup
       if (shortenedLinks.length > 0) {
         const urlsToCheck = shortenedLinks
           .map(l => ({ link: l, norm: normalizeForCache(l.original_url) }))
@@ -520,81 +623,63 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Resolve shortened links in batches of RESOLVE_BATCH with delay
-      const unshortenResults: Array<typeof links[0] & { finalUrl: string }> = [];
-
-      for (let i = 0; i < shortenedLinks.length; i += RESOLVE_BATCH) {
-        const batch = shortenedLinks.slice(i, i + RESOLVE_BATCH);
-        const batchResults = await Promise.all(
-          batch.map(async (link) => {
-            // Check in-memory cache first
-            const cached = urlCache.get(link.original_url);
-            if (cached) {
-              totalCached++;
-              return { ...link, finalUrl: cached };
-            }
-            // Resolve via API (with rate limit check)
-            try {
-              const quotaOk = await checkUnshortenQuota(supabase, 1);
-              if (!quotaOk) {
-                // Quota exhausted - use fallback (HTTP redirect, no API)
-                const finalUrl = await fallbackUnshorten(link.original_url);
-                urlCache.set(link.original_url, finalUrl);
-                if (finalUrl !== link.original_url) {
-                  totalResolved++;
-                  cacheWritesQueue.push({
-                    normalized_url: normalizeForCache(link.original_url),
-                    unshortened_url: finalUrl,
-                    final_domain: extractDomain(finalUrl) || null,
-                    resolution_method: "fallback",
-                  });
-                } else {
-                  totalFailed++;
-                }
-                return { ...link, finalUrl };
-              }
-              const finalUrl = await unshortenUrl(link.original_url);
-              urlCache.set(link.original_url, finalUrl);
-              if (finalUrl !== link.original_url) {
-                totalResolved++;
-                cacheWritesQueue.push({
-                  normalized_url: normalizeForCache(link.original_url),
-                  unshortened_url: finalUrl,
-                  final_domain: extractDomain(finalUrl) || null,
-                  resolution_method: "api",
-                });
-              } else {
-                totalFailed++;
-              }
-              return { ...link, finalUrl };
-            } catch {
-              totalFailed++;
-              return { ...link, finalUrl: link.original_url };
-            }
-          })
-        );
-        unshortenResults.push(...batchResults);
-        // Rate limit delay between batches
-        if (i + RESOLVE_BATCH < shortenedLinks.length) {
-          await new Promise(r => setTimeout(r, RESOLVE_DELAY_MS));
+      // Item 1: Split into API vs fallback pools
+      const apiPool: LinkRow[] = [];
+      const fallbackPool: LinkRow[] = [];
+      for (const link of shortenedLinks) {
+        // Cache hits don't need API/fallback distinction; route to API pool (will short-circuit on cache hit)
+        if (urlCache.has(link.original_url)) {
+          apiPool.push(link);
+          continue;
+        }
+        // If quota is exhausted or no API keys, use fallback pool
+        if (unshortenKeys.length === 0 || localUsed >= localLimit) {
+          fallbackPool.push(link);
+        } else {
+          apiPool.push(link);
         }
       }
 
-      // Flush queued cache writes for this loop iteration
+      const unshortenResults: Array<LinkRow & { finalUrl: string; outcome: string }> = [];
+      const failedResults: Array<{ id: string; error: string }> = [];
+
+      // API pool: 10 parallel, 200ms between batches
+      for (let i = 0; i < apiPool.length; i += 10) {
+        const batch = apiPool.slice(i, i + 10);
+        const results = await Promise.all(batch.map(resolveOne));
+        for (const r of results) {
+          unshortenResults.push(r);
+          if (r.outcome === "cached") totalCached++;
+          else if (r.outcome === "resolved") totalResolved++;
+          else { totalFailed++; failedResults.push({ id: r.id, error: r.error || "unknown" }); }
+        }
+        if (i + 10 < apiPool.length) await new Promise(r => setTimeout(r, 200));
+      }
+      // Fallback pool: 25 parallel, no delay
+      for (let i = 0; i < fallbackPool.length; i += 25) {
+        const batch = fallbackPool.slice(i, i + 25);
+        const results = await Promise.all(batch.map(resolveOne));
+        for (const r of results) {
+          unshortenResults.push(r);
+          if (r.outcome === "cached") totalCached++;
+          else if (r.outcome === "resolved") totalResolved++;
+          else { totalFailed++; failedResults.push({ id: r.id, error: r.error || "unknown" }); }
+        }
+      }
+
+      // Flush cache writes
       if (cacheWritesQueue.length > 0) {
         const unique = new Map(cacheWritesQueue.map(c => [c.normalized_url, c]));
         const rows = [...unique.values()];
         for (let i = 0; i < rows.length; i += 200) {
           const chunk = rows.slice(i, i + 200);
-          await supabase
-            .from("url_resolution_cache")
-            .upsert(chunk, { onConflict: "normalized_url" });
+          await supabase.from("url_resolution_cache").upsert(chunk, { onConflict: "normalized_url" });
         }
         cacheWritesQueue.length = 0;
       }
 
       const processedLinks = [
-        ...normalLinks.map(l => ({ ...l, finalUrl: l.original_url })),
+        ...normalLinks.map(l => ({ ...l, finalUrl: l.original_url, outcome: "resolved" as const })),
         ...unshortenResults,
       ];
 
@@ -616,26 +701,25 @@ Deno.serve(async (req) => {
         affiliate_domain: string | null;
         resolved_retailer: string | null;
         resolved_retailer_domain: string | null;
+        resolution_status: string;
       }
 
       const linkUpdates: LinkUpdate[] = [];
+      const failedById = new Map(failedResults.map(f => [f.id, f.error]));
 
       for (const link of processedLinks) {
-        const originalDomain = extractDomain(link.original_url);
+        const originalDomain = link.domain;
         const unshortenedDomain = extractDomain(link.finalUrl);
         const isShortened = originalDomain !== unshortenedDomain;
 
         const affiliatePlatformName = localLookupAffiliatePlatform(originalDomain);
-        let platformMatch: Pattern | null = matchPattern(originalDomain, link.original_url, allPatterns, "affiliate_platform");
+        const platformMatch: Pattern | null = matchFast(originalDomain, "affiliate_platform");
 
         let retailerLookup: { name: string; domain: string } | null = null;
-        if (isShortened) {
-          retailerLookup = localLookupRetailer(unshortenedDomain);
-        } else if (!affiliatePlatformName && !platformMatch) {
-          retailerLookup = localLookupRetailer(originalDomain);
-        }
+        if (isShortened) retailerLookup = localLookupRetailer(unshortenedDomain);
+        else if (!affiliatePlatformName && !platformMatch) retailerLookup = localLookupRetailer(originalDomain);
 
-        let linkType: string = "unknown";
+        let linkType = "unknown";
         let resolvedRetailer: string | null = null;
         let resolvedRetailerDomain: string | null = null;
 
@@ -652,7 +736,7 @@ Deno.serve(async (req) => {
           resolvedRetailerDomain = retailerLookup.domain;
         }
 
-        let retailerMatch = matchPattern(unshortenedDomain, link.finalUrl, allPatterns, "retailer");
+        const retailerMatch = matchFast(unshortenedDomain, "retailer");
 
         let classification = "NEUTRAL";
         let matchedPatternId: string | null = null;
@@ -664,7 +748,7 @@ Deno.serve(async (req) => {
           classification = platformMatch.classification;
           matchedPatternId = platformMatch.id;
         } else {
-          const anyMatch = matchPattern(unshortenedDomain, link.finalUrl, allPatterns);
+          const anyMatch = matchFast(unshortenedDomain);
           if (anyMatch) {
             classification = anyMatch.is_confirmed ? anyMatch.classification : "NEUTRAL";
             matchedPatternId = anyMatch.id;
@@ -672,7 +756,7 @@ Deno.serve(async (req) => {
         }
 
         if (!platformMatch && !retailerMatch && originalDomain && !SKIP_DOMAINS.has(originalDomain)) {
-          if (!allPatterns.find(p => p.pattern === originalDomain)) {
+          if (!patternsByExactDomain.has(originalDomain)) {
             if (isShortened || affiliatePlatformName || AFFILIATE_REDIRECT_DOMAINS.some(s => originalDomain.includes(s))) {
               newPlatformDomains.add(originalDomain);
             } else {
@@ -681,8 +765,12 @@ Deno.serve(async (req) => {
           }
         }
         if (!retailerMatch && isShortened && unshortenedDomain && unshortenedDomain !== originalDomain && !SKIP_DOMAINS.has(unshortenedDomain)) {
-          if (!allPatterns.find(p => p.pattern === unshortenedDomain)) newRetailerDomains.add(unshortenedDomain);
+          if (!patternsByExactDomain.has(unshortenedDomain)) newRetailerDomains.add(unshortenedDomain);
         }
+
+        // Item 6: Resolution status tracking
+        const isFailed = failedById.has(link.id);
+        const resolution_status = isFailed ? "pending" : "resolved"; // increment handled below for failed
 
         linkUpdates.push({
           id: link.id,
@@ -699,13 +787,14 @@ Deno.serve(async (req) => {
           affiliate_domain: (affiliatePlatformName || platformMatch) ? originalDomain : null,
           resolved_retailer: resolvedRetailer,
           resolved_retailer_domain: resolvedRetailerDomain,
+          resolution_status,
         });
 
         const chId = videoChannelCache.get(link.video_id);
         if (chId) affectedChannels.add(chId);
       }
 
-      // Batch auto-discover new platform patterns
+      // Auto-discover new platform patterns
       if (newPlatformDomains.size > 0) {
         const rows = [...newPlatformDomains].map(d => ({
           pattern: d, name: d, classification: "NEUTRAL",
@@ -714,7 +803,7 @@ Deno.serve(async (req) => {
         const { data: inserted } = await supabase
           .from("affiliate_patterns")
           .upsert(rows, { onConflict: "pattern" })
-          .select("id, pattern, classification, is_confirmed, type");
+          .select("id, pattern, name, classification, is_confirmed, type");
         if (inserted) {
           for (const p of inserted) {
             allPatterns.push(p as Pattern);
@@ -722,10 +811,10 @@ Deno.serve(async (req) => {
               if (!lu.affiliate_platform_id && lu.original_domain === p.pattern) lu.affiliate_platform_id = p.id;
             }
           }
+          rebuildPatternIndex();
         }
       }
 
-      // Batch auto-discover new retailer patterns
       if (newRetailerDomains.size > 0) {
         const rows = [...newRetailerDomains].map(d => ({
           pattern: d, name: d, classification: "NEUTRAL",
@@ -734,7 +823,7 @@ Deno.serve(async (req) => {
         const { data: inserted } = await supabase
           .from("affiliate_patterns")
           .upsert(rows, { onConflict: "pattern" })
-          .select("id, pattern, classification, is_confirmed, type");
+          .select("id, pattern, name, classification, is_confirmed, type");
         if (inserted) {
           for (const p of inserted) {
             allPatterns.push(p as Pattern);
@@ -742,29 +831,40 @@ Deno.serve(async (req) => {
               if (!lu.retailer_pattern_id && lu.domain === p.pattern) lu.retailer_pattern_id = p.id;
             }
           }
+          rebuildPatternIndex();
         }
       }
 
-      // Bulk upsert main link updates
-      const mainRows = linkUpdates.map(lu => ({
-        id: lu.id,
-        unshortened_url: lu.unshortened_url,
-        domain: lu.domain,
-        original_domain: lu.original_domain,
-        classification: lu.classification,
-        matched_pattern_id: lu.matched_pattern_id,
-        affiliate_platform_id: lu.affiliate_platform_id,
-        retailer_pattern_id: lu.retailer_pattern_id,
-        is_shortened: lu.is_shortened,
-        link_type: lu.link_type,
-        affiliate_platform: lu.affiliate_platform,
-        affiliate_domain: lu.affiliate_domain,
-        resolved_retailer: lu.resolved_retailer,
-        resolved_retailer_domain: lu.resolved_retailer_domain,
-      }));
-      for (let i = 0; i < mainRows.length; i += 500) {
-        const chunk = mainRows.slice(i, i + 500);
+      // Bulk upsert main link updates (only for non-failed; failed get separate handling)
+      const successRows = linkUpdates.filter(lu => lu.resolution_status === "resolved");
+      for (let i = 0; i < successRows.length; i += 500) {
+        const chunk = successRows.slice(i, i + 500);
         await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
+      }
+
+      // Item 6: Increment resolution_attempts for failed; mark as 'failed' if attempts >= 3
+      const failedIds = linkUpdates.filter(lu => lu.resolution_status === "pending").map(lu => lu.id);
+      if (failedIds.length > 0) {
+        // Read current attempt counts
+        const { data: currentAttempts } = await supabase
+          .from("video_links")
+          .select("id, resolution_attempts")
+          .in("id", failedIds);
+        const attemptMap = new Map((currentAttempts || []).map((r: any) => [r.id, r.resolution_attempts || 0]));
+        const failureRows = failedIds.map(id => {
+          const nextAttempts = (attemptMap.get(id) || 0) + 1;
+          const status = nextAttempts >= 3 ? "failed" : "pending";
+          return {
+            id,
+            resolution_attempts: nextAttempts,
+            resolution_status: status,
+            last_resolution_error: failedById.get(id) || "unknown",
+          };
+        });
+        for (let i = 0; i < failureRows.length; i += 500) {
+          const chunk = failureRows.slice(i, i + 500);
+          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
+        }
       }
 
       totalProcessed += processedLinks.length;
@@ -781,11 +881,7 @@ Deno.serve(async (req) => {
         .limit(1000);
 
       if (staleLinks && staleLinks.length > 0) {
-        await supabase
-          .from("video_links")
-          .update({ classification: p.classification })
-          .in("id", staleLinks.map(l => l.id));
-
+        await supabase.from("video_links").update({ classification: p.classification }).in("id", staleLinks.map(l => l.id));
         const staleVideoIds = [...new Set(staleLinks.map(l => l.video_id))];
         const missingIds = staleVideoIds.filter(id => !videoChannelCache.has(id));
         if (missingIds.length > 0) {
@@ -809,27 +905,18 @@ Deno.serve(async (req) => {
       .limit(2000);
 
     if (unmatchedLinks && unmatchedLinks.length > 0) {
-      const batchUpdates: { id: string; matched_pattern_id: string; classification: string; affiliate_platform_id: string | null; retailer_pattern_id: string | null; affiliate_platform: string | null; resolved_retailer: string | null; link_type: string | null }[] = [];
-
+      const batchUpdates: any[] = [];
       for (const link of unmatchedLinks) {
         if (!link.domain || SKIP_DOMAINS.has(link.domain)) continue;
-        const retailerMatch = matchPattern(link.domain, "", allPatterns, "retailer");
-        const platformMatch = link.original_domain ? matchPattern(link.original_domain, "", allPatterns, "affiliate_platform") : null;
-        const anyMatch = retailerMatch || platformMatch || matchPattern(link.domain, "", allPatterns);
+        const retailerMatch = matchFast(link.domain, "retailer");
+        const platformMatch = link.original_domain ? matchFast(link.original_domain, "affiliate_platform") : null;
+        const anyMatch = retailerMatch || platformMatch || matchFast(link.domain);
         if (anyMatch) {
           let linkType: string | null = null;
           let affiliatePlatformName: string | null = null;
           let resolvedRetailerName: string | null = null;
-
-          if (platformMatch) {
-            affiliatePlatformName = platformMatch.name;
-            linkType = "affiliate";
-          }
-          if (retailerMatch) {
-            resolvedRetailerName = retailerMatch.name;
-            linkType = platformMatch ? "both" : "retailer";
-          }
-
+          if (platformMatch) { affiliatePlatformName = platformMatch.name; linkType = "affiliate"; }
+          if (retailerMatch) { resolvedRetailerName = retailerMatch.name; linkType = platformMatch ? "both" : "retailer"; }
           batchUpdates.push({
             id: link.id,
             matched_pattern_id: anyMatch.id,
@@ -844,7 +931,6 @@ Deno.serve(async (req) => {
           if (ch) affectedChannels.add(ch);
         }
       }
-
       if (batchUpdates.length > 0) {
         for (let i = 0; i < batchUpdates.length; i += 500) {
           const chunk = batchUpdates.slice(i, i + 500);
@@ -853,7 +939,18 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Auto-trigger compute-channel-stats for affected channels
+    // Item 5: Persist local quota counter at end
+    try {
+      if (needsReset) {
+        await supabase.from("rate_limits").update({ requests_today: localUsed, last_reset: nowDate.toISOString() }).eq("key", "unshorten_api");
+      } else {
+        await supabase.from("rate_limits").update({ requests_today: localUsed }).eq("key", "unshorten_api");
+      }
+    } catch (e) {
+      console.error("Failed to persist rate_limits:", e);
+    }
+
+    // Auto-trigger compute-channel-stats
     if (affectedChannels.size > 0) {
       try {
         const fnUrl = `${supabaseUrl}/functions/v1/compute-channel-stats`;
@@ -867,11 +964,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Self-re-trigger if more unprocessed links remain (only for automatic runs)
     const { count: remaining } = await supabase
       .from("video_links")
       .select("id", { count: "exact", head: true })
-      .is("unshortened_url", null);
+      .is("unshortened_url", null)
+      .in("resolution_status", ["pending"]);
 
     if (!isManualBatch && remaining && remaining > 0) {
       console.log(`Re-triggering: ${remaining} links still unprocessed`);
@@ -893,9 +990,10 @@ Deno.serve(async (req) => {
       cached: totalCached,
       resolved: totalResolved,
       failed: totalFailed,
+      metricsByDomain,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message }), {
+    return new Response(JSON.stringify({ error: (e as Error).message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
