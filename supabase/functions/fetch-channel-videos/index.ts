@@ -106,6 +106,11 @@ async function processChannel(
   }
 
   if (missingVideos === 0) {
+    // Sync stale total_videos_fetched even when nothing new to fetch
+    await supabase
+      .from("channels")
+      .update({ total_videos_fetched: existingVideoIds.size })
+      .eq("channel_id", channelId);
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
