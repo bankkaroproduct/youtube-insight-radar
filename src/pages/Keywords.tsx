@@ -23,7 +23,7 @@ export default function Keywords() {
     isLoading, addKeyword, addKeywordsBulk, deleteKeyword,
     refresh, userProfiles, sourceFiles, keywordStats,
   } = useKeywords();
-  const { jobs, killAll, clearFinished } = useFetchJobs();
+  const { jobs, killAll, clearFinished, retryJob } = useFetchJobs();
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [fetchSettings, setFetchSettings] = useState<FetchSettings>({ orderBy: "relevance", publishedAfter: undefined });
@@ -144,7 +144,7 @@ export default function Keywords() {
       </div>
 
       {/* Fetch Queue */}
-      <FetchQueueCard jobs={jobs} onKillAll={killAll} onClearFinished={clearFinished} />
+      <FetchQueueCard jobs={jobs} onKillAll={killAll} onClearFinished={clearFinished} onRetry={retryJob} />
 
       {/* Excel Upload */}
       {isAdmin && <ExcelUploadCard onUpload={addKeywordsBulk} />}
