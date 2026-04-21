@@ -160,7 +160,26 @@ export function useKeywords(filters: KeywordFilters = defaultKeywordFilters, pag
 
   useEffect(() => {
     fetchKeywords();
-  }, [fetchKeywords]);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const channel = supabase
+      .channel("keywords_status_changes")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "keywords_search_runs" },
+        () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            fetchKeywords();
+            fetchKeywordStats();
+          }, 2000);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (timer) clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
+  }, [fetchKeywords, fetchKeywordStats]);
 
   const addKeyword = async (keyword: string, category: string) => {
     if (!user) return;

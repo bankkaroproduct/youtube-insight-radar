@@ -2,6 +2,17 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { FlaskConical, Trash2, Download, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useApiKeys } from "@/hooks/useApiKeys";
 import { AddKeysDialog } from "@/components/api-keys/AddKeysDialog";
 import { ApiKeyStatsCards } from "@/components/api-keys/ApiKeyStatsCards";
@@ -96,14 +107,31 @@ export default function ApiKeys() {
           <FlaskConical className="h-4 w-4 mr-2" />
           Test All Keys
         </Button>
-        <Button
-          variant="outline"
-          onClick={() => resetQuota.mutate()}
-          disabled={keys.length === 0 || resetQuota.isPending}
-        >
-          <RotateCcw className="h-4 w-4 mr-2" />
-          Reset Quota
-        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="outline"
+              disabled={keys.length === 0 || resetQuota.isPending}
+            >
+              <RotateCcw className="h-4 w-4 mr-2" />
+              Reset Quota
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reset all quota counters?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This sets quota_used_today = 0 for every key and re-activates deactivated keys.
+                Use this only if YouTube's daily reset fired but our counters didn't update.
+                This does NOT reset YouTube's actual quota on their side.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => resetQuota.mutate()}>Reset Quota</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <Button variant="outline" onClick={handleExport} disabled={keys.length === 0}>
           <Download className="h-4 w-4 mr-2" /> Export
         </Button>

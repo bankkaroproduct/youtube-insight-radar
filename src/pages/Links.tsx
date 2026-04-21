@@ -205,6 +205,12 @@ export default function Links() {
     addPattern, confirmPattern, updatePatternType, updatePatternName, deletePattern, processLinks, confirmedPatterns,
   } = useAffiliatePatterns();
 
+  const topServiceState = useSyncExternalStore(
+    (cb) => linkProcessingService.subscribe(cb),
+    () => linkProcessingService.getState()
+  );
+  const topRunning = topServiceState.running;
+
   const addName = async (name: string) => {
     // Names are derived from patterns; adding a pattern with this name will include it
   };
@@ -305,8 +311,17 @@ export default function Links() {
           <Button variant="outline" size="sm" onClick={downloadCSV} disabled={confirmedPatterns.length === 0}>
             <Download className="h-4 w-4 mr-2" /> Download CSV
           </Button>
-          <Button variant="outline" size="sm" onClick={processLinks}>
-            <Zap className="h-4 w-4 mr-2" /> Process Links
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => linkProcessingService.start(undefined, 200)}
+            disabled={topRunning}
+          >
+            {topRunning ? (
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Processing…</>
+            ) : (
+              <><Zap className="h-4 w-4 mr-2" /> Process Links</>
+            )}
           </Button>
         </div>
       </div>
