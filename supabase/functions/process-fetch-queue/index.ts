@@ -126,7 +126,21 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
 
     if (exhausted || !resp) {
       if (page === 0) {
-        await supabase.from("fetch_jobs").update({ status: "pending", started_at: null }).eq("id", job.id);
+        const { data: jobRow } = await supabase
+          .from("fetch_jobs")
+          .select("attempt_count, max_attempts")
+          .eq("id", job.id)
+          .single();
+        const nextAttempt = (jobRow?.attempt_count ?? 0) + 1;
+        const maxAttempts = jobRow?.max_attempts ?? 3;
+        const newStatus = nextAttempt >= maxAttempts ? "dead_letter" : "pending";
+        await supabase.from("fetch_jobs").update({
+          status: newStatus,
+          started_at: null,
+          attempt_count: nextAttempt,
+          last_failure_reason: "All API keys exhausted or unavailable",
+          ...(newStatus === "dead_letter" ? { completed_at: new Date().toISOString() } : {}),
+        }).eq("id", job.id);
         return { channelIds: [], keyUsed: currentKey };
       }
       break;
@@ -389,6 +403,7 @@ Deno.serve(async (req) => {
         await supabase.from("fetch_jobs").update({
           status: "failed",
           error_message: err.message,
+          last_failure_reason: err.message,
           completed_at: new Date().toISOString(),
         }).eq("id", job.id);
         if (job.keyword_id) {

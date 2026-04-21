@@ -12,6 +12,9 @@ export interface FetchJob {
   published_after: string | null;
   variations_searched: string[] | null;
   error_message: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  last_failure_reason: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -26,7 +29,7 @@ export function useFetchJobs() {
     const { data } = await supabase
       .from("fetch_jobs")
       .select("*")
-      .or(`status.in.(pending,processing),created_at.gte.${twoHoursAgo}`)
+      .or(`status.in.(pending,processing,dead_letter),created_at.gte.${twoHoursAgo}`)
       .order("created_at", { ascending: false })
       .limit(20);
     if (data) setJobs(data as FetchJob[]);
@@ -84,5 +87,21 @@ export function useFetchJobs() {
     }
   };
 
-  return { jobs, fetchJobs, clearFinished, killAll };
+  const retryJob = async (id: string) => {
+    const job = jobs.find((j) => j.id === id);
+    if (!job) return;
+    const nextAttempt = (job.attempt_count ?? 0) + 1;
+    const newStatus = nextAttempt >= job.max_attempts ? "dead_letter" : "pending";
+    const { error } = await supabase.from("fetch_jobs")
+      .update({ status: newStatus, attempt_count: nextAttempt, started_at: null, completed_at: null })
+      .eq("id", id);
+    if (error) return toast.error("Retry failed");
+    if (newStatus === "dead_letter") toast.warning("Max attempts reached — moved to dead letter");
+    else {
+      toast.success("Job queued for retry");
+      await supabase.functions.invoke("process-fetch-queue", { body: {} });
+    }
+  };
+
+  return { jobs, fetchJobs, clearFinished, killAll, retryJob };
 }
