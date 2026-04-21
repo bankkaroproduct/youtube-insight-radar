@@ -54,28 +54,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Check YouTube API quota before accepting jobs
-    const { data: ytQuota } = await supabase
-      .from("rate_limits")
-      .select("requests_today, quota_limit, last_reset")
-      .eq("key", "youtube_api")
-      .single();
-
-    if (ytQuota) {
-      // Auto-reset if last_reset is not today
-      const lastReset = new Date(ytQuota.last_reset);
-      const now = new Date();
-      if (lastReset.toDateString() !== now.toDateString()) {
-        await supabase.from("rate_limits").update({ requests_today: 0, last_reset: now.toISOString() }).eq("key", "youtube_api");
-        ytQuota.requests_today = 0;
-      }
-      if (ytQuota.requests_today >= ytQuota.quota_limit) {
-        return new Response(
-          JSON.stringify({ error: "YouTube API quota exhausted for today. Resets at midnight." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
+    // Per-key quota is enforced inside process-fetch-queue (see _shared/youtube-rotation.ts).
 
     // Queue jobs
     const jobs = body.jobs as Array<{
