@@ -120,6 +120,7 @@ async function processChannel(
     return { videosInserted: 0, youtubeTotal };
   }
 
+  let fullyScanned = false;
   while (pagesFetched < maxPages && videoRecordsById.size < missingVideos) {
     const tokenForPage = nextPageToken;
     const buildPlaylistUrl = (apiKey: string) => {
@@ -152,7 +153,10 @@ async function processChannel(
     pagesFetched++;
 
     if (pageVideoIds.length === 0) {
-      if (!nextPageToken) break;
+      if (!nextPageToken) {
+        fullyScanned = true;
+        break;
+      }
       continue;
     }
 
@@ -210,11 +214,23 @@ async function processChannel(
       if (videoRecordsById.size >= missingVideos) break;
     }
 
-    if (!nextPageToken) break;
+    if (!nextPageToken) {
+      fullyScanned = true;
+      break;
+    }
   }
 
   const videoRecords = Array.from(videoRecordsById.values());
   if (videoRecords.length === 0) {
+    if (fullyScanned) {
+      const finalCount = videoRecordsById.size + existingVideoIds.size;
+      await supabase.from("channels").update({
+        total_videos_fetched: finalCount,
+        last_analyzed_at: new Date().toISOString(),
+        uploads_fully_scanned_at: new Date().toISOString(),
+        scanned_at_youtube_total: youtubeTotal,
+      }).eq("channel_id", channelId);
+    }
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
@@ -253,6 +269,10 @@ async function processChannel(
     .update({
       total_videos_fetched: newTotal ?? 0,
       last_analyzed_at: new Date().toISOString(),
+      ...(fullyScanned ? {
+        uploads_fully_scanned_at: new Date().toISOString(),
+        scanned_at_youtube_total: youtubeTotal,
+      } : {}),
     })
     .eq("channel_id", channelId);
 
@@ -317,7 +337,7 @@ Deno.serve(async (req) => {
     // instead of repeatedly re-selecting the same leading subset of tied counts.
     const { data: rawChannels, error: chErr } = await supabase
       .from("channels")
-      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, last_analyzed_at")
+      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, last_analyzed_at, uploads_fully_scanned_at, scanned_at_youtube_total")
       .order("total_videos_fetched", { ascending: needsVideoCountFilter })
       .order("last_analyzed_at", { ascending: true, nullsFirst: true })
       .order("channel_id", { ascending: true })
@@ -330,10 +350,18 @@ Deno.serve(async (req) => {
         const ytTotal = channel.youtube_total_videos == null
           ? null
           : Number(channel.youtube_total_videos);
+        const scannedAt = channel.uploads_fully_scanned_at;
+        const scannedYtTotal = channel.scanned_at_youtube_total == null
+          ? null
+          : Number(channel.scanned_at_youtube_total);
+
+        // Hard skip: we've already scanned every upload AND YouTube hasn't added any new ones since.
+        if (scannedAt && ytTotal !== null && scannedYtTotal !== null && ytTotal <= scannedYtTotal) {
+          return false;
+        }
+
         if (backfillUnder50) {
           if (fetched >= 50) return false;
-          // Skip only when we trust the YouTube total: it must be >= what we've already fetched.
-          // A stale/under-count (ytTotal < fetched) means the cached value is wrong — re-process.
           if (ytTotal !== null && ytTotal >= fetched && fetched >= ytTotal) return false;
         }
         if (minVideos !== null && fetched < minVideos) return false;
