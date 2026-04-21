@@ -1,14 +1,15 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
-import { useChannels } from "@/hooks/useChannels";
+import { useChannels, fetchAllChannelsForExport, ChannelFilters, CHANNELS_PAGE_SIZE } from "@/hooks/useChannels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon, Loader2, Link2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon, Loader2, Link2, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
@@ -49,7 +50,6 @@ function renderCountTags(
 }
 
 function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
-  // Collect all unique platform and retailer names
   const allPlatforms = new Set<string>();
   const allRetailers = new Set<string>();
   for (const ch of channels) {
@@ -106,19 +106,49 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
   URL.revokeObjectURL(url);
 }
 
+interface SummaryStats { total: number; with_us: number; competitor: number; mixed: number; neutral: number; }
+
 export default function Channels() {
-  const { channels, isLoading, refresh, recomputeStats } = useChannels();
   const navigate = useNavigate();
-  const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
+  const [filters, setFilters] = useState<ChannelFilters>({ name: "", status: "", category: "", relevance: "", country: "" });
+  const [page, setPage] = useState(0);
+  const { sortKey, sortDirection, handleSort } = useSort<any>("videos", "desc");
+  const sortDir: "asc" | "desc" = sortDirection === "asc" ? "asc" : "desc";
+
+  const { channels, totalCount, isLoading, refresh, recomputeStats } = useChannels(filters, page, sortKey, sortDir);
+
   const [fetchingNew, setFetchingNew] = useState(false);
   const [scrapingLinks, setScrapingLinks] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
-  
+  const [downloadingCsv, setDownloadingCsv] = useState(false);
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
+  const [summary, setSummary] = useState<SummaryStats>({ total: 0, with_us: 0, competitor: 0, mixed: 0, neutral: 0 });
 
-  // Fetch instagram profiles
+  // Reset to page 0 when filters change
+  useEffect(() => { setPage(0); }, [filters]);
+
+  // Load global summary stats
+  const loadSummary = useCallback(async () => {
+    const { data } = await supabase.rpc("get_channel_summary_stats");
+    if (data && data.length > 0) {
+      const r = data[0] as any;
+      setSummary({
+        total: Number(r.total) || 0,
+        with_us: Number(r.with_us) || 0,
+        competitor: Number(r.competitor) || 0,
+        mixed: Number(r.mixed) || 0,
+        neutral: Number(r.neutral) || 0,
+      });
+    }
+  }, []);
+
+  useEffect(() => { loadSummary(); }, [loadSummary]);
+
+  // Fetch IG profiles only for channels currently in view
   useEffect(() => {
-    supabase.from("instagram_profiles").select("*").then(({ data }) => {
+    const ids = channels.map(c => c.id);
+    if (ids.length === 0) { setIgProfiles({}); return; }
+    supabase.from("instagram_profiles").select("*").in("channel_id", ids).then(({ data }) => {
       if (data) {
         const map: Record<string, any> = {};
         for (const p of data) map[p.channel_id] = p;
@@ -127,7 +157,10 @@ export default function Channels() {
     });
   }, [channels]);
 
-
+  const fullRefresh = useCallback(() => {
+    refresh();
+    loadSummary();
+  }, [refresh, loadSummary]);
 
   const fetchNewChannelVideos = async () => {
     setFetchingNew(true);
@@ -147,7 +180,7 @@ export default function Channels() {
       const result = await resp.json();
       if (!resp.ok) throw new Error(result.error || "Failed");
       toast.success(`Fetched videos for ${result.channels_processed} new channels (${result.total_videos_inserted} videos)`);
-      refresh();
+      fullRefresh();
     } catch (e: any) {
       toast.error("Failed to fetch new channel videos: " + e.message);
     } finally {
@@ -182,16 +215,11 @@ export default function Channels() {
         totalProcessed += processed;
         totalVideos += inserted;
         toast.loading(`Backfilled ${totalProcessed} channels (${totalVideos} videos)…`, { id: t });
-        // Live-refresh between batches so users see counts climbing
-        refresh();
-        if (inserted === 0) {
-          // Selected channels but couldn't insert anything — likely all fully-scanned
-          // or only Shorts left. Stop to avoid an infinite loop.
-          break;
-        }
+        fullRefresh();
+        if (inserted === 0) break;
       }
       toast.success(`Done. Backfilled ${totalProcessed} channels with ${totalVideos} videos.`, { id: t });
-      refresh();
+      fullRefresh();
     } catch (e: any) {
       toast.error("Backfill failed: " + e.message, { id: t });
     } finally {
@@ -215,58 +243,47 @@ export default function Channels() {
         if (!data.processed || data.remaining === 0) break;
       }
       toast.success(`Done. Scraped links for ${totalProcessed} channels.`, { id: t });
-      refresh();
+      fullRefresh();
     } catch (e: any) {
       toast.error("Failed to scrape links: " + e.message);
     } finally {
       setScrapingLinks(false);
     }
   };
-  const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
-  const filteredAndSorted = useMemo(() => {
-    let result = channels.filter((ch: any) => {
-      if (filters.name && !ch.channel_name.toLowerCase().includes(filters.name.toLowerCase())) return false;
-      if (filters.status && (ch.affiliate_status || "NEUTRAL") !== filters.status) return false;
-      if (filters.category && !(ch.youtube_category || "").toLowerCase().includes(filters.category.toLowerCase())) return false;
-      if (filters.relevance === "yes" && ch.is_relevant !== true) return false;
-      if (filters.relevance === "no" && ch.is_relevant !== false) return false;
-      if (filters.relevance === "unchecked" && ch.is_relevant !== null) return false;
-      if (filters.country && !(ch.country || "").toLowerCase().includes(filters.country.toLowerCase())) return false;
-      return true;
-    });
-
-    return sortFn(result, (item: any, key: string) => {
-      switch (key) {
-        case "name": return item.channel_name;
-        case "subscribers": return item.subscriber_count || 0;
-        case "videos": return item.total_videos_fetched || 0;
-        case "views": return item.median_views || 0;
-        case "likes": return item.median_likes || 0;
-        case "status": return item.affiliate_status || "NEUTRAL";
-        case "relevance": return item.is_relevant === true ? 1 : item.is_relevant === false ? 0 : -1;
-        case "category": return item.youtube_category || "";
-        case "country": return item.country || "";
-        default: return null;
+  const handleDownloadCSV = async () => {
+    setDownloadingCsv(true);
+    const tId = toast.loading("Fetching all matching channels…");
+    try {
+      const all = await fetchAllChannelsForExport(filters);
+      // Get IG profiles for all
+      const ids = all.map(c => c.id);
+      let igMap: Record<string, any> = {};
+      const ID_CHUNK = 200;
+      for (let i = 0; i < ids.length; i += ID_CHUNK) {
+        const chunk = ids.slice(i, i + ID_CHUNK);
+        const { data } = await supabase.from("instagram_profiles").select("*").in("channel_id", chunk);
+        if (data) for (const p of data) igMap[p.channel_id] = p;
       }
-    });
-  }, [channels, filters, sortFn]);
-
-  const stats = useMemo(() => ({
-    total: channels.length,
-    withUs: channels.filter((c: any) => c.affiliate_status === "WITH_US").length,
-    competitor: channels.filter((c: any) => c.affiliate_status === "COMPETITOR").length,
-    mixed: channels.filter((c: any) => c.affiliate_status === "MIXED").length,
-    neutral: channels.filter((c: any) => !c.affiliate_status || c.affiliate_status === "NEUTRAL").length,
-  }), [channels]);
+      downloadCSV(all, igMap);
+      toast.success(`Downloaded ${all.length} channels`, { id: tId });
+    } catch (e: any) {
+      toast.error("CSV download failed: " + (e?.message || "Unknown error"), { id: tId });
+    } finally {
+      setDownloadingCsv(false);
+    }
+  };
 
   const statCards = [
-    { label: "Total Channels", value: stats.total, icon: Users, color: "text-primary" },
-    { label: "With Us", value: stats.withUs, icon: CheckCircle2, color: "text-green-500" },
-    { label: "Competitor", value: stats.competitor, icon: AlertTriangle, color: "text-red-500" },
-    { label: "Mixed", value: stats.mixed, icon: Shuffle, color: "text-orange-500" },
-    { label: "Neutral", value: stats.neutral, icon: HelpCircle, color: "text-muted-foreground" },
+    { label: "Total Channels", value: summary.total, icon: Users, color: "text-primary" },
+    { label: "With Us", value: summary.with_us, icon: CheckCircle2, color: "text-green-500" },
+    { label: "Competitor", value: summary.competitor, icon: AlertTriangle, color: "text-red-500" },
+    { label: "Mixed", value: summary.mixed, icon: Shuffle, color: "text-orange-500" },
+    { label: "Neutral", value: summary.neutral, icon: HelpCircle, color: "text-muted-foreground" },
   ];
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / CHANNELS_PAGE_SIZE));
+  const hasMore = (page + 1) * CHANNELS_PAGE_SIZE < totalCount;
 
   return (
     <div className="space-y-6">
@@ -274,13 +291,10 @@ export default function Channels() {
         <div>
           <h1 className="text-3xl font-display font-bold">Channels</h1>
           <p className="text-muted-foreground mt-1">
-            {channels.length} channels discovered. Median stats skip top/bottom 5 videos.
+            Showing {totalCount === 0 ? 0 : page * CHANNELS_PAGE_SIZE + 1}–{Math.min((page + 1) * CHANNELS_PAGE_SIZE, totalCount)} of {totalCount.toLocaleString()} channels.
           </p>
         </div>
         <div className="flex gap-2 items-center">
-          
-
-
           <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
@@ -293,13 +307,21 @@ export default function Channels() {
             {scrapingLinks ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Link2 className="h-4 w-4 mr-2" />}
             Scrape Channel Links
           </Button>
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(filteredAndSorted, igProfiles)}>
-            <Download className="h-4 w-4 mr-2" /> Download CSV
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" onClick={handleDownloadCSV} disabled={downloadingCsv}>
+                  {downloadingCsv ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
+                  {downloadingCsv ? "Exporting…" : "Download CSV"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Downloads all matching rows — may take a moment for large datasets</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
             <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
           </Button>
-          <Button variant="outline" size="sm" onClick={refresh}>
+          <Button variant="outline" size="sm" onClick={fullRefresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>
         </div>
@@ -312,7 +334,7 @@ export default function Channels() {
               <div className="flex items-center gap-3">
                 <s.icon className={`h-8 w-8 ${s.color}`} />
                 <div>
-                  <p className="text-2xl font-bold">{s.value}</p>
+                  <p className="text-2xl font-bold">{s.value.toLocaleString()}</p>
                   <p className="text-xs text-muted-foreground">{s.label}</p>
                 </div>
               </div>
@@ -328,166 +350,183 @@ export default function Channels() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {isLoading && channels.length === 0 ? (
             <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
           ) : channels.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
-              No channels yet. Channels are auto-discovered when videos are fetched.
+              {totalCount === 0 ? "No channels yet. Channels are auto-discovered when videos are fetched." : "No channels match the current filters."}
             </div>
           ) : (
-            <div className="overflow-auto max-h-[600px]">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableHeader label="Channel" sortKey="name" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Subscribers" sortKey="subscribers" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Videos" sortKey="videos" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Median Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Median Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
-                    <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
-                    <TableHead>Platforms (videos / share)</TableHead>
-                    <TableHead>Retailers (videos / share)</TableHead>
-                    <TableHead>Channel Link</TableHead>
-                    <TableHead>Videos</TableHead>
-                    <TableHead>Contact</TableHead>
-                    <TableHead>IG Followers</TableHead>
-                    <TableHead>Description</TableHead>
-                  </TableRow>
-                  <TableRow className="bg-muted/30">
-                    <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.name} onChange={(e) => setFilters(f => ({ ...f, name: e.target.value }))} /></TableHead>
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead>
-                      <Select value={filters.status} onValueChange={(v) => setFilters(f => ({ ...f, status: v === "all" ? "" : v }))}>
-                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All</SelectItem>
-                          <SelectItem value="WITH_US">With Us</SelectItem>
-                          <SelectItem value="COMPETITOR">Competitor</SelectItem>
-                          <SelectItem value="MIXED">Mixed</SelectItem>
-                          <SelectItem value="NEUTRAL">Neutral</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </TableHead>
-                    <TableHead>
-                      <Select value={filters.relevance} onValueChange={(v) => setFilters(f => ({ ...f, relevance: v === "all" ? "" : v }))}>
-                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All</SelectItem>
-                          <SelectItem value="yes">Yes</SelectItem>
-                          <SelectItem value="no">No</SelectItem>
-                          <SelectItem value="unchecked">Unchecked</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </TableHead>
-                    <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
-                    <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.country} onChange={(e) => setFilters(f => ({ ...f, country: e.target.value }))} /></TableHead>
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                    <TableHead />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredAndSorted.map((ch: any) => (
-                    <TableRow key={ch.id}>
-                      <TableCell className="font-medium">
-                        <a href={ch.channel_url || "#"} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                          {ch.channel_name}
-                        </a>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}</TableCell>
-                      <TableCell className="text-right tabular-nums whitespace-nowrap">
-                        {(() => {
-                          const fetched = ch.total_videos_fetched ?? 0;
-                          const yt = ch.youtube_total_videos;
-                          if (yt != null && yt < 50 && fetched >= yt) {
-                            return (
-                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                                <span className="font-medium">{fetched}</span>
-                                <span className="inline-flex items-center rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success leading-none">
-                                  Till date
-                                </span>
-                              </span>
-                            );
-                          }
-                          return fetched;
-                        })()}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{formatNumber(ch.median_views)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatNumber(ch.median_likes)}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={statusColors[ch.affiliate_status] || statusColors.NEUTRAL}>
-                          {ch.affiliate_status === "WITH_US" ? "With Us" : ch.affiliate_status === "COMPETITOR" ? "Competitor" : ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {ch.is_relevant === true ? (
-                          <Badge variant="outline" className="bg-green-500/15 text-green-700 border-green-500/30">Yes</Badge>
-                        ) : ch.is_relevant === false ? (
-                          <Badge variant="outline" className="bg-muted text-muted-foreground">No</Badge>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-[180px]">
-                        <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{ch.country || "—"}</TableCell>
-                      <TableCell className="max-w-[220px]">
-                        {renderCountTags(ch.platform_video_counts, ch.total_videos_fetched || 0, "bg-blue-500/15 text-blue-700 border-blue-500/30")}
-                      </TableCell>
-                      <TableCell className="max-w-[220px]">
-                        {renderCountTags(ch.retailer_video_counts, ch.total_videos_fetched || 0, "bg-purple-500/15 text-purple-700 border-purple-500/30")}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {ch.channel_url ? (
-                          <a href={ch.channel_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
-                            <ExternalLink className="h-3 w-3" /> Link
-                          </a>
-                        ) : "—"}
-                      </TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => navigate(`/videos?channel=${encodeURIComponent(ch.channel_name)}`)}>
-                          View Videos
-                        </Button>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {ch.contact_email ? (
-                            <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1 text-sm">
-                              <Mail className="h-3 w-3" /> Email
-                            </a>
-                          ) : null}
-                          {ch.instagram_url ? (
-                            <a href={ch.instagram_url} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline flex items-center gap-1 text-sm">
-                              <Instagram className="h-3 w-3" /> IG
-                            </a>
-                          ) : null}
-                          {!ch.contact_email && !ch.instagram_url ? "—" : null}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-sm">
-                        {igProfiles[ch.id]?.follower_count != null
-                          ? formatNumber(igProfiles[ch.id].follower_count)
-                          : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-[250px]">
-                        <ExpandableText text={ch.description || ""} maxLength={60} />
-                      </TableCell>
+            <>
+              <div className="overflow-auto max-h-[600px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <SortableHeader label="Channel" sortKey="name" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Subscribers" sortKey="subscribers" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                      <SortableHeader label="Videos" sortKey="videos" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                      <SortableHeader label="Median Views" sortKey="views" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                      <SortableHeader label="Median Likes" sortKey="likes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right" />
+                      <SortableHeader label="Status" sortKey="status" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Relevance" sortKey="relevance" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Category" sortKey="category" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Country" sortKey="country" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} />
+                      <TableHead>Platforms (videos / share)</TableHead>
+                      <TableHead>Retailers (videos / share)</TableHead>
+                      <TableHead>Channel Link</TableHead>
+                      <TableHead>Videos</TableHead>
+                      <TableHead>Contact</TableHead>
+                      <TableHead>IG Followers</TableHead>
+                      <TableHead>Description</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                    <TableRow className="bg-muted/30">
+                      <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.name} onChange={(e) => setFilters(f => ({ ...f, name: e.target.value }))} /></TableHead>
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead>
+                        <Select value={filters.status || "all"} onValueChange={(v) => setFilters(f => ({ ...f, status: v === "all" ? "" : v }))}>
+                          <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All</SelectItem>
+                            <SelectItem value="WITH_US">With Us</SelectItem>
+                            <SelectItem value="COMPETITOR">Competitor</SelectItem>
+                            <SelectItem value="MIXED">Mixed</SelectItem>
+                            <SelectItem value="NEUTRAL">Neutral</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableHead>
+                      <TableHead>
+                        <Select value={filters.relevance || "all"} onValueChange={(v) => setFilters(f => ({ ...f, relevance: v === "all" ? "" : v }))}>
+                          <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="All" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All</SelectItem>
+                            <SelectItem value="yes">Yes</SelectItem>
+                            <SelectItem value="no">No</SelectItem>
+                            <SelectItem value="unchecked">Unchecked</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableHead>
+                      <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.category} onChange={(e) => setFilters(f => ({ ...f, category: e.target.value }))} /></TableHead>
+                      <TableHead><Input placeholder="Filter..." className="h-7 text-xs" value={filters.country} onChange={(e) => setFilters(f => ({ ...f, country: e.target.value }))} /></TableHead>
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {channels.map((ch: any) => (
+                      <TableRow key={ch.id}>
+                        <TableCell className="font-medium">
+                          <a href={ch.channel_url || "#"} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                            {ch.channel_name}
+                          </a>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">
+                          {(() => {
+                            const fetched = ch.total_videos_fetched ?? 0;
+                            const yt = ch.youtube_total_videos;
+                            if (yt != null && yt < 50 && fetched >= yt) {
+                              return (
+                                <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                  <span className="font-medium">{fetched}</span>
+                                  <span className="inline-flex items-center rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success leading-none">
+                                    Till date
+                                  </span>
+                                </span>
+                              );
+                            }
+                            return fetched;
+                          })()}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{formatNumber(ch.median_views)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatNumber(ch.median_likes)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={statusColors[ch.affiliate_status] || statusColors.NEUTRAL}>
+                            {ch.affiliate_status === "WITH_US" ? "With Us" : ch.affiliate_status === "COMPETITOR" ? "Competitor" : ch.affiliate_status === "MIXED" ? "Mixed" : "Neutral"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {ch.is_relevant === true ? (
+                            <Badge variant="outline" className="bg-green-500/15 text-green-700 border-green-500/30">Yes</Badge>
+                          ) : ch.is_relevant === false ? (
+                            <Badge variant="outline" className="bg-muted text-muted-foreground">No</Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-[180px]">
+                          <ExpandableText text={ch.youtube_category || ""} maxLength={30} />
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{ch.country || "—"}</TableCell>
+                        <TableCell className="max-w-[220px]">
+                          {renderCountTags(ch.platform_video_counts, ch.total_videos_fetched || 0, "bg-blue-500/15 text-blue-700 border-blue-500/30")}
+                        </TableCell>
+                        <TableCell className="max-w-[220px]">
+                          {renderCountTags(ch.retailer_video_counts, ch.total_videos_fetched || 0, "bg-purple-500/15 text-purple-700 border-purple-500/30")}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {ch.channel_url ? (
+                            <a href={ch.channel_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1">
+                              <ExternalLink className="h-3 w-3" /> Link
+                            </a>
+                          ) : "—"}
+                        </TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => navigate(`/videos?channel=${encodeURIComponent(ch.channel_name)}`)}>
+                            View Videos
+                          </Button>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            {ch.contact_email ? (
+                              <a href={`mailto:${ch.contact_email}`} className="text-primary hover:underline flex items-center gap-1 text-sm">
+                                <Mail className="h-3 w-3" /> Email
+                              </a>
+                            ) : null}
+                            {ch.instagram_url ? (
+                              <a href={ch.instagram_url} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline flex items-center gap-1 text-sm">
+                                <Instagram className="h-3 w-3" /> IG
+                              </a>
+                            ) : null}
+                            {!ch.contact_email && !ch.instagram_url ? "—" : null}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-sm">
+                          {igProfiles[ch.id]?.follower_count != null
+                            ? formatNumber(igProfiles[ch.id].follower_count)
+                            : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-[250px]">
+                          <ExpandableText text={ch.description || ""} maxLength={60} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Pagination */}
+              <div className="flex items-center justify-between mt-4">
+                <p className="text-sm text-muted-foreground">
+                  Page {page + 1} of {totalPages}
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" disabled={page === 0 || isLoading} onClick={() => setPage(p => Math.max(0, p - 1))}>
+                    <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={!hasMore || isLoading} onClick={() => setPage(p => p + 1)}>
+                    Next <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
