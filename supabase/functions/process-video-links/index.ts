@@ -223,6 +223,32 @@ function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace("www.", ""); } catch { return ""; }
 }
 
+const TRACKING_PARAMS = new Set([
+  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "utm_id", "utm_name", "gclid", "fbclid", "mc_cid", "mc_eid",
+  "ref", "ref_src", "ref_url", "referrer", "source", "igshid",
+  "_branch_match_id", "si", "feature",
+]);
+
+function normalizeForCache(url: string): string {
+  try {
+    const u = new URL(url);
+    const keep = new URLSearchParams();
+    for (const [k, v] of u.searchParams) {
+      if (!TRACKING_PARAMS.has(k.toLowerCase())) keep.set(k, v);
+    }
+    u.search = keep.toString();
+    u.hash = "";
+    u.hostname = u.hostname.toLowerCase();
+    if (u.pathname.length > 1 && u.pathname.endsWith("/")) {
+      u.pathname = u.pathname.slice(0, -1);
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 interface Pattern {
   id: string; pattern: string; name: string; classification: string; is_confirmed: boolean; type: string;
 }
@@ -369,6 +395,13 @@ Deno.serve(async (req) => {
 
     // In-memory URL cache: original_url → resolved_url
     const urlCache = new Map<string, string>();
+    // Queue of cache writes to flush at the end (avoid per-link DB calls)
+    const cacheWritesQueue: Array<{
+      normalized_url: string;
+      unshortened_url: string;
+      final_domain: string | null;
+      resolution_method: string;
+    }> = [];
 
     // Step 0: Fast-path skip-domain links
     {
@@ -388,22 +421,21 @@ Deno.serve(async (req) => {
         }
         if (skipUpdates.length > 0) {
           console.log(`Fast-pathing ${skipUpdates.length} skip-domain links`);
-          // Batch DB writes in chunks of 50
-          for (let i = 0; i < skipUpdates.length; i += 50) {
-            const chunk = skipUpdates.slice(i, i + 50);
-            await Promise.all(
-              chunk.map(link => {
-                const domain = extractDomain(link.original_url);
-                return supabase.from("video_links").update({
-                  unshortened_url: link.original_url,
-                  domain,
-                  original_domain: domain,
-                  classification: "NEUTRAL",
-                  is_shortened: false,
-                  link_type: "unknown",
-                }).eq("id", link.id);
-              })
-            );
+          const skipRows = skipUpdates.map(link => {
+            const domain = extractDomain(link.original_url);
+            return {
+              id: link.id,
+              unshortened_url: link.original_url,
+              domain,
+              original_domain: domain,
+              classification: "NEUTRAL",
+              is_shortened: false,
+              link_type: "unknown",
+            };
+          });
+          for (let i = 0; i < skipRows.length; i += 500) {
+            const chunk = skipRows.slice(i, i + 500);
+            await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
           }
           totalProcessed += skipUpdates.length;
         }
@@ -443,42 +475,45 @@ Deno.serve(async (req) => {
 
       // Fast-path skip-domain links found in main loop
       if (skipLinks.length > 0) {
-        await Promise.all(
-          skipLinks.map(link => {
-            const domain = extractDomain(link.original_url);
-            return supabase.from("video_links").update({
-              unshortened_url: link.original_url,
-              domain,
-              original_domain: domain,
-              classification: "NEUTRAL",
-              is_shortened: false,
-              link_type: "unknown",
-            }).eq("id", link.id);
-          })
-        );
+        const skipRows = skipLinks.map(link => {
+          const domain = extractDomain(link.original_url);
+          return {
+            id: link.id,
+            unshortened_url: link.original_url,
+            domain,
+            original_domain: domain,
+            classification: "NEUTRAL",
+            is_shortened: false,
+            link_type: "unknown",
+          };
+        });
+        for (let i = 0; i < skipRows.length; i += 500) {
+          const chunk = skipRows.slice(i, i + 500);
+          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
+        }
         totalProcessed += skipLinks.length;
       }
 
-      // DB-level cache: pre-populate from previously resolved links with same original_url
+      // Cross-run cache: check url_resolution_cache for previously-resolved URLs.
       if (shortenedLinks.length > 0) {
-        const urlsToResolve = shortenedLinks
-          .map(l => l.original_url)
-          .filter(u => !urlCache.has(u));
-        
-        if (urlsToResolve.length > 0) {
-          const uniqueUrls = [...new Set(urlsToResolve)];
-          // Query DB for previously resolved versions of these URLs
-          const { data: cachedRows } = await supabase
-            .from("video_links")
-            .select("original_url, unshortened_url")
-            .in("original_url", uniqueUrls.slice(0, 100)) // limit IN clause size
-            .not("unshortened_url", "is", null)
-            .neq("unshortened_url", "");
-          
-          if (cachedRows) {
-            for (const row of cachedRows) {
-              if (row.unshortened_url && row.unshortened_url !== row.original_url) {
-                urlCache.set(row.original_url, row.unshortened_url);
+        const urlsToCheck = shortenedLinks
+          .map(l => ({ link: l, norm: normalizeForCache(l.original_url) }))
+          .filter(x => !urlCache.has(x.link.original_url));
+
+        if (urlsToCheck.length > 0) {
+          const normSet = [...new Set(urlsToCheck.map(x => x.norm))];
+          const CACHE_CHUNK = 100;
+          for (let i = 0; i < normSet.length; i += CACHE_CHUNK) {
+            const chunk = normSet.slice(i, i + CACHE_CHUNK);
+            const { data: cached } = await supabase
+              .from("url_resolution_cache")
+              .select("normalized_url, unshortened_url")
+              .in("normalized_url", chunk);
+            if (cached) {
+              const byNorm = new Map(cached.map((c: any) => [c.normalized_url, c.unshortened_url]));
+              for (const { link, norm } of urlsToCheck) {
+                const hit = byNorm.get(norm);
+                if (hit) urlCache.set(link.original_url, hit);
               }
             }
           }
@@ -505,14 +540,29 @@ Deno.serve(async (req) => {
                 // Quota exhausted - use fallback (HTTP redirect, no API)
                 const finalUrl = await fallbackUnshorten(link.original_url);
                 urlCache.set(link.original_url, finalUrl);
-                if (finalUrl !== link.original_url) totalResolved++;
-                else totalFailed++;
+                if (finalUrl !== link.original_url) {
+                  totalResolved++;
+                  cacheWritesQueue.push({
+                    normalized_url: normalizeForCache(link.original_url),
+                    unshortened_url: finalUrl,
+                    final_domain: extractDomain(finalUrl) || null,
+                    resolution_method: "fallback",
+                  });
+                } else {
+                  totalFailed++;
+                }
                 return { ...link, finalUrl };
               }
               const finalUrl = await unshortenUrl(link.original_url);
               urlCache.set(link.original_url, finalUrl);
               if (finalUrl !== link.original_url) {
                 totalResolved++;
+                cacheWritesQueue.push({
+                  normalized_url: normalizeForCache(link.original_url),
+                  unshortened_url: finalUrl,
+                  final_domain: extractDomain(finalUrl) || null,
+                  resolution_method: "api",
+                });
               } else {
                 totalFailed++;
               }
@@ -528,6 +578,19 @@ Deno.serve(async (req) => {
         if (i + RESOLVE_BATCH < shortenedLinks.length) {
           await new Promise(r => setTimeout(r, RESOLVE_DELAY_MS));
         }
+      }
+
+      // Flush queued cache writes for this loop iteration
+      if (cacheWritesQueue.length > 0) {
+        const unique = new Map(cacheWritesQueue.map(c => [c.normalized_url, c]));
+        const rows = [...unique.values()];
+        for (let i = 0; i < rows.length; i += 200) {
+          const chunk = rows.slice(i, i + 200);
+          await supabase
+            .from("url_resolution_cache")
+            .upsert(chunk, { onConflict: "normalized_url" });
+        }
+        cacheWritesQueue.length = 0;
       }
 
       const processedLinks = [
@@ -682,28 +745,26 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Batch DB writes in chunks of 50
-      for (let i = 0; i < linkUpdates.length; i += 50) {
-        const chunk = linkUpdates.slice(i, i + 50);
-        await Promise.all(
-          chunk.map(lu =>
-            supabase.from("video_links").update({
-              unshortened_url: lu.unshortened_url,
-              domain: lu.domain,
-              original_domain: lu.original_domain,
-              classification: lu.classification,
-              matched_pattern_id: lu.matched_pattern_id,
-              affiliate_platform_id: lu.affiliate_platform_id,
-              retailer_pattern_id: lu.retailer_pattern_id,
-              is_shortened: lu.is_shortened,
-              link_type: lu.link_type,
-              affiliate_platform: lu.affiliate_platform,
-              affiliate_domain: lu.affiliate_domain,
-              resolved_retailer: lu.resolved_retailer,
-              resolved_retailer_domain: lu.resolved_retailer_domain,
-            }).eq("id", lu.id)
-          )
-        );
+      // Bulk upsert main link updates
+      const mainRows = linkUpdates.map(lu => ({
+        id: lu.id,
+        unshortened_url: lu.unshortened_url,
+        domain: lu.domain,
+        original_domain: lu.original_domain,
+        classification: lu.classification,
+        matched_pattern_id: lu.matched_pattern_id,
+        affiliate_platform_id: lu.affiliate_platform_id,
+        retailer_pattern_id: lu.retailer_pattern_id,
+        is_shortened: lu.is_shortened,
+        link_type: lu.link_type,
+        affiliate_platform: lu.affiliate_platform,
+        affiliate_domain: lu.affiliate_domain,
+        resolved_retailer: lu.resolved_retailer,
+        resolved_retailer_domain: lu.resolved_retailer_domain,
+      }));
+      for (let i = 0; i < mainRows.length; i += 500) {
+        const chunk = mainRows.slice(i, i + 500);
+        await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
       }
 
       totalProcessed += processedLinks.length;
@@ -785,21 +846,9 @@ Deno.serve(async (req) => {
       }
 
       if (batchUpdates.length > 0) {
-        for (let i = 0; i < batchUpdates.length; i += 50) {
-          const chunk = batchUpdates.slice(i, i + 50);
-          await Promise.all(
-            chunk.map(u =>
-              supabase.from("video_links").update({
-                matched_pattern_id: u.matched_pattern_id,
-                classification: u.classification,
-                affiliate_platform_id: u.affiliate_platform_id,
-                retailer_pattern_id: u.retailer_pattern_id,
-                affiliate_platform: u.affiliate_platform,
-                resolved_retailer: u.resolved_retailer,
-                link_type: u.link_type,
-              }).eq("id", u.id)
-            )
-          );
+        for (let i = 0; i < batchUpdates.length; i += 500) {
+          const chunk = batchUpdates.slice(i, i + 500);
+          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
         }
       }
     }

@@ -576,6 +576,33 @@ export type Database = {
         }
         Relationships: []
       }
+      url_resolution_cache: {
+        Row: {
+          final_domain: string | null
+          normalized_url: string
+          resolution_method: string | null
+          resolve_count: number
+          resolved_at: string
+          unshortened_url: string
+        }
+        Insert: {
+          final_domain?: string | null
+          normalized_url: string
+          resolution_method?: string | null
+          resolve_count?: number
+          resolved_at?: string
+          unshortened_url: string
+        }
+        Update: {
+          final_domain?: string | null
+          normalized_url?: string
+          resolution_method?: string | null
+          resolve_count?: number
+          resolved_at?: string
+          unshortened_url?: string
+        }
+        Relationships: []
+      }
       user_profiles: {
         Row: {
           avatar_url: string | null
@@ -851,6 +878,7 @@ export type Database = {
     }
     Functions: {
       cleanup_orphaned_videos: { Args: never; Returns: number }
+      cleanup_url_cache: { Args: never; Returns: number }
       get_affiliate_classification_stats: {
         Args: never
         Returns: {
