@@ -389,8 +389,38 @@ Deno.serve(async (req) => {
     let totalCached = 0;
     let totalResolved = 0;
     let totalFailed = 0;
+    let dbErrors = 0;
     const MAX_TOTAL = requestedBatchSize || 500;
     const BATCH_SIZE = 50;
+
+    // Helper: per-row UPDATE with error tracking. Avoids upsert NOT-NULL pitfalls and
+    // keeps statements small enough to fit under the Postgres statement timeout.
+    async function updateLinksByIds(
+      updates: Array<{ id: string } & Record<string, any>>,
+      label: string,
+    ): Promise<void> {
+      if (updates.length === 0) return;
+      // Run in parallel chunks of 25 to stay well under timeout while keeping throughput.
+      const PAR = 25;
+      for (let i = 0; i < updates.length; i += PAR) {
+        const slice = updates.slice(i, i + PAR);
+        const results = await Promise.all(
+          slice.map(({ id, ...payload }) =>
+            supabase.from("video_links").update(payload).eq("id", id),
+          ),
+        );
+        for (let j = 0; j < results.length; j++) {
+          const { error } = results[j];
+          if (error) {
+            dbErrors++;
+            console.error(`[${label}] update failed`, {
+              id: slice[j].id,
+              error: error.message,
+            });
+          }
+        }
+      }
+    }
     const videoChannelCache = new Map<string, string>();
 
     // Item 5: Local quota counter
