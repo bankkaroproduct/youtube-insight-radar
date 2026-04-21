@@ -256,11 +256,10 @@ Deno.serve(async (req) => {
       .limit(limit);
 
     if (backfillUnder50) {
-      // Only channels under 50 AND where YouTube still has more uploads to fetch
-      // (or youtube_total_videos unknown — try anyway)
+      // Channels under 50 videos fetched. If youtube_total_videos is known and <= fetched,
+      // the YouTube API will simply return what's available (idempotent upsert).
       query = query
         .lt("total_videos_fetched", 50)
-        .or("youtube_total_videos.is.null,youtube_total_videos.gt.total_videos_fetched")
         .order("total_videos_fetched", { ascending: true });
     } else {
       query = query.order("total_videos_fetched", { ascending: false });
