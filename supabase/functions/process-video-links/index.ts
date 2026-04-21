@@ -617,10 +617,7 @@ Deno.serve(async (req) => {
           link_type: "unknown",
           resolution_status: "resolved",
         }));
-        for (let i = 0; i < skipRows.length; i += 500) {
-          const chunk = skipRows.slice(i, i + 500);
-          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-        }
+        await updateLinksByIds(skipRows, "skip-batch");
         totalProcessed += skipLinks.length;
       }
 
@@ -864,10 +861,7 @@ Deno.serve(async (req) => {
 
       // Bulk upsert main link updates (only for non-failed; failed get separate handling)
       const successRows = linkUpdates.filter(lu => lu.resolution_status === "resolved");
-      for (let i = 0; i < successRows.length; i += 500) {
-        const chunk = successRows.slice(i, i + 500);
-        await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-      }
+      await updateLinksByIds(successRows, "success-rows");
 
       // Item 6: Increment resolution_attempts for failed; mark as 'failed' if attempts >= 3
       const failedIds = linkUpdates.filter(lu => lu.resolution_status === "pending").map(lu => lu.id);
@@ -888,10 +882,7 @@ Deno.serve(async (req) => {
             last_resolution_error: failedById.get(id) || "unknown",
           };
         });
-        for (let i = 0; i < failureRows.length; i += 500) {
-          const chunk = failureRows.slice(i, i + 500);
-          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-        }
+        await updateLinksByIds(failureRows, "failure-rows");
       }
 
       totalProcessed += processedLinks.length;
@@ -959,10 +950,7 @@ Deno.serve(async (req) => {
         }
       }
       if (batchUpdates.length > 0) {
-        for (let i = 0; i < batchUpdates.length; i += 500) {
-          const chunk = batchUpdates.slice(i, i + 500);
-          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-        }
+        await updateLinksByIds(batchUpdates, "step3-unmatched");
       }
     }
 
