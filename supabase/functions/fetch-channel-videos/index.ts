@@ -120,6 +120,7 @@ async function processChannel(
     return { videosInserted: 0, youtubeTotal };
   }
 
+  let fullyScanned = false;
   while (pagesFetched < maxPages && videoRecordsById.size < missingVideos) {
     const tokenForPage = nextPageToken;
     const buildPlaylistUrl = (apiKey: string) => {
