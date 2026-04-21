@@ -481,9 +481,10 @@ export default function Links() {
 }
 
 function ProcessingTab() {
-  const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0 });
+  const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0, failed: 0 });
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [retryingFailed, setRetryingFailed] = useState(false);
   const [batchSize, setBatchSize] = useState(200);
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -501,11 +502,12 @@ function ProcessingTab() {
   const fetchStats = useCallback(async () => {
     setLoading(true);
     try {
-      const [totalRes, processedRes, platformRes, retailerRes] = await Promise.all([
+      const [totalRes, processedRes, platformRes, retailerRes, failedRes] = await Promise.all([
         supabase.from("video_links").select("id", { count: "exact", head: true }),
         supabase.from("video_links").select("id", { count: "exact", head: true }).not("unshortened_url", "is", null),
         supabase.from("video_links").select("id", { count: "exact", head: true }).not("affiliate_platform", "is", null),
         supabase.from("video_links").select("id", { count: "exact", head: true }).not("resolved_retailer", "is", null),
+        supabase.from("video_links").select("id", { count: "exact", head: true }).eq("resolution_status", "failed"),
       ]);
       const total = totalRes.count || 0;
       const processed = processedRes.count || 0;
@@ -515,6 +517,7 @@ function ProcessingTab() {
         unprocessed: total - processed,
         withPlatform: platformRes.count || 0,
         withRetailer: retailerRes.count || 0,
+        failed: failedRes.count || 0,
       });
     } catch (e) {
       console.error("Failed to fetch stats", e);
@@ -522,6 +525,23 @@ function ProcessingTab() {
       setLoading(false);
     }
   }, []);
+
+  const handleRetryFailed = async () => {
+    setRetryingFailed(true);
+    try {
+      const { error, count } = await supabase
+        .from("video_links")
+        .update({ resolution_status: "pending", resolution_attempts: 0, last_resolution_error: null }, { count: "exact" })
+        .eq("resolution_status", "failed");
+      if (error) throw error;
+      toast.success("Retry queued", { description: `Reset ${(count ?? 0).toLocaleString()} failed links to pending.` });
+      await fetchStats();
+    } catch (e: any) {
+      toast.error("Retry failed", { description: e.message });
+    } finally {
+      setRetryingFailed(false);
+    }
+  };
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
@@ -576,22 +596,36 @@ function ProcessingTab() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         {[
           { label: "Total Links", value: stats.total },
           { label: "Processed", value: stats.processed },
           { label: "Unprocessed", value: stats.unprocessed },
           { label: "With Platform", value: stats.withPlatform },
           { label: "With Retailer", value: stats.withRetailer },
+          { label: "Failed", value: stats.failed, danger: true },
         ].map((s) => (
           <Card key={s.label}>
             <CardContent className="pt-4 pb-3 px-4">
               <p className="text-sm text-muted-foreground">{s.label}</p>
-              <p className="text-2xl font-bold">{loading ? "..." : s.value.toLocaleString()}</p>
+              <p className={`text-2xl font-bold ${s.danger && stats.failed > 0 ? "text-destructive" : ""}`}>
+                {loading ? "..." : s.value.toLocaleString()}
+              </p>
             </CardContent>
           </Card>
         ))}
       </div>
+
+      {stats.failed > 0 && (
+        <div className="flex items-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+          <span className="text-sm">
+            <strong>{stats.failed.toLocaleString()}</strong> links failed resolution after 3 attempts.
+          </span>
+          <Button size="sm" variant="outline" onClick={handleRetryFailed} disabled={retryingFailed || running}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${retryingFailed ? "animate-spin" : ""}`} /> Retry Failed
+          </Button>
+        </div>
+      )}
 
       <div className="w-full bg-muted rounded-full h-3">
         <div className="bg-primary h-3 rounded-full transition-all" style={{ width: `${pct}%` }} />
