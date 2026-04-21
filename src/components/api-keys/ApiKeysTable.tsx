@@ -41,6 +41,7 @@ export function ApiKeysTable({ keys, selectedIds, onSelectChange, onToggleActive
     if (!key.is_active) return <Badge variant="secondary">Inactive</Badge>;
     if (key.last_test_status === "invalid") return <Badge variant="destructive">Invalid</Badge>;
     if (key.last_test_status === "quota_exceeded") return <Badge className="bg-amber-500 text-white">Exhausted</Badge>;
+    if (key.last_test_status === "restricted") return <Badge className="bg-orange-500 text-white">Restricted</Badge>;
     return <Badge className="bg-green-600 text-white">Active</Badge>;
   };
 
@@ -48,6 +49,7 @@ export function ApiKeysTable({ keys, selectedIds, onSelectChange, onToggleActive
     if (!status) return <span className="text-muted-foreground text-xs">Not tested</span>;
     if (status === "valid") return <Badge variant="outline" className="text-green-600 border-green-600">Valid</Badge>;
     if (status === "quota_exceeded") return <Badge variant="outline" className="text-amber-500 border-amber-500">Quota Exceeded</Badge>;
+    if (status === "restricted") return <Badge variant="outline" className="text-orange-500 border-orange-500">Restricted</Badge>;
     return <Badge variant="outline" className="text-destructive border-destructive">Invalid</Badge>;
   };
 

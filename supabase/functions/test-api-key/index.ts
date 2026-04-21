@@ -47,7 +47,8 @@ Deno.serve(async (req) => {
     for (const key of keys) {
       let status = "valid";
       try {
-        const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=test&maxResults=1&key=${key.api_key}`;
+        // videos.list costs 1 unit (vs search.list = 100)
+        const url = `https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=${key.api_key}`;
         const resp = await fetch(url);
 
         if (resp.ok) {
@@ -57,6 +58,8 @@ Deno.serve(async (req) => {
           const reason = body?.error?.errors?.[0]?.reason;
           if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
             status = "quota_exceeded";
+          } else if (reason === "ipRefererBlocked") {
+            status = "restricted";
           } else if (resp.status === 400 || resp.status === 403) {
             status = "invalid";
           } else {
@@ -73,6 +76,15 @@ Deno.serve(async (req) => {
       };
       if (status === "invalid") {
         updatePayload.is_active = false;
+      }
+      // Successful API call (valid or restricted-but-responded) consumed 1 unit.
+      if (status === "valid" || status === "restricted") {
+        const { data: current } = await supabase
+          .from("youtube_api_keys")
+          .select("quota_used_today")
+          .eq("id", key.id)
+          .single();
+        updatePayload.quota_used_today = (current?.quota_used_today ?? 0) + 1;
       }
       await supabase.from("youtube_api_keys").update(updatePayload).eq("id", key.id);
 
