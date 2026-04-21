@@ -300,6 +300,7 @@ function VideoDetailRow({ video }: { video: Video }) {
 }
 
 export default function Videos() {
+  useEffect(() => { document.title = "Videos | YT Intel"; }, []);
   const [searchParams] = useSearchParams();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [isDownloading, setIsDownloading] = useState(false);

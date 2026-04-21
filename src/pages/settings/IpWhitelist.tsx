@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useIpWhitelist, isValidIpOrCidr } from "@/hooks/useIpWhitelist";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -35,6 +35,7 @@ function matchesCidr(ip: string, cidr: string): boolean {
 }
 
 export default function IpWhitelist() {
+  useEffect(() => { document.title = "IP Whitelist | YT Intel"; }, []);
   const { entries, isLoading, currentIp, addIp, removeIp, toggleActive } = useIpWhitelist();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newIp, setNewIp] = useState("");

@@ -30,6 +30,7 @@ const statusColors: Record<string, string> = {
 };
 
 export default function KeywordTable() {
+  useEffect(() => { document.title = "Keyword Table | YT Intel"; }, []);
   const { allKeywords, isLoading } = useKeywords();
   const { isAdmin } = useAuth();
   const navigate = useNavigate();

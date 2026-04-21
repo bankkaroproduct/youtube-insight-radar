@@ -199,6 +199,7 @@ function PatternTable({
 }
 
 export default function Links() {
+  useEffect(() => { document.title = "Affiliates | YT Intel"; }, []);
   const {
     platformPatterns, retailerPatterns, socialPatterns, neutralPatterns, discoveredPatterns, uniqueNames, isLoading,
     addPattern, confirmPattern, updatePatternType, updatePatternName, deletePattern, processLinks, confirmedPatterns,

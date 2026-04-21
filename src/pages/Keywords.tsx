@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, Download } from "lucide-react";
 import { useKeywords } from "@/hooks/useKeywords";
@@ -17,6 +17,7 @@ import { format } from "date-fns";
 import * as XLSX from "xlsx";
 
 export default function Keywords() {
+  useEffect(() => { document.title = "Keywords | YT Intel"; }, []);
   const { isAdmin } = useAuth();
   const {
     keywords, categories, filters, setFilters, clearFilters,

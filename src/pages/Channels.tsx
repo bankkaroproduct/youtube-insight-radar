@@ -109,6 +109,7 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
 interface SummaryStats { total: number; with_us: number; competitor: number; mixed: number; neutral: number; }
 
 export default function Channels() {
+  useEffect(() => { document.title = "Channels | YT Intel"; }, []);
   const navigate = useNavigate();
   const [filters, setFilters] = useState<ChannelFilters>({ name: "", status: "", category: "", relevance: "", country: "" });
   const [page, setPage] = useState(0);

@@ -121,6 +121,7 @@ function downloadCSV(profiles: IGProfile[]) {
 }
 
 export default function InstagramProfiles() {
+  useEffect(() => { document.title = "Instagram Profiles | YT Intel"; }, []);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(0);
