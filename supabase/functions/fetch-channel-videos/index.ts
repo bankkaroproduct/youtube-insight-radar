@@ -110,10 +110,14 @@ async function processChannel(
   }
 
   if (missingVideos === 0) {
-    // Sync stale total_videos_fetched even when nothing new to fetch
+    // Sync stale total_videos_fetched even when nothing new to fetch.
+    // Bump last_analyzed_at so the backfill rotation moves to the next channel.
     await supabase
       .from("channels")
-      .update({ total_videos_fetched: existingVideoIds.size })
+      .update({
+        total_videos_fetched: existingVideoIds.size,
+        last_analyzed_at: new Date().toISOString(),
+      })
       .eq("channel_id", channelId);
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
