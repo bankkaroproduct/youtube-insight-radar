@@ -142,8 +142,22 @@ export function useApiKeys() {
     return data.results as { id: string; status: string }[];
   };
 
+  const activeKeys = keys.filter((k) => k.is_active && k.last_test_status !== "invalid" && k.last_test_status !== "restricted");
+  const remainingCallsToday = activeKeys.reduce((sum, k) => {
+    if (k.daily_quota_limit === 0) return sum + Math.max(0, 10000 - k.quota_used_today);
+    return sum + Math.max(0, k.daily_quota_limit - k.quota_used_today);
+  }, 0);
+
+  const nextResetAt = (() => {
+    const now = new Date();
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 8, 0, 0, 0));
+    if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+    return next;
+  })();
+
   const stats = {
     total: keys.length,
+    activeCount: activeKeys.length,
     healthy: keys.filter((k) => k.is_active && k.last_test_status !== "invalid" && k.last_test_status !== "quota_exceeded" && k.last_test_status !== "restricted").length,
     invalid: keys.filter((k) => k.last_test_status === "invalid").length,
     restricted: keys.filter((k) => k.last_test_status === "restricted").length,
@@ -151,6 +165,8 @@ export function useApiKeys() {
     quotaUsed: keys
       .filter((k) => k.is_active)
       .reduce((sum, k) => sum + k.quota_used_today, 0),
+    remainingCallsToday,
+    nextResetAt,
   };
 
   return { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, updateLabel, testKeys, resetQuota };
