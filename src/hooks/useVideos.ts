@@ -115,27 +115,83 @@ export function useVideos(filters?: VideoFilters) {
   const [hasMore, setHasMore] = useState(true);
   const fetchIdRef = useRef(0);
 
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (currentFilters?: VideoFilters) => {
     setIsStatsLoading(true);
     try {
-      const [videosRes, linksRes, channelsRes, platformsRes, retailersRes] = await Promise.all([
-        supabase.from("videos").select("*", { count: "exact", head: true }),
-        supabase.from("video_links").select("*", { count: "exact", head: true }),
-        supabase.from("channels").select("*", { count: "exact", head: true }),
-        supabase.from("video_links").select("affiliate_platform").not("affiliate_platform", "is", null),
-        supabase.from("video_links").select("resolved_retailer").not("resolved_retailer", "is", null),
-      ]);
+      const f = currentFilters ?? { title: "", channel: "", keyword: "", classification: "" };
 
-      const uniquePlatforms = new Set(platformsRes.data?.map((p: any) => p.affiliate_platform)).size;
-      const uniqueRetailers = new Set(retailersRes.data?.map((r: any) => r.resolved_retailer)).size;
+      // Resolve filtered video IDs (same logic as fetchPage).
+      const filteredIds = await resolveFilteredVideoIds(f);
+      if (filteredIds !== null && filteredIds.length === 0) {
+        setStats({ totalVideos: 0, totalLinks: 0, uniqueChannels: 0, uniquePlatforms: 0, uniqueRetailers: 0 });
+        setIsStatsLoading(false);
+        return;
+      }
 
-      setStats({
-        totalVideos: videosRes.count ?? 0,
-        totalLinks: linksRes.count ?? 0,
-        uniqueChannels: channelsRes.count ?? 0,
-        uniquePlatforms,
-        uniqueRetailers,
-      });
+      // Build filtered videos count query.
+      let videosCountQuery = supabase.from("videos").select("*", { count: "exact", head: true });
+      if (f.title.trim()) videosCountQuery = videosCountQuery.ilike("title", `%${f.title.trim()}%`);
+      if (f.channel.trim()) videosCountQuery = videosCountQuery.ilike("channel_name", `%${f.channel.trim()}%`);
+      if (filteredIds !== null) videosCountQuery = videosCountQuery.in("id", filteredIds);
+
+      // For unique channels, fetch the matching channel_name set.
+      // When no filters are active, we can use the channels table count directly.
+      const hasAnyFilter = f.title.trim() || f.channel.trim() || filteredIds !== null;
+
+      if (!hasAnyFilter) {
+        const [videosRes, channelsRes, linkStatsRes] = await Promise.all([
+          supabase.from("videos").select("*", { count: "exact", head: true }),
+          supabase.from("channels").select("*", { count: "exact", head: true }),
+          supabase.rpc("get_video_links_stats", { video_ids: null }),
+        ]);
+        const linkStats = (linkStatsRes.data as any[])?.[0] || { total: 0, unique_platforms: 0, unique_retailers: 0 };
+        setStats({
+          totalVideos: videosRes.count ?? 0,
+          totalLinks: Number(linkStats.total ?? 0),
+          uniqueChannels: channelsRes.count ?? 0,
+          uniquePlatforms: Number(linkStats.unique_platforms ?? 0),
+          uniqueRetailers: Number(linkStats.unique_retailers ?? 0),
+        });
+      } else {
+        // Need the actual filtered video IDs to scope link stats and unique channels.
+        // Fetch matching video rows (id + channel_id) — paginate to bypass the 1000 row limit.
+        let scopedIds: string[] = [];
+        const channelSet = new Set<string>();
+        const BATCH = 1000;
+        let from = 0;
+        while (true) {
+          let q = supabase
+            .from("videos")
+            .select("id, channel_id")
+            .order("id", { ascending: true })
+            .range(from, from + BATCH - 1);
+          if (f.title.trim()) q = q.ilike("title", `%${f.title.trim()}%`);
+          if (f.channel.trim()) q = q.ilike("channel_name", `%${f.channel.trim()}%`);
+          if (filteredIds !== null) q = q.in("id", filteredIds);
+          const { data, error } = await q;
+          if (error) throw error;
+          const rows = data ?? [];
+          for (const r of rows) {
+            scopedIds.push(r.id);
+            if (r.channel_id) channelSet.add(r.channel_id);
+          }
+          if (rows.length < BATCH) break;
+          from += BATCH;
+        }
+
+        const linkStatsRes = await supabase.rpc("get_video_links_stats", {
+          video_ids: scopedIds.length > 0 ? scopedIds : null,
+        });
+        const linkStats = (linkStatsRes.data as any[])?.[0] || { total: 0, unique_platforms: 0, unique_retailers: 0 };
+
+        setStats({
+          totalVideos: scopedIds.length,
+          totalLinks: scopedIds.length === 0 ? 0 : Number(linkStats.total ?? 0),
+          uniqueChannels: channelSet.size,
+          uniquePlatforms: scopedIds.length === 0 ? 0 : Number(linkStats.unique_platforms ?? 0),
+          uniqueRetailers: scopedIds.length === 0 ? 0 : Number(linkStats.unique_retailers ?? 0),
+        });
+      }
     } catch {
       toast.error("Failed to load video stats");
     }
