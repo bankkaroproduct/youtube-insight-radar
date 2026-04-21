@@ -389,8 +389,38 @@ Deno.serve(async (req) => {
     let totalCached = 0;
     let totalResolved = 0;
     let totalFailed = 0;
+    let dbErrors = 0;
     const MAX_TOTAL = requestedBatchSize || 500;
     const BATCH_SIZE = 50;
+
+    // Helper: per-row UPDATE with error tracking. Avoids upsert NOT-NULL pitfalls and
+    // keeps statements small enough to fit under the Postgres statement timeout.
+    async function updateLinksByIds(
+      updates: Array<{ id: string } & Record<string, any>>,
+      label: string,
+    ): Promise<void> {
+      if (updates.length === 0) return;
+      // Run in parallel chunks of 25 to stay well under timeout while keeping throughput.
+      const PAR = 25;
+      for (let i = 0; i < updates.length; i += PAR) {
+        const slice = updates.slice(i, i + PAR);
+        const results = await Promise.all(
+          slice.map(({ id, ...payload }) =>
+            supabase.from("video_links").update(payload).eq("id", id),
+          ),
+        );
+        for (let j = 0; j < results.length; j++) {
+          const { error } = results[j];
+          if (error) {
+            dbErrors++;
+            console.error(`[${label}] update failed`, {
+              id: slice[j].id,
+              error: error.message,
+            });
+          }
+        }
+      }
+    }
     const videoChannelCache = new Map<string, string>();
 
     // Item 5: Local quota counter
@@ -492,10 +522,7 @@ Deno.serve(async (req) => {
               resolution_status: "resolved",
             };
           });
-          for (let i = 0; i < skipRows.length; i += 500) {
-            const chunk = skipRows.slice(i, i + 500);
-            await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-          }
+          await updateLinksByIds(skipRows, "skip-fastpath");
           totalProcessed += skipUpdates.length;
         }
       }
@@ -590,10 +617,7 @@ Deno.serve(async (req) => {
           link_type: "unknown",
           resolution_status: "resolved",
         }));
-        for (let i = 0; i < skipRows.length; i += 500) {
-          const chunk = skipRows.slice(i, i + 500);
-          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-        }
+        await updateLinksByIds(skipRows, "skip-batch");
         totalProcessed += skipLinks.length;
       }
 
@@ -837,10 +861,7 @@ Deno.serve(async (req) => {
 
       // Bulk upsert main link updates (only for non-failed; failed get separate handling)
       const successRows = linkUpdates.filter(lu => lu.resolution_status === "resolved");
-      for (let i = 0; i < successRows.length; i += 500) {
-        const chunk = successRows.slice(i, i + 500);
-        await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-      }
+      await updateLinksByIds(successRows, "success-rows");
 
       // Item 6: Increment resolution_attempts for failed; mark as 'failed' if attempts >= 3
       const failedIds = linkUpdates.filter(lu => lu.resolution_status === "pending").map(lu => lu.id);
@@ -861,10 +882,7 @@ Deno.serve(async (req) => {
             last_resolution_error: failedById.get(id) || "unknown",
           };
         });
-        for (let i = 0; i < failureRows.length; i += 500) {
-          const chunk = failureRows.slice(i, i + 500);
-          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-        }
+        await updateLinksByIds(failureRows, "failure-rows");
       }
 
       totalProcessed += processedLinks.length;
@@ -932,10 +950,7 @@ Deno.serve(async (req) => {
         }
       }
       if (batchUpdates.length > 0) {
-        for (let i = 0; i < batchUpdates.length; i += 500) {
-          const chunk = batchUpdates.slice(i, i + 500);
-          await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-        }
+        await updateLinksByIds(batchUpdates, "step3-unmatched");
       }
     }
 
@@ -990,6 +1005,7 @@ Deno.serve(async (req) => {
       cached: totalCached,
       resolved: totalResolved,
       failed: totalFailed,
+      db_errors: dbErrors,
       metricsByDomain,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
