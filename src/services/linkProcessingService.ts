@@ -38,7 +38,12 @@ class LinkProcessingService {
   }
 
   private notify() {
-    this.snapshot = { running: this.running, logs: this.logs, startedAt: this.startedAt };
+    this.snapshot = {
+      running: this.running,
+      logs: this.logs,
+      startedAt: this.startedAt,
+      lastBatchCompletedAt: this.lastBatchCompletedAt,
+    };
     this.listeners.forEach((fn) => fn());
     this.saveState();
   }
