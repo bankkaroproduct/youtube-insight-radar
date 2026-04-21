@@ -325,10 +325,14 @@ Deno.serve(async (req) => {
       : limit;
 
     // Avoid PostgREST integer parsing issues by fetching an ordered window and filtering counts in-memory.
+    // Secondary sort by last_analyzed_at (nulls first) so backfill rotates through ALL underfilled channels
+    // instead of repeatedly re-selecting the same leading subset of tied counts.
     const { data: rawChannels, error: chErr } = await supabase
       .from("channels")
-      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos")
+      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, last_analyzed_at")
       .order("total_videos_fetched", { ascending: needsVideoCountFilter })
+      .order("last_analyzed_at", { ascending: true, nullsFirst: true })
+      .order("channel_id", { ascending: true })
       .limit(selectionWindow);
 
     if (chErr) throw chErr;
