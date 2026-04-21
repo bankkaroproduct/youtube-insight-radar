@@ -269,7 +269,10 @@ async function processChannel(
     .eq("channel_id", channelId);
   await supabase
     .from("channels")
-    .update({ total_videos_fetched: newTotal ?? 0 })
+    .update({
+      total_videos_fetched: newTotal ?? 0,
+      last_analyzed_at: new Date().toISOString(),
+    })
     .eq("channel_id", channelId);
 
   keyIndex.val++;

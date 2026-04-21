@@ -47,6 +47,7 @@ export function useChannels() {
           .select("*")
           .gt("total_videos_fetched", 0)
           .order("total_videos_fetched", { ascending: false })
+          .order("channel_id", { ascending: true })
           .range(from, from + BATCH - 1);
 
         if (error) throw error;
