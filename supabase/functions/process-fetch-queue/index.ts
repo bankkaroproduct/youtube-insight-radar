@@ -194,9 +194,9 @@ function extractUrls(text: string): string[] {
   return [...new Set(text.match(urlRegex) || [])];
 }
 
-async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyData: any, quotaCache: Map<string, number>) {
+async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDataIn: any, quotaCache: Map<string, number>) {
   if (channelIds.length === 0) return;
-  
+  let apiKeyData = apiKeyDataIn;
   try {
     // Check rate limit (channels.list = 1 unit)
     const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 1);
