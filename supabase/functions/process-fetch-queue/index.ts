@@ -114,6 +114,13 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
         regionCode: "IN",
         key: apiKey,
       });
+      // Filter shorts at the API level for relevance-ordered searches.
+      // "medium" returns videos 4–20 minutes — excludes shorts AND very-long-form.
+      // For non-relevance orders (e.g. "date"), users likely want all lengths,
+      // so we skip this filter and rely on the JS-side <60s cutoff below.
+      if ((job.order_by || "relevance") === "relevance") {
+        params.set("videoDuration", "medium");
+      }
       if (job.published_after) params.set("publishedAfter", job.published_after);
       if (nextPageToken) params.set("pageToken", nextPageToken);
       return `https://www.googleapis.com/youtube/v3/search?${params}`;

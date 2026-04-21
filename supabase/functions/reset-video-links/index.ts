@@ -24,6 +24,23 @@ Deno.serve(async (req) => {
     const { before_id } = await req.json().catch(() => ({}));
     const CHUNK = 2000;
 
+    // Refuse to reset if link processing is mid-batch (only on the first chunk).
+    if (!before_id) {
+      const recentCutoff = new Date(Date.now() - 30_000).toISOString();
+      const { count: recentlyUpdated } = await supabase
+        .from("video_links")
+        .select("id", { count: "exact", head: true })
+        .gte("updated_at", recentCutoff);
+      if ((recentlyUpdated ?? 0) > 0) {
+        return new Response(JSON.stringify({
+          error: "Links were updated in the last 30s. Wait for processing to stop before resetting.",
+        }), {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     let idQuery = supabase.from("video_links").select("id").order("id", { ascending: true }).limit(CHUNK);
     if (before_id) idQuery = idQuery.gt("id", before_id);
     const { data: idRows, error: idErr } = await idQuery;
