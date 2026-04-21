@@ -104,21 +104,6 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
   let currentKey = apiKeyData;
 
   for (let page = 0; page < MAX_PAGES; page++) {
-    // Check rate limit before each search call (search.list = 100 units)
-    const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 100);
-    if (!rlCheck.allowed) {
-      console.log(`YouTube quota exhausted (remaining: ${rlCheck.remaining}). Stopping job ${job.id}.`);
-      if (page === 0) {
-        await supabase.from("fetch_jobs").update({
-          status: "failed",
-          error_message: "YouTube API quota exhausted for today. Resets at midnight.",
-          completed_at: new Date().toISOString(),
-        }).eq("id", job.id);
-        return { channelIds: [], keyUsed: currentKey };
-      }
-      break;
-    }
-
     const buildSearchUrl = (apiKey: string) => {
       const params = new URLSearchParams({
         part: "snippet",
@@ -193,10 +178,6 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
 
   const chunkResults: any[][] = [];
   for (const chunk of detailChunks) {
-    // Rate limit: videos.list = 1 unit per call
-    const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 1);
-    if (!rlCheck.allowed) { chunkResults.push([]); continue; }
-
     const buildDetailUrl = (apiKey: string) => {
       const detailParams = new URLSearchParams({
         part: "snippet,statistics,contentDetails",
