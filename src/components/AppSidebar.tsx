@@ -64,16 +64,17 @@ export function AppSidebar() {
   const renderGroup = (
     label: string,
     items: typeof discoveryItems,
-  ) => (
-    <SidebarGroup>
-      <SidebarGroupLabel className="text-sidebar-foreground/50 uppercase text-xs tracking-wider">
-        {label}
-      </SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          {items
-            .filter((item) => !("adminOnly" in item) || !item.adminOnly || isAdmin)
-            .map((item) => (
+  ) => {
+    const visible = items.filter((item) => !("adminOnly" in item) || !item.adminOnly || isAdmin);
+    if (visible.length === 0) return null;
+    return (
+      <SidebarGroup>
+        <SidebarGroupLabel className="text-sidebar-foreground/50 uppercase text-xs tracking-wider">
+          {label}
+        </SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            {visible.map((item) => (
               <SidebarMenuItem key={item.title}>
                 <SidebarMenuButton asChild isActive={isActive(item.url)}>
                   <NavLink
@@ -88,10 +89,11 @@ export function AppSidebar() {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  );
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  };
 
   return (
     <Sidebar collapsible="icon">
