@@ -404,15 +404,17 @@ export default function Channels() {
                         </a>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{ch.subscriber_count ? formatNumber(ch.subscriber_count) : "—"}</TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">
                         {(() => {
                           const fetched = ch.total_videos_fetched ?? 0;
                           const yt = ch.youtube_total_videos;
                           if (yt != null && yt < 50 && fetched >= yt) {
                             return (
-                              <span className="inline-flex items-center gap-1">
-                                {fetched}
-                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Till date</Badge>
+                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                <span className="font-medium">{fetched}</span>
+                                <span className="inline-flex items-center rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success leading-none">
+                                  Till date
+                                </span>
                               </span>
                             );
                           }
