@@ -375,7 +375,12 @@ function buildSheet4(videos: Video[], vkMap: Map<string, VkEntry[]>, channelsByY
   return { headers, rows };
 }
 
-function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) {
+function buildSheet5(
+  channels: Channel[],
+  channelBestRank: Map<string, number>,
+  retailerByDomain: Map<string, string>,
+  affiliateByDomain: Map<string, string>,
+) {
   const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link Header", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
@@ -392,13 +397,19 @@ function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) 
       description,
     ];
 
-    // Prefer scraped custom_links (creator-set headers); fall back to URLs from description with inferred headers.
+    // Merge scraped custom_links (creator-set headers) with URLs extracted from description.
     const scraped = Array.isArray(ch.custom_links) ? ch.custom_links.filter(l => l && l.url) : [];
-    let linkPairs: Array<{ header: string; url: string }>;
-    if (scraped.length > 0) {
-      linkPairs = scraped.map(l => ({ header: (l.header || "").trim() || inferHeaderFromUrl(l.url), url: l.url }));
-    } else {
-      linkPairs = extractUrls(ch.description).map(url => ({ header: inferHeaderFromUrl(url), url }));
+    const seen = new Set<string>();
+    const linkPairs: Array<{ header: string; url: string }> = [];
+    for (const l of scraped) {
+      if (seen.has(l.url)) continue;
+      seen.add(l.url);
+      linkPairs.push({ header: (l.header || "").trim() || inferHeaderFromUrl(l.url), url: l.url });
+    }
+    for (const url of extractUrls(ch.description)) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+      linkPairs.push({ header: inferHeaderFromUrl(url), url });
     }
 
     if (linkPairs.length === 0) {
@@ -407,21 +418,47 @@ function buildSheet5(channels: Channel[], channelBestRank: Map<string, number>) 
       linkPairs.forEach(({ header, url }, idx) => {
         const domain = extractDomain(url);
         const social = getSocialPlatform(domain);
+        const affiliate = lookupByDomain(domain, affiliateByDomain);
+        const retailer = lookupByDomain(domain, retailerByDomain);
         const excluded = social ? `Excluded - Social (${social})` : "";
-        rows.push([...base, `L${idx + 1}`, header, url, "N/A", domain || "N/A", "", "", social, excluded]);
+        rows.push([
+          ...base,
+          `L${idx + 1}`,
+          header,
+          url,
+          "N/A",
+          domain || "N/A",
+          affiliate || "",
+          retailer || "",
+          social,
+          excluded,
+        ]);
       });
     }
   }
   return { headers, rows };
 }
 
+// Match a domain against a domain->name map: exact match, then suffix match for subdomains.
+function lookupByDomain(domain: string, map: Map<string, string>): string {
+  if (!domain || map.size === 0) return "";
+  if (map.has(domain)) return map.get(domain)!;
+  for (const [d, name] of map) {
+    if (domain === d || domain.endsWith("." + d)) return name;
+  }
+  return "";
+}
+
 function buildSheet6(channels: Channel[], igByChannelId: Map<string, IGProfile>) {
   const headers = ["Channel Name", "Channel Link", "Subscribers", "Country", "Category", "Affiliate Status", "Contact Email", "Instagram Handle", "IG Followers", "IG Bio", "IG Business Category", "Instagram Link", "Facebook Link", "Twitter Link", "WhatsApp Link", "Telegram Link", "Snapchat Link", "LinkedIn Link", "YouTube Link"];
   const rows: any[][] = channels.map(ch => {
     const ig = igByChannelId.get(ch.id);
-    const urls = extractUrls(ch.description);
+    // Use scraped custom_links first, then fall back to description URLs.
+    const scraped = Array.isArray(ch.custom_links) ? ch.custom_links.filter(l => l && l.url).map(l => l.url) : [];
+    const descUrls = extractUrls(ch.description);
+    const allUrls = [...new Set([...scraped, ...descUrls])];
     const findSocial = (names: string[]) => {
-      for (const url of urls) {
+      for (const url of allUrls) {
         const platform = getSocialPlatform(extractDomain(url));
         if (names.includes(platform)) return url;
       }
@@ -547,8 +584,9 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const channelsByYTId = new Map(channels.map(c => [c.channel_id, c]));
   const igByChannelId = new Map(igs.map(i => [i.channel_id, i]));
 
-  // Build retailer-domain map from affiliate_patterns (type='retailer')
+  // Build retailer + affiliate-platform domain maps from affiliate_patterns
   const retailerByDomain = new Map<string, string>();
+  const affiliateByDomain = new Map<string, string>();
   try {
     const patterns = await fetchAll<{ pattern: string; name: string; type: string; is_confirmed: boolean }>(
       "affiliate_patterns",
@@ -556,12 +594,14 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
     );
     for (const p of patterns) {
       if (!p.is_confirmed) continue;
-      if ((p.type || "").toLowerCase() !== "retailer") continue;
       const d = (p.pattern || "").replace(/^www\./, "").toLowerCase();
-      if (d) retailerByDomain.set(d, p.name);
+      if (!d) continue;
+      const t = (p.type || "").toLowerCase();
+      if (t === "retailer") retailerByDomain.set(d, p.name);
+      else if (t === "affiliate_platform") affiliateByDomain.set(d, p.name);
     }
   } catch {
-    // non-fatal: retailer fallback just won't fire
+    // non-fatal: classification just won't fire
   }
 
   // Per-keyword video counts for Sheet 1
@@ -582,7 +622,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
   const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
   const s4 = buildSheet4(videos, vkMap, channelsByYTId);
-  const s5 = buildSheet5(channels, channelBestRank);
+  const s5 = buildSheet5(channels, channelBestRank, retailerByDomain, affiliateByDomain);
   const s6 = buildSheet6(channels, igByChannelId);
 
   onProgress?.("Formatting workbook...");
