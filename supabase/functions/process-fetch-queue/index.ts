@@ -370,23 +370,30 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
     detailChunks.push(allVideoIds.slice(i, i + 50));
   }
 
-  const chunkResults = await Promise.all(detailChunks.map(async (chunk) => {
+  const chunkResults: any[][] = [];
+  for (const chunk of detailChunks) {
     // Rate limit: videos.list = 1 unit per call
     const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 1);
-    if (!rlCheck.allowed) return [];
+    if (!rlCheck.allowed) { chunkResults.push([]); continue; }
 
-    const detailParams = new URLSearchParams({
-      part: "snippet,statistics,contentDetails",
-      id: chunk.join(","),
-      key: currentKey.api_key,
-    });
+    const buildDetailUrl = (apiKey: string) => {
+      const detailParams = new URLSearchParams({
+        part: "snippet,statistics,contentDetails",
+        id: chunk.join(","),
+        key: apiKey,
+      });
+      return `https://www.googleapis.com/youtube/v3/videos?${detailParams}`;
+    };
 
-    const detailResp = await fetch(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`);
-    if (!detailResp.ok) return [];
+    const { resp: detailResp, key: rotatedKey, exhausted } = await fetchYouTubeWithRotation(
+      supabase, buildDetailUrl, currentKey, quotaCache,
+    );
+    currentKey = rotatedKey;
+    if (exhausted || !detailResp) { chunkResults.push([]); continue; }
     await incrementQuota(supabase, currentKey.id, 1, quotaCache);
     const detailData = await detailResp.json();
-    return detailData.items || [];
-  }));
+    chunkResults.push(detailData.items || []);
+  }
 
   for (const items of chunkResults) {
     for (const video of items) {
