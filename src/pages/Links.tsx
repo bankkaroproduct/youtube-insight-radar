@@ -463,6 +463,7 @@ function ProcessingTab() {
   const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0 });
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [batchSize, setBatchSize] = useState(200);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const serviceState = useSyncExternalStore(
@@ -510,7 +511,7 @@ function ProcessingTab() {
   }, [running, fetchStats]);
 
   const startProcessing = () => {
-    linkProcessingService.start(fetchStats);
+    linkProcessingService.start(fetchStats, batchSize);
   };
 
   const stopProcessing = () => {
@@ -573,7 +574,13 @@ function ProcessingTab() {
       </div>
       <p className="text-sm text-muted-foreground text-center">{pct}% processed</p>
 
-      <div className="flex gap-3">
+      {logs.length > 0 && !running && (
+        <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
+          Previous run logs loaded. Click <strong>Resume Processing</strong> to continue.
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-3 items-end">
         {running ? (
           <Button onClick={stopProcessing} variant="destructive" size="lg">
             <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Stop Processing
@@ -583,6 +590,18 @@ function ProcessingTab() {
             <Play className="h-4 w-4 mr-2" /> {logs.length > 0 ? "Resume Processing" : "Start Processing"}
           </Button>
         )}
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs text-muted-foreground">Batch size</Label>
+          <Input
+            type="number"
+            min={50}
+            max={2000}
+            value={batchSize}
+            onChange={(e) => setBatchSize(Math.max(50, Math.min(2000, Number(e.target.value) || 200)))}
+            disabled={running}
+            className="w-28"
+          />
+        </div>
         <Button variant="outline" onClick={fetchStats} disabled={loading} size="lg">
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} /> Refresh Stats
         </Button>
