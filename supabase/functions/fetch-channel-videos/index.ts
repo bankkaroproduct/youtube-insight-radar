@@ -63,10 +63,30 @@ async function processChannel(
 ): Promise<{ videosInserted: number; youtubeTotal: number | null }> {
   let currentKey = apiKeys[keyIndex.val % apiKeys.length];
 
-  // Search for latest 50 videos from this channel
+  // Step 1: Get the true total video count from channels.list (statistics.videoCount).
+  // YouTube's search.list pageInfo.totalResults is an estimate and is wildly inaccurate
+  // (often returns small wrong numbers like 13 even for channels with thousands of videos).
+  let youtubeTotal: number | null = null;
+  try {
+    const chParams = new URLSearchParams({
+      part: "statistics",
+      id: channelId,
+      key: currentKey.api_key,
+    });
+    const chResp = await fetch(`https://www.googleapis.com/youtube/v3/channels?${chParams}`);
+    if (chResp.ok) {
+      await incrementQuota(supabase, currentKey.id, 1, quotaCache);
+      const chData = await chResp.json();
+      const vc = chData?.items?.[0]?.statistics?.videoCount;
+      if (vc != null) youtubeTotal = parseInt(String(vc)) || 0;
+    }
+  } catch (e) {
+    console.error(`channels.list failed for ${channelId}:`, e);
+  }
+
+  // Step 2: Search for latest 50 videos from this channel
   const allVideoIds: string[] = [];
   let nextPageToken: string | null = null;
-  let youtubeTotal: number | null = null;
 
   for (let page = 0; page < 1; page++) {
     const params = new URLSearchParams({
@@ -98,14 +118,11 @@ async function processChannel(
         throw new Error("All API keys exhausted");
       }
       console.error(`Search failed for channel ${channelId}: ${body?.error?.message}`);
-      return { videosInserted: 0 };
+      return { videosInserted: 0, youtubeTotal };
     }
 
     await incrementQuota(supabase, currentKey.id, 100, quotaCache);
     const searchData = await resp.json();
-    if (searchData.pageInfo?.totalResults != null && youtubeTotal === null) {
-      youtubeTotal = searchData.pageInfo.totalResults;
-    }
     const items = (searchData.items || []).filter((item: any) => item.id?.videoId);
     for (const item of items) {
       if (!allVideoIds.includes(item.id.videoId)) {
