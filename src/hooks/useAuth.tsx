@@ -1,9 +1,18 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
+import { checkIpAccess } from "@/hooks/useIpWhitelist";
+import { toast } from "sonner";
 
 type AppRole = Database["public"]["Enums"]["app_role"];
+
+interface IpCheckState {
+  allowed: boolean;
+  ip: string;
+  error?: boolean;
+  checked: boolean;
+}
 
 interface AuthContextType {
   session: Session | null;
@@ -11,6 +20,7 @@ interface AuthContextType {
   profile: Database["public"]["Tables"]["user_profiles"]["Row"] | null;
   roles: AppRole[];
   isLoading: boolean;
+  ipCheck: IpCheckState;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -26,6 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Database["public"]["Tables"]["user_profiles"]["Row"] | null>(null);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [ipCheck, setIpCheck] = useState<IpCheckState>({ allowed: true, ip: "", checked: false });
+  const rolesRef = useRef<AppRole[]>([]);
 
   const loadUserData = async (userId: string) => {
     const [profileRes, rolesRes] = await Promise.all([
@@ -33,24 +45,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       supabase.from("user_roles").select("role").eq("user_id", userId),
     ]);
     setProfile(profileRes.data ?? null);
-    setRoles(rolesRes.data?.map((r) => r.role) ?? []);
+    const newRoles = rolesRes.data?.map((r) => r.role) ?? [];
+    setRoles(newRoles);
+    rolesRef.current = newRoles;
+    return { profile: profileRes.data, roles: newRoles };
+  };
+
+  const runIpCheck = async (userRoles: AppRole[]) => {
+    if (userRoles.includes("super_admin")) {
+      setIpCheck({ checked: true, allowed: true, ip: "bypassed" });
+      return;
+    }
+    const res = await checkIpAccess();
+    setIpCheck({ checked: true, allowed: res.allowed, ip: res.ip, error: res.error });
   };
 
   useEffect(() => {
     let initialized = false;
+    let lastUserId: string | null = null;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, newSession) => {
         setSession(newSession);
         setUser(newSession?.user ?? null);
         if (newSession?.user) {
-          await loadUserData(newSession.user.id);
+          const userChanged = newSession.user.id !== lastUserId;
+          lastUserId = newSession.user.id;
+          const { roles: newRoles } = await loadUserData(newSession.user.id);
+          if (initialized && userChanged) {
+            // Reset ip check on user switch and re-run.
+            setIpCheck({ allowed: true, ip: "", checked: false });
+            runIpCheck(newRoles);
+          }
         } else {
           setProfile(null);
           setRoles([]);
+          rolesRef.current = [];
+          lastUserId = null;
+          setIpCheck({ allowed: true, ip: "", checked: false });
         }
-        // Initial loading is owned by getSession() below; this listener
-        // only updates loading after the initial load has completed.
         if (initialized) setIsLoading(false);
       }
     );
@@ -59,13 +92,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(initialSession);
       setUser(initialSession?.user ?? null);
       if (initialSession?.user) {
-        await loadUserData(initialSession.user.id);
+        lastUserId = initialSession.user.id;
+        const { roles: newRoles } = await loadUserData(initialSession.user.id);
+
+        // Hard-enforce deactivated accounts
+        const { data: prof } = await supabase
+          .from("user_profiles")
+          .select("is_active")
+          .eq("user_id", initialSession.user.id)
+          .single();
+        if (prof && prof.is_active === false) {
+          await supabase.auth.signOut();
+          toast.error("Your account has been deactivated. Contact an admin.");
+          initialized = true;
+          setIsLoading(false);
+          return;
+        }
+
+        await runIpCheck(newRoles);
       }
       initialized = true;
       setIsLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    // Poll every 5 minutes for role changes mid-session.
+    const roleCheckInterval = setInterval(async () => {
+      const currentSession = (await supabase.auth.getSession()).data.session;
+      if (!currentSession?.user) return;
+      const { data } = await supabase.from("user_roles").select("role").eq("user_id", currentSession.user.id);
+      const currentRoles = ((data ?? []) as { role: AppRole }[]).map((r) => r.role);
+      const prev = rolesRef.current;
+      const hasChanged =
+        currentRoles.length !== prev.length ||
+        currentRoles.some((r) => !prev.includes(r));
+      if (hasChanged) {
+        rolesRef.current = currentRoles;
+        setRoles(currentRoles);
+        toast.info("Your permissions were updated. The page will refresh.");
+        setTimeout(() => window.location.reload(), 2000);
+      }
+    }, 5 * 60_000);
+
+    return () => {
+      subscription.unsubscribe();
+      clearInterval(roleCheckInterval);
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {
@@ -94,7 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ session, user, profile, roles, isLoading, signIn, signUp, signOut, hasRole, isAdmin }}
+      value={{ session, user, profile, roles, isLoading, ipCheck, signIn, signUp, signOut, hasRole, isAdmin }}
     >
       {children}
     </AuthContext.Provider>
