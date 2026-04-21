@@ -522,10 +522,7 @@ Deno.serve(async (req) => {
               resolution_status: "resolved",
             };
           });
-          for (let i = 0; i < skipRows.length; i += 500) {
-            const chunk = skipRows.slice(i, i + 500);
-            await supabase.from("video_links").upsert(chunk, { onConflict: "id" });
-          }
+          await updateLinksByIds(skipRows, "skip-fastpath");
           totalProcessed += skipUpdates.length;
         }
       }
