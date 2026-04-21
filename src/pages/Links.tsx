@@ -463,6 +463,7 @@ function ProcessingTab() {
   const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0 });
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [batchSize, setBatchSize] = useState(200);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const serviceState = useSyncExternalStore(
@@ -510,7 +511,7 @@ function ProcessingTab() {
   }, [running, fetchStats]);
 
   const startProcessing = () => {
-    linkProcessingService.start(fetchStats);
+    linkProcessingService.start(fetchStats, batchSize);
   };
 
   const stopProcessing = () => {
