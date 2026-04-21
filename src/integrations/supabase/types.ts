@@ -684,6 +684,7 @@ export type Database = {
           resolved_retailer_domain: string | null
           retailer_pattern_id: string | null
           unshortened_url: string | null
+          updated_at: string | null
           video_id: string
         }
         Insert: {
@@ -703,6 +704,7 @@ export type Database = {
           resolved_retailer_domain?: string | null
           retailer_pattern_id?: string | null
           unshortened_url?: string | null
+          updated_at?: string | null
           video_id: string
         }
         Update: {
@@ -722,6 +724,7 @@ export type Database = {
           resolved_retailer_domain?: string | null
           retailer_pattern_id?: string | null
           unshortened_url?: string | null
+          updated_at?: string | null
           video_id?: string
         }
         Relationships: [
@@ -913,6 +916,20 @@ export type Database = {
       }
       reset_daily_quotas: { Args: never; Returns: undefined }
       reset_daily_quotas_if_stale: { Args: never; Returns: boolean }
+      search_videos_filtered: {
+        Args: {
+          _channel_q?: string
+          _classification?: string
+          _keyword_q?: string
+          _limit?: number
+          _offset?: number
+          _title_q?: string
+        }
+        Returns: {
+          id: string
+          total_count: number
+        }[]
+      }
     }
     Enums: {
       app_role: "super_admin" | "admin" | "manager" | "analyst" | "viewer"
