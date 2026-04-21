@@ -2,6 +2,13 @@
 // Single source of truth for per-key quota tracking, rotation, and retry.
 
 export async function getAvailableApiKeys(supabase: any, count: number) {
+  // Self-healing: reset quotas if they're stale (pg_cron may not be running).
+  try {
+    await supabase.rpc("reset_daily_quotas_if_stale");
+  } catch (e) {
+    console.error("[getAvailableApiKeys] reset_daily_quotas_if_stale failed:", e);
+  }
+
   const { data, error } = await supabase
     .from("youtube_api_keys")
     .select("id, api_key, quota_used_today, daily_quota_limit")
