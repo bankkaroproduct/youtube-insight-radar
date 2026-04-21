@@ -49,13 +49,19 @@ async function processChannel(
     : Number(channel.youtube_total_videos);
   let uploadsPlaylistId: string | null = null;
   try {
-    const chParams = new URLSearchParams({
-      part: "statistics,contentDetails",
-      id: channelId,
-      key: currentKey.api_key,
-    });
-    const chResp = await fetch(`https://www.googleapis.com/youtube/v3/channels?${chParams}`);
-    if (chResp.ok) {
+    const buildChannelsUrl = (apiKey: string) => {
+      const chParams = new URLSearchParams({
+        part: "statistics,contentDetails",
+        id: channelId,
+        key: apiKey,
+      });
+      return `https://www.googleapis.com/youtube/v3/channels?${chParams}`;
+    };
+    const { resp: chResp, key: rotatedKey, exhausted } = await fetchYouTubeWithRotation(
+      supabase, buildChannelsUrl, currentKey, quotaCache,
+    );
+    currentKey = rotatedKey;
+    if (!exhausted && chResp) {
       await incrementQuota(supabase, currentKey.id, 1, quotaCache);
       const chData = await chResp.json();
       const item = chData?.items?.[0];
@@ -115,31 +121,24 @@ async function processChannel(
   }
 
   while (pagesFetched < maxPages && videoRecordsById.size < missingVideos) {
-    const params = new URLSearchParams({
-      part: "contentDetails",
-      playlistId: uploadsPlaylistId,
-      maxResults: "50",
-      key: currentKey.api_key,
-    });
-    if (nextPageToken) params.set("pageToken", nextPageToken);
+    const tokenForPage = nextPageToken;
+    const buildPlaylistUrl = (apiKey: string) => {
+      const params = new URLSearchParams({
+        part: "contentDetails",
+        playlistId: uploadsPlaylistId!,
+        maxResults: "50",
+        key: apiKey,
+      });
+      if (tokenForPage) params.set("pageToken", tokenForPage);
+      return `https://www.googleapis.com/youtube/v3/playlistItems?${params}`;
+    };
 
-    const resp = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?${params}`);
-
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({}));
-      const reason = body?.error?.errors?.[0]?.reason;
-      if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
-        await markKeyExhausted(supabase, currentKey.id);
-        const replacements = await getAvailableApiKeys(supabase, 1);
-        if (replacements.length > 0) {
-          currentKey = replacements[0];
-          quotaCache.set(currentKey.id, currentKey.quota_used_today);
-          apiKeys.push(currentKey);
-          continue;
-        }
-        throw new Error("All API keys exhausted");
-      }
-      console.error(`playlistItems failed for channel ${channelId}: ${body?.error?.message}`);
+    const { resp, key: rotatedKey, exhausted } = await fetchYouTubeWithRotation(
+      supabase, buildPlaylistUrl, currentKey, quotaCache,
+    );
+    currentKey = rotatedKey;
+    if (exhausted || !resp) {
+      console.log(`[fetch-channel-videos] All keys exhausted for channel ${channelId}, persisting partial results`);
       break;
     }
 
@@ -157,16 +156,22 @@ async function processChannel(
       continue;
     }
 
-    const detailParams = new URLSearchParams({
-      part: "snippet,statistics,contentDetails",
-      id: pageVideoIds.join(","),
-      key: currentKey.api_key,
-    });
+    const buildDetailUrl = (apiKey: string) => {
+      const detailParams = new URLSearchParams({
+        part: "snippet,statistics,contentDetails",
+        id: pageVideoIds.join(","),
+        key: apiKey,
+      });
+      return `https://www.googleapis.com/youtube/v3/videos?${detailParams}`;
+    };
 
-    const detailResp = await fetch(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`);
-    if (!detailResp.ok) {
-      if (!nextPageToken) break;
-      continue;
+    const { resp: detailResp, key: detailRotatedKey, exhausted: detailExhausted } = await fetchYouTubeWithRotation(
+      supabase, buildDetailUrl, currentKey, quotaCache,
+    );
+    currentKey = detailRotatedKey;
+    if (detailExhausted || !detailResp) {
+      console.log(`[fetch-channel-videos] All keys exhausted on videos.list for ${channelId}, persisting partial results`);
+      break;
     }
 
     await incrementQuota(supabase, currentKey.id, 1, quotaCache);
