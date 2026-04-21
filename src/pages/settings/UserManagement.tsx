@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { UserCog } from "lucide-react";
@@ -57,6 +58,27 @@ export default function UserManagement() {
     }
   };
 
+  const toggleActive = async (userId: string, newActive: boolean) => {
+    const { error } = await supabase
+      .from("user_profiles")
+      .update({ is_active: newActive })
+      .eq("user_id", userId);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    try {
+      await supabase.rpc("log_audit" as any, {
+        _action: "user_active_toggled",
+        _target_type: "user_profiles",
+        _target_id: userId,
+        _details: { is_active: newActive },
+      } as any);
+    } catch { /* silent */ }
+    toast.success(`User ${newActive ? "activated" : "deactivated"}`);
+    fetchUsers();
+  };
+
   if (!isAdmin) {
     return (
       <div className="flex items-center justify-center h-64 text-muted-foreground">
@@ -92,54 +114,77 @@ export default function UserManagement() {
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Active</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell className="font-medium">{user.full_name || "—"}</TableCell>
-                    <TableCell>{user.email}</TableCell>
-                    <TableCell>
-                      {currentUser?.id === user.user_id ? (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="inline-block">
-                                <Select value={user.roles[0] || "viewer"} disabled>
-                                  <SelectTrigger className="w-36" disabled>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                </Select>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>You cannot change your own role</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      ) : (
-                        <Select
-                          value={user.roles[0] || "viewer"}
-                          onValueChange={(v) => updateRole(user.user_id, user.roles, v as AppRole)}
-                        >
-                          <SelectTrigger className="w-36">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {Constants.public.Enums.app_role.map((role) => (
-                              <SelectItem key={role} value={role}>
-                                {role.replace("_", " ")}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={user.is_active ? "default" : "secondary"}>
-                        {user.is_active ? "Active" : "Inactive"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {users.map((user) => {
+                  const isSelf = currentUser?.id === user.user_id;
+                  return (
+                    <TableRow key={user.id}>
+                      <TableCell className="font-medium">{user.full_name || "—"}</TableCell>
+                      <TableCell>{user.email}</TableCell>
+                      <TableCell>
+                        {isSelf ? (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-block">
+                                  <Select value={user.roles[0] || "viewer"} disabled>
+                                    <SelectTrigger className="w-36" disabled>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                  </Select>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>You cannot change your own role</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <Select
+                            value={user.roles[0] || "viewer"}
+                            onValueChange={(v) => updateRole(user.user_id, user.roles, v as AppRole)}
+                          >
+                            <SelectTrigger className="w-36">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Constants.public.Enums.app_role.map((role) => (
+                                <SelectItem key={role} value={role}>
+                                  {role.replace("_", " ")}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={user.is_active ? "default" : "secondary"}>
+                          {user.is_active ? "Active" : "Inactive"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {isSelf ? (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-block">
+                                  <Switch checked={user.is_active} disabled />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>You cannot deactivate yourself</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <Switch
+                            checked={user.is_active}
+                            onCheckedChange={(v) => toggleActive(user.user_id, v)}
+                          />
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

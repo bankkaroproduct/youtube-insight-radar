@@ -1,11 +1,9 @@
-import { useState, useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { AppLayout } from "@/components/AppLayout";
-import { checkIpAccess } from "@/hooks/useIpWhitelist";
 import { Shield } from "lucide-react";
 import Auth from "@/pages/Auth";
 import ForgotPassword from "@/pages/ForgotPassword";
@@ -50,22 +48,7 @@ function IpBlockedScreen({ ip, error }: { ip: string; error?: boolean }) {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { session, isLoading, hasRole } = useAuth();
-  const isSuperAdmin = hasRole("super_admin");
-  const [ipCheck, setIpCheck] = useState<{ checked: boolean; allowed: boolean; ip: string; error?: boolean }>({
-    checked: false, allowed: true, ip: "",
-  });
-
-  useEffect(() => {
-    if (!session) return;
-    if (isSuperAdmin) {
-      setIpCheck({ checked: true, allowed: true, ip: "bypassed" });
-      return;
-    }
-    checkIpAccess().then((res) => {
-      setIpCheck({ checked: true, allowed: res.allowed, ip: res.ip, error: res.error });
-    });
-  }, [session, isSuperAdmin]);
+  const { session, isLoading, ipCheck } = useAuth();
 
   if (isLoading) return null;
   if (!session) return <Navigate to="/auth" replace />;
