@@ -126,8 +126,10 @@ export type Database = {
           retailer_names: string[] | null
           retailer_via_affiliate_counts: Json | null
           retailer_video_counts: Json | null
+          scanned_at_youtube_total: number | null
           subscriber_count: number | null
           total_videos_fetched: number | null
+          uploads_fully_scanned_at: string | null
           youtube_category: string | null
           youtube_total_videos: number | null
         }
@@ -158,8 +160,10 @@ export type Database = {
           retailer_names?: string[] | null
           retailer_via_affiliate_counts?: Json | null
           retailer_video_counts?: Json | null
+          scanned_at_youtube_total?: number | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
+          uploads_fully_scanned_at?: string | null
           youtube_category?: string | null
           youtube_total_videos?: number | null
         }
@@ -190,8 +194,10 @@ export type Database = {
           retailer_names?: string[] | null
           retailer_via_affiliate_counts?: Json | null
           retailer_video_counts?: Json | null
+          scanned_at_youtube_total?: number | null
           subscriber_count?: number | null
           total_videos_fetched?: number | null
+          uploads_fully_scanned_at?: string | null
           youtube_category?: string | null
           youtube_total_videos?: number | null
         }
