@@ -119,29 +119,34 @@ async function processChannel(
     return { videosInserted: 0, youtubeTotal };
   }
 
-  // Step 2: Page through search results until we collect the missing non-Shorts videos.
+  // Step 2: Page through the channel's uploads playlist (cheap: 1 unit/page, returns all uploads
+  // in reverse-chronological order) until we collect enough non-Short videos.
   const videoRecordsById = new Map<string, any>();
   const videoSnippets = new Map<string, any>();
   const seenVideoIds = new Set<string>(existingVideoIds);
   let nextPageToken: string | null = null;
-  let searchPagesFetched = 0;
-  const maxSearchPages = 12;
+  let pagesFetched = 0;
+  const maxPages = 25; // 25 pages × 50 = up to 1250 uploads inspected per invocation
 
-  while (searchPagesFetched < maxSearchPages && videoRecordsById.size < missingVideos) {
+  if (!uploadsPlaylistId) {
+    console.error(`No uploads playlist id for channel ${channelId}`);
+    keyIndex.val++;
+    return { videosInserted: 0, youtubeTotal };
+  }
+
+  while (pagesFetched < maxPages && videoRecordsById.size < missingVideos) {
     const params = new URLSearchParams({
-      part: "snippet",
-      channelId,
+      part: "contentDetails",
+      playlistId: uploadsPlaylistId,
       maxResults: "50",
-      order: "date",
-      type: "video",
       key: currentKey.api_key,
     });
     if (nextPageToken) params.set("pageToken", nextPageToken);
 
-    const resp = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
+    const resp = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?${params}`);
 
     if (!resp.ok) {
-      const body = await resp.json();
+      const body = await resp.json().catch(() => ({}));
       const reason = body?.error?.errors?.[0]?.reason;
       if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
         await markKeyExhausted(supabase, currentKey.id);
@@ -154,18 +159,18 @@ async function processChannel(
         }
         throw new Error("All API keys exhausted");
       }
-      console.error(`Search failed for channel ${channelId}: ${body?.error?.message}`);
-      return { videosInserted: 0, youtubeTotal };
+      console.error(`playlistItems failed for channel ${channelId}: ${body?.error?.message}`);
+      break;
     }
 
-    await incrementQuota(supabase, currentKey.id, 100, quotaCache);
-    const searchData = await resp.json();
-    const pageVideoIds = (searchData.items || [])
-      .map((item: any) => item.id?.videoId)
-      .filter((videoId: string | undefined) => Boolean(videoId) && !seenVideoIds.has(videoId));
+    await incrementQuota(supabase, currentKey.id, 1, quotaCache);
+    const playlistData = await resp.json();
+    const pageVideoIds = (playlistData.items || [])
+      .map((item: any) => item.contentDetails?.videoId)
+      .filter((vid: string | undefined) => Boolean(vid) && !seenVideoIds.has(vid));
 
-    nextPageToken = searchData.nextPageToken || null;
-    searchPagesFetched++;
+    nextPageToken = playlistData.nextPageToken || null;
+    pagesFetched++;
 
     if (pageVideoIds.length === 0) {
       if (!nextPageToken) break;
