@@ -813,6 +813,14 @@ export type Database = {
           video_count: number
         }[]
       }
+      get_video_links_stats: {
+        Args: { video_ids?: string[] }
+        Returns: {
+          total: number
+          unique_platforms: number
+          unique_retailers: number
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
