@@ -11,7 +11,7 @@ export async function getAvailableApiKeys(supabase: any, count: number) {
 
   const { data, error } = await supabase
     .from("youtube_api_keys")
-    .select("id, api_key, quota_used_today, daily_quota_limit")
+    .select("id, api_key_last_4, quota_used_today, daily_quota_limit")
     .eq("is_active", true)
     .or("last_test_status.is.null,last_test_status.neq.restricted")
     .or("daily_quota_limit.eq.0,quota_used_today.lt.daily_quota_limit")
@@ -75,6 +75,28 @@ export async function incrementQuota(
   }).eq("id", keyId);
 }
 
+// Lazy decryption cache: keyId -> raw API key. Lives for the lifetime of the
+// edge function instance, so we don't re-decrypt on every page.
+const rawKeyCache = new Map<string, string>();
+
+export async function getRawApiKey(supabase: any, keyId: string): Promise<string | null> {
+  const cached = rawKeyCache.get(keyId);
+  if (cached) return cached;
+  const secret = Deno.env.get("API_KEY_ENCRYPTION_KEY");
+  if (!secret) {
+    console.error("[getRawApiKey] API_KEY_ENCRYPTION_KEY not set");
+    return null;
+  }
+  const { data, error } = await supabase.rpc("get_decrypted_api_key", { _key_id: keyId, _secret: secret });
+  if (error || !data) {
+    console.error(`[getRawApiKey] decrypt failed for ${keyId}:`, error);
+    return null;
+  }
+  const raw = String(data);
+  rawKeyCache.set(keyId, raw);
+  return raw;
+}
+
 // Wrapper: call YouTube API with rotation + retry on transient errors.
 export async function fetchYouTubeWithRotation(
   supabase: any,
@@ -87,9 +109,18 @@ export async function fetchYouTubeWithRotation(
   const backoffs = [500, 1500];
 
   while (true) {
+    const rawKey = await getRawApiKey(supabase, key.id);
+    if (!rawKey) {
+      const next = await rotateKey(supabase, key, "invalid", quotaCache);
+      if (!next) return { resp: null, key, exhausted: true };
+      key = next;
+      attempt = 0;
+      continue;
+    }
+
     let resp: Response;
     try {
-      resp = await fetch(url(key.api_key));
+      resp = await fetch(url(rawKey));
     } catch (netErr) {
       console.error(`[fetchYouTubeWithRotation] Network error on key ${key.id}:`, netErr);
       if (attempt < backoffs.length) {
