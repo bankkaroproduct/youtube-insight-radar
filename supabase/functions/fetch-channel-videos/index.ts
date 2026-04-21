@@ -65,14 +65,16 @@ async function processChannel(
   const channelId = channel.channel_id;
   let currentKey = apiKeys[keyIndex.val % apiKeys.length];
 
-  // Step 1: Get the true total video count from channels.list (statistics.videoCount).
-  // YouTube's search.list pageInfo.totalResults is an estimate and is wildly inaccurate.
+  // Step 1: Get the true total video count AND the uploads playlist id.
+  // The uploads playlist is the authoritative ordered list of all channel uploads —
+  // far more reliable than search.list, which only returns a recent slice.
   let youtubeTotal: number | null = channel.youtube_total_videos == null
     ? null
     : Number(channel.youtube_total_videos);
+  let uploadsPlaylistId: string | null = null;
   try {
     const chParams = new URLSearchParams({
-      part: "statistics",
+      part: "statistics,contentDetails",
       id: channelId,
       key: currentKey.api_key,
     });
@@ -80,8 +82,10 @@ async function processChannel(
     if (chResp.ok) {
       await incrementQuota(supabase, currentKey.id, 1, quotaCache);
       const chData = await chResp.json();
-      const vc = chData?.items?.[0]?.statistics?.videoCount;
+      const item = chData?.items?.[0];
+      const vc = item?.statistics?.videoCount;
       if (vc != null) youtubeTotal = parseInt(String(vc)) || 0;
+      uploadsPlaylistId = item?.contentDetails?.relatedPlaylists?.uploads || null;
     }
   } catch (e) {
     console.error(`channels.list failed for ${channelId}:`, e);
@@ -106,38 +110,47 @@ async function processChannel(
   }
 
   if (missingVideos === 0) {
-    // Sync stale total_videos_fetched even when nothing new to fetch
+    // Sync stale total_videos_fetched even when nothing new to fetch.
+    // Bump last_analyzed_at so the backfill rotation moves to the next channel.
     await supabase
       .from("channels")
-      .update({ total_videos_fetched: existingVideoIds.size })
+      .update({
+        total_videos_fetched: existingVideoIds.size,
+        last_analyzed_at: new Date().toISOString(),
+      })
       .eq("channel_id", channelId);
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
 
-  // Step 2: Page through search results until we collect the missing non-Shorts videos.
+  // Step 2: Page through the channel's uploads playlist (cheap: 1 unit/page, returns all uploads
+  // in reverse-chronological order) until we collect enough non-Short videos.
   const videoRecordsById = new Map<string, any>();
   const videoSnippets = new Map<string, any>();
   const seenVideoIds = new Set<string>(existingVideoIds);
   let nextPageToken: string | null = null;
-  let searchPagesFetched = 0;
-  const maxSearchPages = 12;
+  let pagesFetched = 0;
+  const maxPages = 25; // 25 pages × 50 = up to 1250 uploads inspected per invocation
 
-  while (searchPagesFetched < maxSearchPages && videoRecordsById.size < missingVideos) {
+  if (!uploadsPlaylistId) {
+    console.error(`No uploads playlist id for channel ${channelId}`);
+    keyIndex.val++;
+    return { videosInserted: 0, youtubeTotal };
+  }
+
+  while (pagesFetched < maxPages && videoRecordsById.size < missingVideos) {
     const params = new URLSearchParams({
-      part: "snippet",
-      channelId,
+      part: "contentDetails",
+      playlistId: uploadsPlaylistId,
       maxResults: "50",
-      order: "date",
-      type: "video",
       key: currentKey.api_key,
     });
     if (nextPageToken) params.set("pageToken", nextPageToken);
 
-    const resp = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
+    const resp = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?${params}`);
 
     if (!resp.ok) {
-      const body = await resp.json();
+      const body = await resp.json().catch(() => ({}));
       const reason = body?.error?.errors?.[0]?.reason;
       if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
         await markKeyExhausted(supabase, currentKey.id);
@@ -150,18 +163,18 @@ async function processChannel(
         }
         throw new Error("All API keys exhausted");
       }
-      console.error(`Search failed for channel ${channelId}: ${body?.error?.message}`);
-      return { videosInserted: 0, youtubeTotal };
+      console.error(`playlistItems failed for channel ${channelId}: ${body?.error?.message}`);
+      break;
     }
 
-    await incrementQuota(supabase, currentKey.id, 100, quotaCache);
-    const searchData = await resp.json();
-    const pageVideoIds = (searchData.items || [])
-      .map((item: any) => item.id?.videoId)
-      .filter((videoId: string | undefined) => Boolean(videoId) && !seenVideoIds.has(videoId));
+    await incrementQuota(supabase, currentKey.id, 1, quotaCache);
+    const playlistData = await resp.json();
+    const pageVideoIds = (playlistData.items || [])
+      .map((item: any) => item.contentDetails?.videoId)
+      .filter((vid: string | undefined) => Boolean(vid) && !seenVideoIds.has(vid));
 
-    nextPageToken = searchData.nextPageToken || null;
-    searchPagesFetched++;
+    nextPageToken = playlistData.nextPageToken || null;
+    pagesFetched++;
 
     if (pageVideoIds.length === 0) {
       if (!nextPageToken) break;
@@ -256,7 +269,10 @@ async function processChannel(
     .eq("channel_id", channelId);
   await supabase
     .from("channels")
-    .update({ total_videos_fetched: newTotal ?? 0 })
+    .update({
+      total_videos_fetched: newTotal ?? 0,
+      last_analyzed_at: new Date().toISOString(),
+    })
     .eq("channel_id", channelId);
 
   keyIndex.val++;
@@ -316,10 +332,14 @@ Deno.serve(async (req) => {
       : limit;
 
     // Avoid PostgREST integer parsing issues by fetching an ordered window and filtering counts in-memory.
+    // Secondary sort by last_analyzed_at (nulls first) so backfill rotates through ALL underfilled channels
+    // instead of repeatedly re-selecting the same leading subset of tied counts.
     const { data: rawChannels, error: chErr } = await supabase
       .from("channels")
-      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos")
+      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, last_analyzed_at")
       .order("total_videos_fetched", { ascending: needsVideoCountFilter })
+      .order("last_analyzed_at", { ascending: true, nullsFirst: true })
+      .order("channel_id", { ascending: true })
       .limit(selectionWindow);
 
     if (chErr) throw chErr;
