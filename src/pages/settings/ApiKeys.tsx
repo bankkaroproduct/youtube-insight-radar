@@ -6,6 +6,7 @@ import { useApiKeys } from "@/hooks/useApiKeys";
 import { AddKeysDialog } from "@/components/api-keys/AddKeysDialog";
 import { ApiKeyStatsCards } from "@/components/api-keys/ApiKeyStatsCards";
 import { ApiKeysTable } from "@/components/api-keys/ApiKeysTable";
+import { RotationSummaryBanner } from "@/components/api-keys/RotationSummaryBanner";
 import * as XLSX from "xlsx";
 
 export default function ApiKeys() {
@@ -52,6 +53,13 @@ export default function ApiKeys() {
       </div>
 
       <ApiKeyStatsCards {...stats} />
+
+      <RotationSummaryBanner
+        activeCount={stats.activeCount}
+        total={stats.total}
+        remainingCallsToday={stats.remainingCallsToday}
+        nextResetAt={stats.nextResetAt}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <AddKeysDialog onAdd={(k) => addKeys.mutate(k)} isPending={addKeys.isPending} />
