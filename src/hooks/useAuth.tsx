@@ -47,9 +47,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ]);
       if (profileRes.error) console.warn("[useAuth] profile query error", profileRes.error);
       if (rolesRes.error) console.warn("[useAuth] roles query error", rolesRes.error);
+
+      let rolesData = rolesRes.data ?? [];
+      // Retry once if roles came back empty without error (RLS race during initial JWT activation).
+      if (!rolesRes.error && rolesData.length === 0) {
+        await new Promise((r) => setTimeout(r, 400));
+        const retry = await supabase.from("user_roles").select("role").eq("user_id", userId);
+        if (!retry.error && retry.data && retry.data.length > 0) {
+          rolesData = retry.data;
+        }
+      }
+
       setProfile(profileRes.data ?? null);
-      const newRoles = rolesRes.data?.map((r) => r.role) ?? [];
-      console.log("[useAuth] loaded roles:", newRoles, "for user", userId);
+      const newRoles = (rolesData.map((r) => r.role) ?? []) as AppRole[];
       setRoles(newRoles);
       rolesRef.current = newRoles;
       return { profile: profileRes.data, roles: newRoles };
