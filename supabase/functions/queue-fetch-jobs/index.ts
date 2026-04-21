@@ -188,9 +188,10 @@ Deno.serve(async (req) => {
       success: true, 
       queued: freshJobs.length, 
       skipped: skippedCount,
+      cached_tagged: cachedTagged,
       batches: splitCount,
       message: skippedCount > 0 
-        ? `Queued ${freshJobs.length} keyword(s), skipped ${skippedCount} (recently fetched).${splitCount > 1 ? ` Split into ${splitCount} batches.` : ''}`
+        ? `Queued ${freshJobs.length} keyword(s), skipped ${skippedCount} (cached, ${cachedTagged} tags created).${splitCount > 1 ? ` Split into ${splitCount} batches.` : ''}`
         : `Queued ${freshJobs.length} keyword(s).${splitCount > 1 ? ` Split into ${splitCount} batches.` : ''}`
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

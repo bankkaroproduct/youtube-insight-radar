@@ -78,6 +78,7 @@ export default function Keywords() {
 
     let totalQueued = 0;
     let totalSkipped = 0;
+    let totalCachedTagged = 0;
 
     try {
       for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
@@ -110,11 +111,13 @@ export default function Keywords() {
 
         totalQueued += result.queued || 0;
         totalSkipped += result.skipped || 0;
+        totalCachedTagged += result.cached_tagged || 0;
       }
 
       const parts: string[] = [];
       if (totalQueued > 0) parts.push(`Queued ${totalQueued} keyword(s)`);
       if (totalSkipped > 0) parts.push(`${totalSkipped} skipped (recently fetched)`);
+      if (totalCachedTagged > 0) parts.push(`${totalCachedTagged} video tags created from cache`);
       if (batches.length > 1) parts.push(`split into ${batches.length} batches`);
       toast.success(parts.join(". ") || "Done");
       setSelectedIds(new Set());
