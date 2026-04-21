@@ -793,7 +793,6 @@ export type Database = {
       }
       youtube_api_keys: {
         Row: {
-          api_key: string
           api_key_encrypted: string | null
           api_key_last_4: string | null
           created_at: string
@@ -808,7 +807,6 @@ export type Database = {
           quota_used_today: number
         }
         Insert: {
-          api_key: string
           api_key_encrypted?: string | null
           api_key_last_4?: string | null
           created_at?: string
@@ -823,7 +821,6 @@ export type Database = {
           quota_used_today?: number
         }
         Update: {
-          api_key?: string
           api_key_encrypted?: string | null
           api_key_last_4?: string | null
           created_at?: string
@@ -844,7 +841,6 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      backfill_encrypt_api_keys: { Args: { _secret: string }; Returns: number }
       get_affiliate_classification_stats: {
         Args: never
         Returns: {
