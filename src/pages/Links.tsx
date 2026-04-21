@@ -643,7 +643,7 @@ function ProcessingTab() {
             <CardContent className="pt-4 pb-3 px-4">
               <p className="text-sm text-muted-foreground">{s.label}</p>
               <p className={`text-2xl font-bold ${s.danger && stats.failed > 0 ? "text-destructive" : ""}`}>
-                {loading ? "..." : s.value.toLocaleString()}
+                {!statsLoaded ? "..." : s.value.toLocaleString()}
               </p>
             </CardContent>
           </Card>
