@@ -29,7 +29,12 @@ class LinkProcessingService {
 
   constructor() {
     this.loadState();
-    this.snapshot = { running: this.running, logs: this.logs, startedAt: this.startedAt };
+    this.snapshot = {
+      running: this.running,
+      logs: this.logs,
+      startedAt: this.startedAt,
+      lastBatchCompletedAt: this.lastBatchCompletedAt,
+    };
   }
 
   subscribe(fn: Listener) {
