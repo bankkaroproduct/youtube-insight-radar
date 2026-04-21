@@ -17,11 +17,13 @@ export function useDashboard() {
   const [affiliates, setAffiliates] = useState<AffiliateSlice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     setIsLoading(true);
+    setError(null);
     try {
-      const [kw, vids, chs, lks, recentJobs, affClassifications] = await Promise.all([
+      const results = await Promise.allSettled([
         supabase.from("keywords_search_runs").select("id", { count: "exact", head: true }),
         supabase.from("videos").select("id", { count: "exact", head: true }),
         supabase.from("channels").select("id", { count: "exact", head: true }).gt("total_videos_fetched", 0),
@@ -34,20 +36,32 @@ export function useDashboard() {
           .limit(8),
         supabase.rpc("get_affiliate_classification_stats"),
       ]);
+
+      const [kw, vids, chs, lks, recentJobs, aff] = results;
+
       setCounts({
-        keywords: kw.count ?? 0,
-        videos: vids.count ?? 0,
-        channels: chs.count ?? 0,
-        links: lks.count ?? 0,
+        keywords: kw.status === "fulfilled" ? (kw.value as any).count ?? 0 : 0,
+        videos: vids.status === "fulfilled" ? (vids.value as any).count ?? 0 : 0,
+        channels: chs.status === "fulfilled" ? (chs.value as any).count ?? 0 : 0,
+        links: lks.status === "fulfilled" ? (lks.value as any).count ?? 0 : 0,
       });
-      setRecent((recentJobs.data as RecentJob[]) ?? []);
-      setAffiliates(
-        ((affClassifications.data as any[]) ?? []).map((r) => ({
-          name: r.classification || "NEUTRAL",
-          count: Number(r.count),
-        })),
-      );
+      if (recentJobs.status === "fulfilled") {
+        setRecent(((recentJobs.value as any).data as RecentJob[]) ?? []);
+      }
+      if (aff.status === "fulfilled") {
+        setAffiliates(
+          (((aff.value as any).data as any[]) ?? []).map((r) => ({
+            name: r.classification || "NEUTRAL",
+            count: Number(r.count),
+          })),
+        );
+      }
+
+      const failed = results.filter((r) => r.status === "rejected");
+      if (failed.length > 0) setError(`${failed.length} dashboard widget(s) failed to load`);
       setLastUpdated(new Date());
+    } catch (e: any) {
+      setError(e?.message || "Failed to load dashboard");
     } finally {
       setIsLoading(false);
     }
@@ -57,5 +71,11 @@ export function useDashboard() {
     load();
   }, []);
 
-  return { counts, recent, affiliates, isLoading, lastUpdated, refresh: load };
+  // Auto-refresh every 60s
+  useEffect(() => {
+    const interval = setInterval(load, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return { counts, recent, affiliates, isLoading, lastUpdated, error, refresh: load };
 }

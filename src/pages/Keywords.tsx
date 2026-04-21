@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Download } from "lucide-react";
-import { useKeywords } from "@/hooks/useKeywords";
+import { RefreshCw, Download, ChevronLeft, ChevronRight } from "lucide-react";
+import { useKeywords, KEYWORDS_PAGE_SIZE, type KeywordFilters as KeywordFiltersType, defaultKeywordFilters } from "@/hooks/useKeywords";
 import { useFetchJobs } from "@/hooks/useFetchJobs";
 import { useAuth } from "@/hooks/useAuth";
 import { AddKeywordDialog } from "@/components/keywords/AddKeywordDialog";
@@ -19,12 +19,20 @@ import * as XLSX from "xlsx";
 export default function Keywords() {
   useEffect(() => { document.title = "Keywords | YT Intel"; }, []);
   const { isAdmin } = useAuth();
+  const [filters, setFilters] = useState<KeywordFiltersType>(defaultKeywordFilters);
+  const [page, setPage] = useState(0);
+
+  // Reset to first page on filter change
+  useEffect(() => { setPage(0); }, [filters]);
+
   const {
-    keywords, categories, filters, setFilters, clearFilters,
+    keywords, totalCount, categories,
     isLoading, addKeyword, addKeywordsBulk, deleteKeyword,
     refresh, userProfiles, sourceFiles, keywordStats,
-  } = useKeywords();
+  } = useKeywords(filters, page);
   const { jobs, killAll, clearFinished, retryJob } = useFetchJobs();
+
+  const clearFilters = () => setFilters(defaultKeywordFilters);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [fetchSettings, setFetchSettings] = useState<FetchSettings>({ orderBy: "relevance", publishedAfter: undefined });
@@ -63,7 +71,6 @@ export default function Keywords() {
 
     const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/queue-fetch-jobs`;
 
-    // Split into batches of MAX_KEYWORDS_PER_BATCH
     const batches: typeof selected[] = [];
     for (let i = 0; i < selected.length; i += MAX_KEYWORDS_PER_BATCH) {
       batches.push(selected.slice(i, i + MAX_KEYWORDS_PER_BATCH));
@@ -129,17 +136,22 @@ export default function Keywords() {
     XLSX.writeFile(wb, `keywords_export_${format(new Date(), "yyyyMMdd")}.xlsx`);
   };
 
+  const totalPages = Math.max(1, Math.ceil(totalCount / KEYWORDS_PAGE_SIZE));
+  const hasMore = (page + 1) * KEYWORDS_PAGE_SIZE < totalCount;
+
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Keywords</h1>
-          <p className="text-muted-foreground mt-1">Manage search keywords and trigger video discovery.</p>
+          <p className="text-muted-foreground mt-1">
+            Showing {totalCount === 0 ? 0 : page * KEYWORDS_PAGE_SIZE + 1}–{Math.min((page + 1) * KEYWORDS_PAGE_SIZE, totalCount)} of {totalCount.toLocaleString()} keywords.
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={refresh}><RefreshCw className="mr-2 h-4 w-4" /> Refresh</Button>
-          <Button variant="outline" size="sm" onClick={exportExcel}><Download className="mr-2 h-4 w-4" /> Export</Button>
+          <Button variant="outline" size="sm" onClick={exportExcel}><Download className="mr-2 h-4 w-4" /> Export (page)</Button>
           {isAdmin && <AddKeywordDialog onAdd={addKeyword} />}
         </div>
       </div>
@@ -173,6 +185,23 @@ export default function Keywords() {
         isAdmin={isAdmin}
         keywordStats={keywordStats}
       />
+
+      {/* Pagination */}
+      {totalCount > 0 && (
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-sm text-muted-foreground">
+            Page {page + 1} of {totalPages}
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled={page === 0 || isLoading} onClick={() => setPage(p => Math.max(0, p - 1))}>
+              <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+            </Button>
+            <Button variant="outline" size="sm" disabled={!hasMore || isLoading} onClick={() => setPage(p => p + 1)}>
+              Next <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

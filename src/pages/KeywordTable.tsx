@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Download, Hash, CheckCircle2, Clock, Video, Link as LinkIcon } from "lucide-react";
-import { useKeywords } from "@/hooks/useKeywords";
+import { fetchAllKeywordsForAnalytics, type KeywordSearchRun } from "@/hooks/useKeywords";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { useNavigate } from "react-router-dom";
@@ -31,9 +32,10 @@ const statusColors: Record<string, string> = {
 
 export default function KeywordTable() {
   useEffect(() => { document.title = "Keyword Table | YT Intel"; }, []);
-  const { allKeywords, isLoading } = useKeywords();
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
+  const [allKeywords, setAllKeywords] = useState<KeywordSearchRun[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [tableFilters, setTableFilters] = useState({ keyword: "", category: "", source: "", priority: "", status: "", businessAim: "" });
   const [keywordStats, setKeywordStats] = useState<Map<string, { video_count: number; link_count: number }>>(new Map());
   const [uniqueVideoCount, setUniqueVideoCount] = useState(0);
@@ -41,24 +43,32 @@ export default function KeywordTable() {
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   useEffect(() => {
-    async function fetchStats() {
-      const [statsRes, videoCountRes, linkCountRes] = await Promise.all([
-        supabase.rpc("get_keyword_stats"),
-        supabase.from("videos").select("id", { count: "exact", head: true }),
-        supabase.from("video_links").select("id", { count: "exact", head: true }),
-      ]);
-      if (!statsRes.error && statsRes.data) {
-        const map = new Map<string, { video_count: number; link_count: number }>();
-        for (const row of statsRes.data as any[]) {
-          map.set(row.keyword_id, { video_count: Number(row.video_count), link_count: Number(row.link_count) });
+    (async () => {
+      setIsLoading(true);
+      try {
+        const [all, statsRes, videoCountRes, linkCountRes] = await Promise.all([
+          fetchAllKeywordsForAnalytics(),
+          supabase.rpc("get_keyword_stats"),
+          supabase.from("videos").select("id", { count: "exact", head: true }),
+          supabase.from("video_links").select("id", { count: "exact", head: true }),
+        ]);
+        setAllKeywords(all);
+        if (!statsRes.error && statsRes.data) {
+          const map = new Map<string, { video_count: number; link_count: number }>();
+          for (const row of statsRes.data as any[]) {
+            map.set(row.keyword_id, { video_count: Number(row.video_count), link_count: Number(row.link_count) });
+          }
+          setKeywordStats(map);
         }
-        setKeywordStats(map);
+        setUniqueVideoCount(videoCountRes.count ?? 0);
+        setTotalLinkCount(linkCountRes.count ?? 0);
+      } catch (e: any) {
+        toast.error("Failed to load keyword analytics: " + (e?.message || "Unknown error"));
+      } finally {
+        setIsLoading(false);
       }
-      setUniqueVideoCount(videoCountRes.count ?? 0);
-      setTotalLinkCount(linkCountRes.count ?? 0);
-    }
-    fetchStats();
-  }, [allKeywords]);
+    })();
+  }, []);
 
   const filtered = useMemo(() => {
     return allKeywords.filter((k) => {
@@ -129,7 +139,7 @@ export default function KeywordTable() {
           <p className="text-muted-foreground mt-1">Read-only analytics view of all keywords.</p>
         </div>
         {isAdmin && (
-          <Button variant="outline" size="sm" onClick={exportFiltered}>
+          <Button variant="outline" size="sm" onClick={exportFiltered} disabled={isLoading}>
             <Download className="mr-2 h-4 w-4" /> Export
           </Button>
         )}
@@ -210,7 +220,9 @@ export default function KeywordTable() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sortedData.length === 0 ? (
+            {isLoading ? (
+              <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">Loading…</TableCell></TableRow>
+            ) : sortedData.length === 0 ? (
               <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">No keywords found.</TableCell></TableRow>
             ) : sortedData.map((k: any) => {
               const kStats = keywordStats.get(k.id);
