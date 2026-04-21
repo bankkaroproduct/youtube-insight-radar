@@ -76,24 +76,82 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Check keyword cache - skip keywords fetched in last 24 hours
-    const keywordTexts = jobs.map(j => j.keyword.toLowerCase().trim());
-    const { data: cachedKeywords } = await supabase
-      .from("keyword_cache")
-      .select("keyword")
-      .in("keyword", keywordTexts)
-      .gte("fetched_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    // Check cache by (keyword, order_by, published_after). Freshness window 24h.
+    const freshnessCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const normalizedJobs = jobs.map(j => ({
+      ...j,
+      _cacheKeyword: j.keyword.toLowerCase().trim(),
+      _orderBy: j.orderBy || "relevance",
+      _publishedAfter: j.publishedAfter || null,
+    }));
 
-    const cachedSet = new Set((cachedKeywords || []).map((c: any) => c.keyword));
-    const freshJobs = jobs.filter(j => !cachedSet.has(j.keyword.toLowerCase().trim()));
-    const skippedCount = jobs.length - freshJobs.length;
+    const keywordTexts = [...new Set(normalizedJobs.map(j => j._cacheKeyword))];
+    const { data: cachedRows } = await supabase
+      .from("keyword_cache")
+      .select("keyword, order_by, published_after, video_ids, fetched_at")
+      .in("keyword", keywordTexts)
+      .gte("fetched_at", freshnessCutoff);
+
+    const cacheLookup = new Map<string, any>();
+    for (const r of cachedRows || []) {
+      const key = `${r.keyword}|${r.order_by}|${r.published_after || "null"}`;
+      cacheLookup.set(key, r);
+    }
+
+    const cachedJobs: typeof normalizedJobs = [];
+    const freshJobs: typeof normalizedJobs = [];
+    for (const j of normalizedJobs) {
+      const key = `${j._cacheKeyword}|${j._orderBy}|${j._publishedAfter || "null"}`;
+      const cached = cacheLookup.get(key);
+      if (cached && Array.isArray(cached.video_ids) && cached.video_ids.length > 0) {
+        cachedJobs.push(j);
+      } else {
+        freshJobs.push(j);
+      }
+    }
+
+    // For cached jobs: tag existing videos with the new keyword_id, no YouTube call.
+    let cachedTagged = 0;
+    for (const j of cachedJobs) {
+      if (!j.keyword_id) continue;
+      const key = `${j._cacheKeyword}|${j._orderBy}|${j._publishedAfter || "null"}`;
+      const cached = cacheLookup.get(key);
+      const ytVideoIds: string[] = cached.video_ids;
+
+      const { data: existingVideos } = await supabase
+        .from("videos")
+        .select("id, video_id")
+        .in("video_id", ytVideoIds);
+
+      if (existingVideos && existingVideos.length > 0) {
+        // Preserve cached order as rank by sorting existingVideos by index in ytVideoIds.
+        const orderIndex = new Map<string, number>();
+        ytVideoIds.forEach((vid, idx) => orderIndex.set(vid, idx));
+        const vkRows = existingVideos
+          .map((v) => ({
+            video_id: v.id,
+            keyword_id: j.keyword_id,
+            search_rank: (orderIndex.get(v.video_id) ?? 0) + 1,
+          }));
+        await supabase.from("video_keywords").upsert(vkRows, { onConflict: "video_id,keyword_id" });
+        cachedTagged += vkRows.length;
+      }
+
+      await supabase.from("keywords_search_runs").update({
+        status: "completed",
+        run_date: new Date().toISOString().split("T")[0],
+      }).eq("id", j.keyword_id);
+    }
+
+    const skippedCount = cachedJobs.length;
 
     if (freshJobs.length === 0) {
-      return new Response(JSON.stringify({ 
-        success: true, 
-        queued: 0, 
+      return new Response(JSON.stringify({
+        success: true,
+        queued: 0,
         skipped: skippedCount,
-        message: `All ${skippedCount} keyword(s) were already fetched in the last 24 hours.`
+        cached_tagged: cachedTagged,
+        message: `All ${skippedCount} keyword(s) used cached results. Tagged ${cachedTagged} video-keyword mappings.`,
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
