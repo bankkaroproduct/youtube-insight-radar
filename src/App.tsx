@@ -47,12 +47,20 @@ function IpBlockedScreen({ ip, error }: { ip: string; error?: boolean }) {
   );
 }
 
+function FullscreenLoader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="h-8 w-8 rounded-full border-2 border-muted border-t-primary animate-spin" />
+    </div>
+  );
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { session, isLoading, ipCheck } = useAuth();
 
-  if (isLoading) return null;
+  if (isLoading) return <FullscreenLoader />;
   if (!session) return <Navigate to="/auth" replace />;
-  if (!ipCheck.checked) return null;
+  if (!ipCheck.checked) return <FullscreenLoader />;
   if (!ipCheck.allowed) return <IpBlockedScreen ip={ipCheck.ip} error={ipCheck.error} />;
   return <AppLayout>{children}</AppLayout>;
 }
