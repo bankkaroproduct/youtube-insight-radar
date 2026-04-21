@@ -2,97 +2,68 @@
 
 ## Goal
 
-1. **Auto-scrape channel links** whenever new channel(s) appear — no manual button click.
-2. **Backfill all 1,710 channels to 50 videos each** — every channel must reach 50 videos, except channels whose total YouTube uploads are < 50 (those just get all available).
+In the Full Report export:
 
----
+1. **S6 — Contact Info**: include the scraped channel "More info" links (custom_links), not just URLs from the description, when populating the social-platform columns (Instagram / Facebook / Twitter / WhatsApp / etc.).
+2. **S5 — Channel Deep Data**: classify each channel link's `Affiliate Used` and `Retailer` columns using the `affiliate_patterns` table (same way S2 / S3 video links are classified), instead of always showing blank/N/A.
 
-## Part 1 — Auto-scrape channel links on new channels
+## Changes — `src/services/excelExportService.ts`
 
-**Where channels first get created:** `supabase/functions/fetch-channel-videos/index.ts` upserts into `videos` (which carries `channel_id`), and channels rows are created/updated by downstream `compute-channel-stats`.
+### 1. Build an affiliate-domain map alongside the retailer map
 
-**Change:** Right after `fetch-channel-videos` finishes processing a batch, fire-and-forget a call to `scrape-channel-links` with the same `channel_ids` it just touched (alongside the existing `compute-channel-stats` and `scrape-instagram-profiles` triggers). The scrape function already skips channels with `custom_links_scraped_at` set, so re-runs are cheap.
-
-```ts
-fetch(`${supabaseUrl}/functions/v1/scrape-channel-links`, {
-  method: "POST", headers: triggerHeaders,
-  body: JSON.stringify({ channel_ids: channelIds }),
-}).catch(e => console.error("Failed to trigger scrape-channel-links:", e));
-```
-
-This guarantees: every new channel discovered through a fetch run gets its YouTube "More info" links scraped automatically. The Excel export's existing `ensureChannelLinksScraped` stays as a safety net.
-
----
-
-## Part 2 — Bring every channel to 50 videos
-
-**Current behavior:** `fetch-channel-videos` pulls one page (max 50) per channel per call, and the page loop is hard-capped at `for (let page = 0; page < 1; page++)`. So one invocation = up to 50 newest videos per channel. Good — 50 is the target.
-
-**Problem:** The function only processes `limit` channels per call (default 50, max ~100 before timeout). With 1,710 channels we need a way to march through all of them automatically until each has ≥50 videos OR has hit its YouTube total cap.
-
-### A. New "Backfill to 50" button on Channels page
-
-Add a button next to the existing "Scrape Channel Links" button: **"Backfill to 50 Videos"**.
-
-It loops on the client side, repeatedly calling `fetch-channel-videos` with a filter that targets only under-served channels:
+Currently only `retailerByDomain` is built from `affiliate_patterns` (type='retailer'). Extend it in the same loop to also build `affiliateByDomain` from rows where `type='affiliate_platform'`.
 
 ```ts
-// Pseudocode for the loop
-while (true) {
-  const { data } = await supabase.functions.invoke("fetch-channel-videos", {
-    body: { 
-      limit: 25,
-      backfill_under_50: true,   // NEW flag
-    },
-  });
-  if (!data.channels_processed) break;
-  setProgress(`Processed ${total += data.channels_processed} channels…`);
+const retailerByDomain = new Map<string, string>();
+const affiliateByDomain = new Map<string, string>();
+for (const p of patterns) {
+  if (!p.is_confirmed) continue;
+  const d = p.pattern.replace(/^www\./, "").toLowerCase();
+  if (!d) continue;
+  const t = (p.type || "").toLowerCase();
+  if (t === "retailer") retailerByDomain.set(d, p.name);
+  else if (t === "affiliate_platform") affiliateByDomain.set(d, p.name);
 }
 ```
 
-Progress toast updates after each batch. Stops when the function reports 0 channels processed.
+### 2. `buildSheet5` — classify channel links
 
-### B. Edge function changes (`fetch-channel-videos`)
-
-Add a new request param `backfill_under_50: boolean`. When true, change the channel selection query to:
+- Accept `retailerByDomain` and `affiliateByDomain` as params.
+- For each link's domain, look up affiliate-platform name and retailer name (exact match, then suffix match for subdomains).
+- Populate `Affiliate Used` and `Retailer` columns with the matches (empty string if no match).
+- Also **merge** scraped `custom_links` with description-extracted URLs (deduped) so links from either source appear in S5.
 
 ```ts
-// Channels that haven't reached 50 yet AND whose YouTube total > current count
-// (i.e., more videos still exist on YouTube to fetch)
-query = supabase
-  .from("channels")
-  .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos")
-  .lt("total_videos_fetched", 50)
-  .or("youtube_total_videos.is.null,youtube_total_videos.gt.total_videos_fetched")
-  .order("total_videos_fetched", { ascending: true })
-  .limit(limit);
+const affiliate = lookupByDomain(domain, affiliateByDomain);
+const retailer  = lookupByDomain(domain, retailerByDomain);
+rows.push([...base, `L${idx+1}`, header, url, "N/A", domain || "N/A",
+           affiliate, retailer, social, excluded]);
 ```
 
-Channels where `youtube_total_videos < 50` are still selected once (so we capture whatever they have), but on the next pass they'll be skipped because `total_videos_fetched` will equal `youtube_total_videos` — satisfying the rule "less than 50 is allowed only when YouTube total < 50."
+Add a small helper `lookupByDomain(domain, map)` that handles exact + suffix match (so `shop.haulpack.com` still matches `haulpack.com`).
 
-### C. Concurrency / timeout safety
+### 3. `buildSheet6` — pull socials from scraped links too
 
-Keep `BATCH_SIZE = 5` and `limit = 25` per invocation (≈5 parallel batches × 5 channels). At ~3-5s per channel that's well under the 60s edge timeout. 1,710 channels ÷ 25 = ~70 invocations, fully automated by the client loop.
+Replace the description-only URL list with a deduped union of `custom_links` URLs + description URLs. The `findSocial(["Instagram"])`, `findSocial(["Facebook"])`, etc. logic stays the same — it just now sees the scraped links as well, so a creator's "Instagram" link header (e.g. `instagram.com/username`) ends up in the **Instagram Link** column even when it isn't in the description text.
 
----
+```ts
+const scraped = (ch.custom_links || []).map(l => l.url).filter(Boolean);
+const allUrls = [...new Set([...scraped, ...extractUrls(ch.description)])];
+```
 
-## Files to change
+### 4. Wire it up
 
-1. `supabase/functions/fetch-channel-videos/index.ts`
-   - Add `backfill_under_50` request param.
-   - When true, swap the channel query to the under-50 filter.
-   - Add the `scrape-channel-links` fire-and-forget trigger at the end.
+Pass the new maps to `buildSheet5` in `exportFullReport`.
 
-2. `src/pages/Channels.tsx`
-   - Add **"Backfill to 50 Videos"** button.
-   - Implement the looping handler with progress toast (mirrors the existing scrape-links button pattern).
+## Files touched
 
-No DB migration needed — `custom_links` columns and `youtube_total_videos` already exist.
+- `src/services/excelExportService.ts` (only this file)
 
----
+No DB migration, no edge-function changes, no UI changes.
 
-## Acceptance check
+## Acceptance
 
-- After clicking **Backfill to 50 Videos**, every channel ends up with `total_videos_fetched >= 50` OR `total_videos_fetched == youtube_total_videos` (whichever is lower).
-- New channels discovered by future keyword fetches automatically get their links scraped without any button press.
+- S5 rows with a link domain matching a confirmed retailer in `affiliate_patterns` show the retailer name in **Retailer**.
+- S5 rows with a link domain matching a confirmed affiliate platform show its name in **Affiliate Used**.
+- S6 Instagram / Facebook / Twitter / WhatsApp / Telegram / Snapchat / LinkedIn / YouTube columns get populated from scraped channel links when those URLs aren't in the description.
 
