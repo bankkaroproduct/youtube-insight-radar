@@ -48,6 +48,12 @@ interface KeyData {
   daily_quota_limit: number;
 }
 
+function parseInteger(value: unknown, fallback: number | null): number | null {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
+}
+
 async function processChannel(
   supabase: any,
   channelId: string,
@@ -243,33 +249,35 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     const body = await req.json().catch(() => ({}));
-    const limit = body.limit || 50;
+    const limit = Math.min(Math.max(parseInteger(body.limit, 50) ?? 50, 1), 1000);
     const videosPerChannel = body.videos_per_channel || 50;
-    const minVideos = body.min_videos ?? null;
-    const maxVideos = body.max_videos ?? null;
+    const minVideos = parseInteger(body.min_videos, null);
+    const maxVideos = parseInteger(body.max_videos, null);
     const backfillUnder50 = body.backfill_under_50 === true;
 
-    // Get channels, optionally filtered by total_videos_fetched range
-    let query = supabase
+    const needsVideoCountFilter = backfillUnder50 || minVideos !== null || maxVideos !== null;
+    const selectionWindow = needsVideoCountFilter
+      ? Math.min(Math.max(limit * 20, 200), 1000)
+      : limit;
+
+    // Avoid PostgREST integer parsing issues by fetching an ordered window and filtering counts in-memory.
+    const { data: rawChannels, error: chErr } = await supabase
       .from("channels")
       .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos")
-      .limit(limit);
-
-    if (backfillUnder50) {
-      // Channels under 50 videos fetched. If youtube_total_videos is known and <= fetched,
-      // the YouTube API will simply return what's available (idempotent upsert).
-      query = query
-        .lt("total_videos_fetched", 50)
-        .order("total_videos_fetched", { ascending: true });
-    } else {
-      query = query.order("total_videos_fetched", { ascending: false });
-      if (minVideos !== null) query = query.gte("total_videos_fetched", minVideos);
-      if (maxVideos !== null) query = query.lte("total_videos_fetched", maxVideos);
-    }
-
-    const { data: channels, error: chErr } = await query;
+      .order("total_videos_fetched", { ascending: needsVideoCountFilter })
+      .limit(selectionWindow);
 
     if (chErr) throw chErr;
+    const channels = (rawChannels || [])
+      .filter((channel: any) => {
+        const fetched = Number(channel.total_videos_fetched ?? 0);
+        if (backfillUnder50 && fetched >= 50) return false;
+        if (minVideos !== null && fetched < minVideos) return false;
+        if (maxVideos !== null && fetched > maxVideos) return false;
+        return true;
+      })
+      .slice(0, limit);
+
     if (!channels || channels.length === 0) {
       return new Response(JSON.stringify({ message: "No channels found" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
