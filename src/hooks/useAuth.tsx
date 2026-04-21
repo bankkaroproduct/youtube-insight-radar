@@ -45,8 +45,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         supabase.from("user_profiles").select("*").eq("user_id", userId).maybeSingle(),
         supabase.from("user_roles").select("role").eq("user_id", userId),
       ]);
+      if (profileRes.error) console.warn("[useAuth] profile query error", profileRes.error);
+      if (rolesRes.error) console.warn("[useAuth] roles query error", rolesRes.error);
       setProfile(profileRes.data ?? null);
       const newRoles = rolesRes.data?.map((r) => r.role) ?? [];
+      console.log("[useAuth] loaded roles:", newRoles, "for user", userId);
       setRoles(newRoles);
       rolesRef.current = newRoles;
       return { profile: profileRes.data, roles: newRoles };
