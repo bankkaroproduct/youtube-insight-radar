@@ -56,17 +56,20 @@ function parseInteger(value: unknown, fallback: number | null): number | null {
 
 async function processChannel(
   supabase: any,
-  channelId: string,
+  channel: { channel_id: string; total_videos_fetched?: number | null; youtube_total_videos?: number | null },
   apiKeys: KeyData[],
   keyIndex: { val: number },
   quotaCache: Map<string, number>,
+  videosPerChannel: number,
 ): Promise<{ videosInserted: number; youtubeTotal: number | null }> {
+  const channelId = channel.channel_id;
   let currentKey = apiKeys[keyIndex.val % apiKeys.length];
 
   // Step 1: Get the true total video count from channels.list (statistics.videoCount).
-  // YouTube's search.list pageInfo.totalResults is an estimate and is wildly inaccurate
-  // (often returns small wrong numbers like 13 even for channels with thousands of videos).
-  let youtubeTotal: number | null = null;
+  // YouTube's search.list pageInfo.totalResults is an estimate and is wildly inaccurate.
+  let youtubeTotal: number | null = channel.youtube_total_videos == null
+    ? null
+    : Number(channel.youtube_total_videos);
   try {
     const chParams = new URLSearchParams({
       part: "statistics",
@@ -84,11 +87,33 @@ async function processChannel(
     console.error(`channels.list failed for ${channelId}:`, e);
   }
 
-  // Step 2: Search for latest 50 videos from this channel
-  const allVideoIds: string[] = [];
-  let nextPageToken: string | null = null;
+  const { data: existingVideos } = await supabase
+    .from("videos")
+    .select("video_id")
+    .eq("channel_id", channelId);
 
-  for (let page = 0; page < 1; page++) {
+  const existingVideoIds = new Set((existingVideos || []).map((video: any) => String(video.video_id)));
+  const targetStoredVideos = Math.min(videosPerChannel, youtubeTotal ?? videosPerChannel);
+  const missingVideos = Math.max(targetStoredVideos - existingVideoIds.size, 0);
+
+  if (youtubeTotal !== null) {
+    await supabase.from("channels").update({ youtube_total_videos: youtubeTotal }).eq("channel_id", channelId);
+  }
+
+  if (missingVideos === 0) {
+    keyIndex.val++;
+    return { videosInserted: 0, youtubeTotal };
+  }
+
+  // Step 2: Page through search results until we collect the missing non-Shorts videos.
+  const videoRecordsById = new Map<string, any>();
+  const videoSnippets = new Map<string, any>();
+  const seenVideoIds = new Set<string>(existingVideoIds);
+  let nextPageToken: string | null = null;
+  let searchPagesFetched = 0;
+  const maxSearchPages = 12;
+
+  while (searchPagesFetched < maxSearchPages && videoRecordsById.size < missingVideos) {
     const params = new URLSearchParams({
       part: "snippet",
       channelId,
@@ -110,9 +135,7 @@ async function processChannel(
         if (replacements.length > 0) {
           currentKey = replacements[0];
           quotaCache.set(currentKey.id, currentKey.quota_used_today);
-          // Update in the shared keys array
           apiKeys.push(currentKey);
-          page--;
           continue;
         }
         throw new Error("All API keys exhausted");
@@ -123,47 +146,40 @@ async function processChannel(
 
     await incrementQuota(supabase, currentKey.id, 100, quotaCache);
     const searchData = await resp.json();
-    const items = (searchData.items || []).filter((item: any) => item.id?.videoId);
-    for (const item of items) {
-      if (!allVideoIds.includes(item.id.videoId)) {
-        allVideoIds.push(item.id.videoId);
-      }
-    }
+    const pageVideoIds = (searchData.items || [])
+      .map((item: any) => item.id?.videoId)
+      .filter((videoId: string | undefined) => Boolean(videoId) && !seenVideoIds.has(videoId));
+
     nextPageToken = searchData.nextPageToken || null;
-    if (!nextPageToken) break;
-  }
+    searchPagesFetched++;
 
-  if (allVideoIds.length === 0) {
-    // Still save the youtube total even if no videos found
-    if (youtubeTotal !== null) {
-      await supabase.from("channels").update({ youtube_total_videos: youtubeTotal }).eq("channel_id", channelId);
+    if (pageVideoIds.length === 0) {
+      if (!nextPageToken) break;
+      continue;
     }
-    return { videosInserted: 0, youtubeTotal };
-  }
 
-  // Fetch video details in chunks of 50
-  const videoRecords: any[] = [];
-  const videoSnippets = new Map<string, any>();
-
-  for (let i = 0; i < allVideoIds.length; i += 50) {
-    const chunk = allVideoIds.slice(i, i + 50);
     const detailParams = new URLSearchParams({
       part: "snippet,statistics,contentDetails",
-      id: chunk.join(","),
+      id: pageVideoIds.join(","),
       key: currentKey.api_key,
     });
 
     const detailResp = await fetch(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`);
-    if (!detailResp.ok) continue;
+    if (!detailResp.ok) {
+      if (!nextPageToken) break;
+      continue;
+    }
+
     await incrementQuota(supabase, currentKey.id, 1, quotaCache);
     const detailData = await detailResp.json();
 
     for (const video of (detailData.items || [])) {
+      seenVideoIds.add(String(video.id));
+
       const snippet = video.snippet || {};
       const stats = video.statistics || {};
       const contentDetails = video.contentDetails || {};
 
-      // Filter shorts
       const duration = contentDetails.duration || "";
       const durationMatch = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
       const totalSeconds = durationMatch
@@ -172,7 +188,7 @@ async function processChannel(
       if (totalSeconds > 0 && totalSeconds < 60) continue;
       if ((snippet.title || "").toLowerCase().includes("#shorts")) continue;
 
-      videoRecords.push({
+      videoRecordsById.set(video.id, {
         video_id: video.id,
         keyword_id: null,
         channel_id: snippet.channelId || channelId,
@@ -185,14 +201,20 @@ async function processChannel(
         like_count: parseInt(stats.likeCount || "0"),
         comment_count: parseInt(stats.commentCount || "0"),
       });
-
       videoSnippets.set(video.id, snippet);
+
+      if (videoRecordsById.size >= missingVideos) break;
     }
+
+    if (!nextPageToken) break;
   }
 
-  if (videoRecords.length === 0) return { videosInserted: 0, youtubeTotal };
+  const videoRecords = Array.from(videoRecordsById.values());
+  if (videoRecords.length === 0) {
+    keyIndex.val++;
+    return { videosInserted: 0, youtubeTotal };
+  }
 
-  // Upsert videos
   const { data: insertedVideos } = await supabase
     .from("videos")
     .upsert(videoRecords, { onConflict: "video_id" })
@@ -203,7 +225,6 @@ async function processChannel(
     for (const v of insertedVideos) videoIdMap.set(v.video_id, v.id);
   }
 
-  // Extract and upsert links
   const linkRecords: any[] = [];
   for (const [ytVideoId, snippet] of videoSnippets) {
     const internalId = videoIdMap.get(ytVideoId);
@@ -216,11 +237,6 @@ async function processChannel(
     for (let i = 0; i < linkRecords.length; i += 500) {
       await supabase.from("video_links").upsert(linkRecords.slice(i, i + 500), { onConflict: "video_id,original_url" });
     }
-  }
-
-  // Save youtube_total_videos to the channel
-  if (youtubeTotal !== null) {
-    await supabase.from("channels").update({ youtube_total_videos: youtubeTotal }).eq("channel_id", channelId);
   }
 
   keyIndex.val++;
@@ -324,13 +340,13 @@ Deno.serve(async (req) => {
     const keyIndex = { val: 0 };
     let totalVideos = 0;
     let processedChannels = 0;
-    const BATCH_SIZE = 10;
+    const BATCH_SIZE = backfillUnder50 ? 5 : 10;
     const channelIds = channels.map((c: any) => c.channel_id);
 
     for (let i = 0; i < channelIds.length; i += BATCH_SIZE) {
-      const batch = channelIds.slice(i, i + BATCH_SIZE);
+      const batch = channels.slice(i, i + BATCH_SIZE);
       const results = await Promise.allSettled(
-        batch.map(chId => processChannel(supabase, chId, apiKeys, keyIndex, quotaCache))
+        batch.map((channel: any) => processChannel(supabase, channel, apiKeys, keyIndex, quotaCache, videosPerChannel))
       );
       for (const r of results) {
         if (r.status === "fulfilled") {
