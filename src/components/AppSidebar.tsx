@@ -11,6 +11,7 @@ import {
   UserCog,
   LayoutDashboard,
   Instagram,
+  ScrollText,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -48,6 +49,7 @@ const settingsItems = [
   { title: "User Management", url: "/settings/users", icon: UserCog, adminOnly: true },
   { title: "API Keys", url: "/settings/api-keys", icon: KeyRound, adminOnly: true },
   { title: "IP Whitelist", url: "/settings/ip-whitelist", icon: Shield, adminOnly: true },
+  { title: "Audit Log", url: "/settings/audit-log", icon: ScrollText, adminOnly: true },
 ];
 
 export function AppSidebar() {
