@@ -26,13 +26,6 @@ async function fetchChannelDetails(supabase: any, channelIds: string[], apiKeyDa
   if (channelIds.length === 0) return;
   let apiKeyData = apiKeyDataIn;
   try {
-    // Check rate limit (channels.list = 1 unit)
-    const rlCheck = await checkAndIncrementRateLimit(supabase, "youtube_api", 1);
-    if (!rlCheck.allowed) {
-      console.log("YouTube quota exhausted, skipping channel details fetch");
-      return;
-    }
-
     const buildChannelsUrl = (apiKey: string) => {
       const params = new URLSearchParams({
         part: "snippet,statistics,brandingSettings,topicDetails",
