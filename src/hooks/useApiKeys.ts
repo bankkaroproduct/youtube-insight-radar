@@ -31,17 +31,55 @@ export function useApiKeys() {
   });
 
   const addKeys = useMutation({
-    mutationFn: async (apiKeys: string[]) => {
-      const rows = apiKeys.map((key, i) => ({
-        api_key: key.trim(),
+    mutationFn: async (apiKeys: string[]): Promise<{ insertedIds: string[]; skipped: number }> => {
+      const existing = new Set(keys.map((k) => k.api_key));
+      const trimmed = apiKeys.map((k) => k.trim()).filter(Boolean);
+      const seen = new Set<string>();
+      const fresh: string[] = [];
+      for (const k of trimmed) {
+        if (existing.has(k) || seen.has(k)) continue;
+        seen.add(k);
+        fresh.push(k);
+      }
+      const skipped = trimmed.length - fresh.length;
+      if (fresh.length === 0) {
+        throw new Error("All pasted keys already exist");
+      }
+      const rows = fresh.map((key, i) => ({
+        api_key: key,
         label: `Key #${keys.length + i + 1}`,
       }));
-      const { error } = await supabase.from("youtube_api_keys" as any).insert(rows as any);
+      const { data, error } = await supabase
+        .from("youtube_api_keys" as any)
+        .insert(rows as any)
+        .select("id, api_key");
       if (error) throw error;
+      const insertedIds = ((data as any[]) || []).map((r) => r.id);
+      return { insertedIds, skipped };
     },
-    onSuccess: () => {
+    onSuccess: async ({ insertedIds, skipped }) => {
       queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });
-      toast.success("Keys added successfully");
+      if (skipped > 0) toast.message(`Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`);
+      if (insertedIds.length === 0) return;
+      try {
+        const results = await testKeys(insertedIds);
+        const valid = results.filter((r) => r.status === "valid").length;
+        const invalid = results.filter((r) => r.status === "invalid").length;
+        const restricted = results.filter((r) => r.status === "restricted").length;
+        toast.success(`Added ${insertedIds.length} key${insertedIds.length === 1 ? "" : "s"}: ${valid} valid, ${invalid} invalid, ${restricted} restricted`);
+        if (invalid > 0) {
+          const { data: invalidKeys } = await supabase
+            .from("youtube_api_keys" as any)
+            .select("api_key")
+            .in("id", results.filter((r) => r.status === "invalid").map((r) => r.id));
+          const masked = ((invalidKeys as any[]) || [])
+            .map((k) => `…${(k.api_key as string).slice(-4)}`)
+            .join(", ");
+          if (masked) toast.error(`Invalid keys: ${masked}`);
+        }
+      } catch (e: any) {
+        toast.error(`Auto-test failed: ${e.message}`);
+      }
     },
     onError: (e: Error) => toast.error(e.message),
   });
