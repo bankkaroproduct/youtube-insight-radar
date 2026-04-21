@@ -21,10 +21,24 @@ export function useAffiliatePatterns() {
 
   const fetchPatterns = useCallback(async () => {
     setIsLoading(true);
-    const { data, error } = await supabase
-      .from("affiliate_patterns")
-      .select("*")
-      .order("created_at", { ascending: false });
+    // Page through all rows (Supabase default cap is 1000 per request)
+    const pageSize = 1000;
+    let from = 0;
+    let all: any[] = [];
+    let error: any = null;
+    while (true) {
+      const { data, error: pageError } = await supabase
+        .from("affiliate_patterns")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (pageError) { error = pageError; break; }
+      if (!data || data.length === 0) break;
+      all = all.concat(data);
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    const data = all;
 
     if (error) {
       toast.error("Failed to load patterns");
