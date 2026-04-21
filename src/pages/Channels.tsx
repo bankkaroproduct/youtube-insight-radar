@@ -352,7 +352,7 @@ export default function Channels() {
         </CardHeader>
         <CardContent>
           {isLoading && channels.length === 0 ? (
-            <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
+            <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
           ) : channels.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
               {totalCount === 0 ? "No channels yet. Channels are auto-discovered when videos are fetched." : "No channels match the current filters."}

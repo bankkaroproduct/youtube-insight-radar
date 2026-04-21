@@ -447,11 +447,11 @@ export default function Videos() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
-            <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
-          ) : videos.length === 0 && page === 0 ? (
+          {isLoading && videos.length === 0 ? (
+            <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
+          ) : videos.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
-              No videos yet. Fetch videos by running keyword jobs from the Keywords page.
+              {totalCount === 0 ? "No videos yet. Fetch videos by running keyword jobs from the Keywords page." : "No videos match the current filters."}
             </div>
           ) : (
             <>
