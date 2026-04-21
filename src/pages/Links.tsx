@@ -558,12 +558,20 @@ function ProcessingTab() {
     }
   };
 
+  // Refresh stats whenever a batch completes — works regardless of which
+  // button started processing (header "Process Links" or in-tab "Start").
+  useEffect(() => {
+    if (serviceState.lastBatchCompletedAt > 0) {
+      fetchStats();
+    }
+  }, [serviceState.lastBatchCompletedAt, fetchStats]);
+
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
   useEffect(() => {
     if (!running) return;
-    // 15s (was 5s) — reduce contention with the active link processor
-    const interval = setInterval(fetchStats, 15000);
+    // RPC is fast (~100ms), so 5s polling is safe and gives near-realtime UI.
+    const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
   }, [running, fetchStats]);
 
