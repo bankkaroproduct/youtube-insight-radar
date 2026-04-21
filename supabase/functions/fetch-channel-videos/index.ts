@@ -322,7 +322,7 @@ Deno.serve(async (req) => {
     const keyIndex = { val: 0 };
     let totalVideos = 0;
     let processedChannels = 0;
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 10;
     const channelIds = channels.map((c: any) => c.channel_id);
 
     for (let i = 0; i < channelIds.length; i += BATCH_SIZE) {
