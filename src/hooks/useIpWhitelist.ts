@@ -5,6 +5,17 @@ import type { Database } from "@/integrations/supabase/types";
 
 type IpEntry = Database["public"]["Tables"]["ip_whitelist"]["Row"];
 
+export function isValidIpOrCidr(input: string): boolean {
+  const trimmed = input.trim();
+  const ipv4Cidr = /^(\d{1,3}\.){3}\d{1,3}(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
+  if (!ipv4Cidr.test(trimmed)) return false;
+  const [ipPart] = trimmed.split("/");
+  return ipPart.split(".").every((octet) => {
+    const n = parseInt(octet, 10);
+    return n >= 0 && n <= 255;
+  });
+}
+
 export function useIpWhitelist() {
   const [entries, setEntries] = useState<IpEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,6 +49,10 @@ export function useIpWhitelist() {
   }, []);
 
   const addIp = async (ipAddress: string, description?: string) => {
+    if (!isValidIpOrCidr(ipAddress)) {
+      toast.error("Invalid IP address or CIDR range");
+      return false;
+    }
     const { data: { user } } = await supabase.auth.getUser();
     const { error } = await supabase.from("ip_whitelist").insert({
       ip_address: ipAddress.trim(),
@@ -87,11 +102,12 @@ export function useIpWhitelist() {
   return { entries, isLoading, currentIp, addIp, removeIp, toggleActive, refresh: fetchEntries };
 }
 
-export async function checkIpAccess(): Promise<{ allowed: boolean; ip: string }> {
+export async function checkIpAccess(): Promise<{ allowed: boolean; ip: string; error?: boolean }> {
   try {
     const res = await supabase.functions.invoke("check-ip");
-    return res.data ?? { allowed: true, ip: "unknown" };
+    if (!res.data) return { allowed: false, ip: "unknown", error: true };
+    return res.data;
   } catch {
-    return { allowed: true, ip: "unknown" };
+    return { allowed: false, ip: "unknown", error: true };
   }
 }
