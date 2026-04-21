@@ -214,11 +214,23 @@ async function processChannel(
       if (videoRecordsById.size >= missingVideos) break;
     }
 
-    if (!nextPageToken) break;
+    if (!nextPageToken) {
+      fullyScanned = true;
+      break;
+    }
   }
 
   const videoRecords = Array.from(videoRecordsById.values());
   if (videoRecords.length === 0) {
+    if (fullyScanned) {
+      const finalCount = videoRecordsById.size + existingVideoIds.size;
+      await supabase.from("channels").update({
+        total_videos_fetched: finalCount,
+        last_analyzed_at: new Date().toISOString(),
+        uploads_fully_scanned_at: new Date().toISOString(),
+        scanned_at_youtube_total: youtubeTotal,
+      }).eq("channel_id", channelId);
+    }
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
