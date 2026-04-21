@@ -205,6 +205,12 @@ export default function Links() {
     addPattern, confirmPattern, updatePatternType, updatePatternName, deletePattern, processLinks, confirmedPatterns,
   } = useAffiliatePatterns();
 
+  const topServiceState = useSyncExternalStore(
+    (cb) => linkProcessingService.subscribe(cb),
+    () => linkProcessingService.getState()
+  );
+  const topRunning = topServiceState.running;
+
   const addName = async (name: string) => {
     // Names are derived from patterns; adding a pattern with this name will include it
   };
