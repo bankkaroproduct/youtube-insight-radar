@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ const statusVariant = (status: string): "default" | "secondary" | "destructive" 
 };
 
 export default function Index() {
+  useEffect(() => { document.title = "Dashboard | YT Intel"; }, []);
   const { counts, recent, affiliates, isLoading, lastUpdated, refresh } = useDashboard();
   const navigate = useNavigate();
 

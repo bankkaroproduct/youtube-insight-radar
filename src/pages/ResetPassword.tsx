@@ -16,6 +16,8 @@ export default function ResetPassword() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => { document.title = "Reset Password | YT Intel"; }, []);
+
   useEffect(() => {
     // Supabase parses recovery tokens from the URL hash automatically and emits a
     // PASSWORD_RECOVERY event. We listen for either that or an existing session.

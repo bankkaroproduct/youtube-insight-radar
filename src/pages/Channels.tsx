@@ -109,6 +109,7 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
 interface SummaryStats { total: number; with_us: number; competitor: number; mixed: number; neutral: number; }
 
 export default function Channels() {
+  useEffect(() => { document.title = "Channels | YT Intel"; }, []);
   const navigate = useNavigate();
   const [filters, setFilters] = useState<ChannelFilters>({ name: "", status: "", category: "", relevance: "", country: "" });
   const [page, setPage] = useState(0);
@@ -351,7 +352,7 @@ export default function Channels() {
         </CardHeader>
         <CardContent>
           {isLoading && channels.length === 0 ? (
-            <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
+            <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => (<Skeleton key={i} className="h-12 w-full" />))}</div>
           ) : channels.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
               {totalCount === 0 ? "No channels yet. Channels are auto-discovered when videos are fetched." : "No channels match the current filters."}

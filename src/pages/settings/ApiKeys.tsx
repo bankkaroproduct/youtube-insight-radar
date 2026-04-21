@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { FlaskConical, Trash2, Download, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
@@ -10,6 +10,7 @@ import { RotationSummaryBanner } from "@/components/api-keys/RotationSummaryBann
 import * as XLSX from "xlsx";
 
 export default function ApiKeys() {
+  useEffect(() => { document.title = "API Keys | YT Intel"; }, []);
   const { keys, isLoading, stats, addKeys, toggleActive, deleteKeys, testKeys, resetQuota } = useApiKeys();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [testingIds, setTestingIds] = useState<string[]>([]);

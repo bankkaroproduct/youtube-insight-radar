@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Navigate, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,19 +9,43 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { Youtube, ArrowRight, Eye, EyeOff, MailCheck } from "lucide-react";
 
+type StrengthLevel = 0 | 1 | 2 | 3 | 4;
+
+function computePasswordStrength(pw: string): { level: StrengthLevel; label: string; colorClass: string } {
+  if (!pw) return { level: 0, label: "", colorClass: "bg-muted" };
+  const hasMixedCase = /[a-z]/.test(pw) && /[A-Z]/.test(pw);
+  const hasDigitOrSymbol = /[0-9]/.test(pw) || /[^A-Za-z0-9]/.test(pw);
+  if (pw.length < 8) return { level: 1, label: "Weak", colorClass: "bg-destructive" };
+  if (pw.length < 12) return { level: 2, label: "Fair", colorClass: "bg-orange-500" };
+  if (pw.length >= 12 && hasMixedCase && hasDigitOrSymbol)
+    return { level: 4, label: "Strong", colorClass: "bg-green-500" };
+  if (pw.length >= 12 && hasMixedCase) return { level: 3, label: "Good", colorClass: "bg-yellow-500" };
+  return { level: 2, label: "Fair", colorClass: "bg-orange-500" };
+}
+
 export default function Auth() {
   const { session, isLoading } = useAuth();
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState("");
   const [signupName, setSignupName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showLoginPw, setShowLoginPw] = useState(false);
   const [showSignupPw, setShowSignupPw] = useState(false);
+  const [showSignupConfirmPw, setShowSignupConfirmPw] = useState(false);
   const [signupSent, setSignupSent] = useState(false);
   const [resending, setResending] = useState(false);
   const { signIn, signUp } = useAuth();
+
+  useEffect(() => { document.title = "Sign In | YT Intel"; }, []);
+
+  const passwordStrength = useMemo(() => computePasswordStrength(signupPassword), [signupPassword]);
+  const passwordsMatch =
+    signupPassword.length === 0 ||
+    signupConfirmPassword.length === 0 ||
+    signupPassword === signupConfirmPassword;
 
   if (isLoading) return null;
   if (session) return <Navigate to="/" replace />;
@@ -36,6 +60,10 @@ export default function Auth() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (signupPassword !== signupConfirmPassword) {
+      toast.error("Passwords don't match");
+      return;
+    }
     setSubmitting(true);
     const { error } = await signUp(signupEmail, signupPassword, signupName);
     if (error) {
@@ -194,6 +222,7 @@ export default function Auth() {
                         setSignupSent(false);
                         setSignupEmail("");
                         setSignupPassword("");
+                        setSignupConfirmPassword("");
                         setSignupName("");
                       }}
                     >
@@ -232,11 +261,11 @@ export default function Auth() {
                     <Input
                       id="signup-password"
                       type={showSignupPw ? "text" : "password"}
-                      placeholder="Min. 6 characters"
+                      placeholder="Min. 8 characters"
                       value={signupPassword}
                       onChange={(e) => setSignupPassword(e.target.value)}
                       required
-                      minLength={6}
+                      minLength={8}
                       className="h-11 pr-10"
                     />
                     <button
@@ -247,8 +276,54 @@ export default function Auth() {
                       {showSignupPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
+                  {signupPassword && (
+                    <div className="space-y-1">
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {[1, 2, 3, 4].map((seg) => (
+                          <div
+                            key={seg}
+                            className={`h-1.5 rounded-full transition-colors ${
+                              passwordStrength.level >= seg ? passwordStrength.colorClass : "bg-muted"
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      {passwordStrength.label && (
+                        <p className="text-xs text-muted-foreground">Strength: {passwordStrength.label}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <Button type="submit" className="w-full h-11 font-semibold text-sm" disabled={submitting}>
+                <div className="space-y-2">
+                  <Label htmlFor="signup-confirm-password" className="text-sm font-medium">Confirm password</Label>
+                  <div className="relative">
+                    <Input
+                      id="signup-confirm-password"
+                      type={showSignupConfirmPw ? "text" : "password"}
+                      placeholder="Re-enter your password"
+                      value={signupConfirmPassword}
+                      onChange={(e) => setSignupConfirmPassword(e.target.value)}
+                      required
+                      minLength={8}
+                      className="h-11 pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSignupConfirmPw(!showSignupConfirmPw)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showSignupConfirmPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {!passwordsMatch && (
+                    <p className="text-xs text-destructive">Passwords don't match</p>
+                  )}
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full h-11 font-semibold text-sm"
+                  disabled={submitting || !passwordsMatch || signupConfirmPassword.length === 0}
+                >
                   {submitting ? "Creating account..." : (
                     <span className="flex items-center gap-2">Create Account <ArrowRight className="h-4 w-4" /></span>
                   )}

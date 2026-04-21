@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useIpWhitelist, isValidIpOrCidr } from "@/hooks/useIpWhitelist";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -35,6 +35,7 @@ function matchesCidr(ip: string, cidr: string): boolean {
 }
 
 export default function IpWhitelist() {
+  useEffect(() => { document.title = "IP Whitelist | YT Intel"; }, []);
   const { entries, isLoading, currentIp, addIp, removeIp, toggleActive } = useIpWhitelist();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newIp, setNewIp] = useState("");
@@ -241,12 +242,19 @@ export default function IpWhitelist() {
                     <span className="text-muted-foreground">Adding:</span>{" "}
                     <span className="font-mono font-semibold text-foreground">{pendingIp?.ip}</span>
                   </div>
-                  <div>
-                    <span className="text-muted-foreground">Your current IP:</span>{" "}
-                    <span className="font-mono font-semibold text-foreground">
-                      {currentIp ?? "unknown"}
-                    </span>
-                  </div>
+                  {currentIp && currentIp !== "unknown" ? (
+                    <div>
+                      <span className="text-muted-foreground">Your current IP:</span>{" "}
+                      <span className="font-mono font-semibold text-foreground">{currentIp}</span>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 items-start text-amber-500 mt-1">
+                      <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                      <span>
+                        Your current IP could not be detected. Proceed only if you're certain the IP you're adding will match your connection.
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <p>Is the IP you're adding reachable from you?</p>
                 {lockoutRisk && (

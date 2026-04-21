@@ -5,7 +5,6 @@ import {
   Users,
   Link,
   BarChart3,
-  Settings,
   LogOut,
   KeyRound,
   Shield,
@@ -49,7 +48,6 @@ const settingsItems = [
   { title: "User Management", url: "/settings/users", icon: UserCog, adminOnly: true },
   { title: "API Keys", url: "/settings/api-keys", icon: KeyRound, adminOnly: true },
   { title: "IP Whitelist", url: "/settings/ip-whitelist", icon: Shield, adminOnly: true },
-  { title: "General", url: "/settings/general", icon: Settings },
 ];
 
 export function AppSidebar() {

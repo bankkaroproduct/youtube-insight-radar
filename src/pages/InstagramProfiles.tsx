@@ -121,6 +121,7 @@ function downloadCSV(profiles: IGProfile[]) {
 }
 
 export default function InstagramProfiles() {
+  useEffect(() => { document.title = "Instagram Profiles | YT Intel"; }, []);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -232,7 +233,7 @@ export default function InstagramProfiles() {
         </CardHeader>
         <CardContent>
           {isLoading && profiles.length === 0 ? (
-            <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+            <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
           ) : profiles.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
               {totalCount === 0

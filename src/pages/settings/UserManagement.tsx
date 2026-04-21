@@ -20,6 +20,7 @@ interface UserWithRole extends Profile {
 }
 
 export default function UserManagement() {
+  useEffect(() => { document.title = "User Management | YT Intel"; }, []);
   const { isAdmin, user: currentUser } = useAuth();
   const [users, setUsers] = useState<UserWithRole[]>([]);
   const [loading, setLoading] = useState(true);
