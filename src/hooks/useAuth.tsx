@@ -40,15 +40,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const rolesRef = useRef<AppRole[]>([]);
 
   const loadUserData = async (userId: string) => {
-    const [profileRes, rolesRes] = await Promise.all([
-      supabase.from("user_profiles").select("*").eq("user_id", userId).single(),
-      supabase.from("user_roles").select("role").eq("user_id", userId),
-    ]);
-    setProfile(profileRes.data ?? null);
-    const newRoles = rolesRes.data?.map((r) => r.role) ?? [];
-    setRoles(newRoles);
-    rolesRef.current = newRoles;
-    return { profile: profileRes.data, roles: newRoles };
+    try {
+      const [profileRes, rolesRes] = await Promise.all([
+        supabase.from("user_profiles").select("*").eq("user_id", userId).maybeSingle(),
+        supabase.from("user_roles").select("role").eq("user_id", userId),
+      ]);
+      setProfile(profileRes.data ?? null);
+      const newRoles = rolesRes.data?.map((r) => r.role) ?? [];
+      setRoles(newRoles);
+      rolesRef.current = newRoles;
+      return { profile: profileRes.data, roles: newRoles };
+    } catch (e) {
+      console.error("[useAuth] loadUserData failed", e);
+      setProfile(null);
+      setRoles([]);
+      rolesRef.current = [];
+      return { profile: null, roles: [] as AppRole[] };
+    }
+  };
+
+  const runIpCheckSafe = async (userRoles: AppRole[]) => {
+    try {
+      if (userRoles.includes("super_admin")) {
+        setIpCheck({ checked: true, allowed: true, ip: "bypassed" });
+        return;
+      }
+      const res = await checkIpAccess();
+      setIpCheck({ checked: true, allowed: res.allowed, ip: res.ip, error: res.error });
+    } catch (e) {
+      console.error("[useAuth] IP check failed", e);
+      // Fail-open so the app is never permanently blank.
+      setIpCheck({ checked: true, allowed: true, ip: "unknown", error: true });
+    }
   };
 
   const runIpCheck = async (userRoles: AppRole[]) => {
