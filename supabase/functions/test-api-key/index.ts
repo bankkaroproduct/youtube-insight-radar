@@ -30,9 +30,12 @@ Deno.serve(async (req) => {
       throw new Error("key_ids array is required");
     }
 
+    const encryptionSecret = Deno.env.get("API_KEY_ENCRYPTION_KEY");
+    if (!encryptionSecret) throw new Error("API_KEY_ENCRYPTION_KEY not configured");
+
     const { data: keys, error } = await supabase
       .from("youtube_api_keys")
-      .select("id, api_key")
+      .select("id")
       .in("id", key_ids);
 
     if (error) throw error;
@@ -47,8 +50,12 @@ Deno.serve(async (req) => {
     for (const key of keys) {
       let status = "valid";
       try {
+        const { data: rawKey, error: decErr } = await supabase.rpc("get_decrypted_api_key", {
+          _key_id: key.id, _secret: encryptionSecret,
+        });
+        if (decErr || !rawKey) { status = "invalid"; throw new Error("decrypt failed"); }
         // videos.list costs 1 unit (vs search.list = 100)
-        const url = `https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=${key.api_key}`;
+        const url = `https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=${rawKey}`;
         const resp = await fetch(url);
 
         if (resp.ok) {

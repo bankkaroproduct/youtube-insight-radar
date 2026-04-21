@@ -11,7 +11,7 @@ export async function getAvailableApiKeys(supabase: any, count: number) {
 
   const { data, error } = await supabase
     .from("youtube_api_keys")
-    .select("id, api_key, quota_used_today, daily_quota_limit")
+    .select("id, api_key_last_4, quota_used_today, daily_quota_limit")
     .eq("is_active", true)
     .or("last_test_status.is.null,last_test_status.neq.restricted")
     .or("daily_quota_limit.eq.0,quota_used_today.lt.daily_quota_limit")
