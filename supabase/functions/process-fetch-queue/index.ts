@@ -292,38 +292,32 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
       break;
     }
 
-    const params = new URLSearchParams({
-      part: "snippet",
-      q: job.keyword,
-      maxResults: "50",
-      order: job.order_by || "relevance",
-      type: "video",
-      regionCode: "IN",
-      key: currentKey.api_key,
-    });
-    if (job.published_after) params.set("publishedAfter", job.published_after);
-    if (nextPageToken) params.set("pageToken", nextPageToken);
+    const buildSearchUrl = (apiKey: string) => {
+      const params = new URLSearchParams({
+        part: "snippet",
+        q: job.keyword,
+        maxResults: "50",
+        order: job.order_by || "relevance",
+        type: "video",
+        regionCode: "IN",
+        key: apiKey,
+      });
+      if (job.published_after) params.set("publishedAfter", job.published_after);
+      if (nextPageToken) params.set("pageToken", nextPageToken);
+      return `https://www.googleapis.com/youtube/v3/search?${params}`;
+    };
 
-    const resp = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
+    const { resp, key: rotatedKey, exhausted } = await fetchYouTubeWithRotation(
+      supabase, buildSearchUrl, currentKey, quotaCache,
+    );
+    currentKey = rotatedKey;
 
-    if (!resp.ok) {
-      const body = await resp.json();
-      const reason = body?.error?.errors?.[0]?.reason;
-      if (reason === "quotaExceeded" || reason === "dailyLimitExceeded") {
-        await markKeyExhausted(supabase, currentKey.id);
-        const replacements = await getAvailableApiKeys(supabase, 1);
-        if (replacements.length > 0) {
-          currentKey = replacements[0];
-          quotaCache.set(currentKey.id, currentKey.quota_used_today);
-          page--;
-          continue;
-        }
-        if (page === 0) {
-          await supabase.from("fetch_jobs").update({ status: "pending", started_at: null }).eq("id", job.id);
-        }
-        break;
+    if (exhausted || !resp) {
+      if (page === 0) {
+        await supabase.from("fetch_jobs").update({ status: "pending", started_at: null }).eq("id", job.id);
+        return { channelIds: [], keyUsed: currentKey };
       }
-      throw new Error(body?.error?.message || `YouTube API error: ${resp.status}`);
+      break;
     }
 
     await incrementQuota(supabase, currentKey.id, 100, quotaCache);
