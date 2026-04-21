@@ -18,8 +18,6 @@ import { Play, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { KeywordSearchRun, KeywordStats } from "@/hooks/useKeywords";
 import type { FetchJob } from "@/hooks/useFetchJobs";
-import type { KeywordSearchRun, KeywordStats } from "@/hooks/useKeywords";
-import type { FetchJob } from "@/hooks/useFetchJobs";
 
 interface Props {
   keywords: KeywordSearchRun[];
