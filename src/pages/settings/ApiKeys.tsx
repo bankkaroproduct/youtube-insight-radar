@@ -62,6 +62,23 @@ export default function ApiKeys() {
         </div>
       )}
 
+      {stats.untested > 0 && (
+        <div className="rounded-md border border-blue-500/50 bg-blue-500/10 p-3 text-sm flex items-center justify-between gap-3">
+          <span>
+            {stats.untested} {stats.untested === 1 ? "key has" : "keys have"} never been tested.
+            Untested keys don't count toward healthy.
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={testingIds.length > 0}
+            onClick={() => handleTest(keys.filter((k) => k.last_test_status == null).map((k) => k.id))}
+          >
+            <FlaskConical className="h-3.5 w-3.5 mr-1" /> Test untested
+          </Button>
+        </div>
+      )}
+
       <RotationSummaryBanner
         activeCount={stats.activeCount}
         total={stats.total}
