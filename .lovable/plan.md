@@ -1,24 +1,64 @@
-
-
 ## Goal
 
-In **S5 — Channel Deep Data**, surface per-channel video coverage so reviewers can see whether the 50-video backfill is complete for each channel and how many videos that channel has on YouTube overall.
+Make **Backfill to 50 Videos** smarter so it stops re-fetching channels that already have 50 total uploads on YouTube, and surface that "complete" state visually so reviewers know the count is the channel's true total — not an incomplete backfill.
+
+## Problem today
+
+The backfill filter is `total_videos_fetched < 50`. A channel that has only 12 videos on YouTube and 12 fetched still matches this filter forever, so:
+
+- It keeps getting selected on every backfill pass and burns YouTube API quota.
+- The `while` loop in `backfillTo50` never reliably terminates for these channels.
+- Reviewers can't tell from the UI whether "12 videos" means "incomplete backfill" or "this channel only has 12 videos total".
 
 ## Changes
 
-**File:** `src/services/excelExportService.ts`
+### 1. `supabase/functions/fetch-channel-videos/index.ts` — smarter backfill filter
 
-1. Extend the `Channel` type to include `total_videos_fetched` and `youtube_total_videos`.
-2. Update both `fetchAll<Channel>(...)` select lists (in `ensureChannelLinksScraped` and the main `exportFullReport` fetch) to include those two columns.
-3. In `buildSheet5`, add two new columns just before `Channel Description`:
-   - **Videos Fetched (max 50)** — `ch.total_videos_fetched ?? 0`
-   - **Total Videos on YouTube** — `ch.youtube_total_videos ?? "N/A"`
-4. Update `S5` Social/Excluded column indexes in `exportFullReport` since the sheet grows from 17 → 19 columns: change `buildWorksheet(XLSX, s5, 15, 16)` to `buildWorksheet(XLSX, s5, 17, 18)`.
+Update the in-memory filter so a channel is only backfilled when there's actually more to fetch:
+
+```ts
+const channels = (rawChannels || [])
+  .filter((channel: any) => {
+    const fetched = Number(channel.total_videos_fetched ?? 0);
+    const ytTotal = channel.youtube_total_videos == null
+      ? null
+      : Number(channel.youtube_total_videos);
+
+    if (backfillUnder50) {
+      if (fetched >= 50) return false;
+      // Skip channels we've already fully covered (YouTube has fewer than 50 total).
+      if (ytTotal !== null && fetched >= ytTotal) return false;
+    }
+    if (minVideos !== null && fetched < minVideos) return false;
+    if (maxVideos !== null && fetched > maxVideos) return false;
+    return true;
+  })
+  .slice(0, limit);
+```
+
+Channels with unknown `youtube_total_videos` still get processed once — that pass populates `youtube_total_videos`, so the next pass can skip them if they're already complete.
+
+### 2. `src/pages/Channels.tsx` — UI clarity for "small channels"
+
+In the channels table, where we show the fetched-video count, render:
+
+- `12 / 12 (complete)` when `total_videos_fetched >= youtube_total_videos` and YouTube total < 50
+- `34 / 50` (or similar) when still backfilling
+- `50` when fully backfilled and YouTube total ≥ 50
+
+Use a muted badge for "complete" so reviewers immediately recognize that 12 isn't an error — it's the channel's lifetime upload count.
+
+### 3. `src/services/excelExportService.ts` — match column semantics in S5
+
+The existing **Videos Fetched (max 50)** column already shows `total_videos_fetched`. Rename it to **Videos Fetched (Till Date)** and append a `(complete)` marker in the same cell when `total_videos_fetched >= youtube_total_videos` and `youtube_total_videos < 50`. The neighboring **Total Videos on YouTube** column stays as-is so the discrepancy is still obvious at a glance.
+
+### 4. Backfill loop termination safety
+
+`backfillTo50` in `Channels.tsx` already breaks when `channels_processed === 0`. With change #1, channels that are "complete despite < 50" will no longer be selected, so the loop now terminates correctly instead of spinning on the same small channels.
 
 ## Acceptance
 
-- S5 shows two new columns per row: how many videos we have stored for the channel (capped at 50), and the channel's total uploads on YouTube.
-- Channels with `total_videos_fetched < 50` are obvious at a glance.
-- Sheet still classifies links via affiliate_patterns and merges scraped channel links as before.
-- Social (blue) and Excluded (red) styling continues to highlight the correct columns after the index shift.
-
+- Running **Backfill to 50 Videos** never re-selects a channel whose YouTube total is below 50 once it has been fully fetched.
+- Backfill loop terminates cleanly even when many channels have < 50 total uploads.
+- Channels list visibly distinguishes "small channel, fully covered" from "still backfilling".
+- S5 export carries the same distinction so downstream reviewers don't flag complete-but-small channels as missing data.
