@@ -112,6 +112,7 @@ export default function Channels() {
   const [filters, setFilters] = useState({ name: "", status: "", category: "", relevance: "", country: "" });
   const [fetchingNew, setFetchingNew] = useState(false);
   const [scrapingLinks, setScrapingLinks] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
 
@@ -151,6 +152,42 @@ export default function Channels() {
       toast.error("Failed to fetch new channel videos: " + e.message);
     } finally {
       setFetchingNew(false);
+    }
+  };
+
+  const backfillTo50 = async () => {
+    setBackfilling(true);
+    let totalProcessed = 0;
+    let totalVideos = 0;
+    const t = toast.loading("Backfilling channels to 50 videos…");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      while (true) {
+        const resp = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-channel-videos`,
+          {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${session?.access_token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ backfill_under_50: true, limit: 25 }),
+          }
+        );
+        const result = await resp.json();
+        if (!resp.ok) throw new Error(result.error || "Failed");
+        const processed = result.channels_processed || 0;
+        if (processed === 0) break;
+        totalProcessed += processed;
+        totalVideos += result.total_videos_inserted || 0;
+        toast.loading(`Backfilled ${totalProcessed} channels (${totalVideos} videos)…`, { id: t });
+      }
+      toast.success(`Done. Backfilled ${totalProcessed} channels with ${totalVideos} videos.`, { id: t });
+      refresh();
+    } catch (e: any) {
+      toast.error("Backfill failed: " + e.message, { id: t });
+    } finally {
+      setBackfilling(false);
     }
   };
 
@@ -246,6 +283,10 @@ export default function Channels() {
           <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
+          </Button>
+          <Button variant="outline" size="sm" onClick={backfillTo50} disabled={backfilling}>
+            {backfilling ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
+            Backfill to 50 Videos
           </Button>
           <Button variant="outline" size="sm" onClick={scrapeChannelLinks} disabled={scrapingLinks}>
             {scrapingLinks ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Link2 className="h-4 w-4 mr-2" />}
