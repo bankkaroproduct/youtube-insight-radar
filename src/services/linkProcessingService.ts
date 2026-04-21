@@ -159,6 +159,7 @@ class LinkProcessingService {
       if (result.cached > 0) details.push(`${result.cached} cached`);
       if (result.resolved > 0) details.push(`${result.resolved} resolved`);
       if (result.failed > 0) details.push(`${result.failed} failed`);
+      if (result.db_errors > 0) details.push(`${result.db_errors} db errors`);
       const breakdown = details.length > 0 ? ` (${details.join(", ")})` : "";
       this.addLog(
         `✅ Batch #${batchNum}: ${result.processed} processed${breakdown}, ${result.remaining?.toLocaleString()} remaining`,
