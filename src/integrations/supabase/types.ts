@@ -794,6 +794,8 @@ export type Database = {
       youtube_api_keys: {
         Row: {
           api_key: string
+          api_key_encrypted: string | null
+          api_key_last_4: string | null
           created_at: string
           daily_quota_limit: number
           id: string
@@ -807,6 +809,8 @@ export type Database = {
         }
         Insert: {
           api_key: string
+          api_key_encrypted?: string | null
+          api_key_last_4?: string | null
           created_at?: string
           daily_quota_limit?: number
           id?: string
@@ -820,6 +824,8 @@ export type Database = {
         }
         Update: {
           api_key?: string
+          api_key_encrypted?: string | null
+          api_key_last_4?: string | null
           created_at?: string
           daily_quota_limit?: number
           id?: string
@@ -838,6 +844,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      backfill_encrypt_api_keys: { Args: { _secret: string }; Returns: number }
       get_affiliate_classification_stats: {
         Args: never
         Returns: {
@@ -854,6 +861,10 @@ export type Database = {
           total: number
           with_us: number
         }[]
+      }
+      get_decrypted_api_key: {
+        Args: { _key_id: string; _secret: string }
+        Returns: string
       }
       get_keyword_stats: {
         Args: never
@@ -877,6 +888,10 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      insert_encrypted_api_key: {
+        Args: { _label: string; _raw_key: string; _secret: string }
+        Returns: string
       }
       log_audit: {
         Args: {
