@@ -109,28 +109,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, 8000);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
-        try {
-          setSession(newSession);
-          setUser(newSession?.user ?? null);
-          if (newSession?.user) {
-            const userChanged = newSession.user.id !== lastUserId;
-            lastUserId = newSession.user.id;
-            const { roles: newRoles } = await loadUserData(newSession.user.id);
-            if (initialized && userChanged) {
-              setIpCheck({ allowed: true, ip: "", checked: false });
-              runIpCheckSafe(newRoles);
+      (_event, newSession) => {
+        // CRITICAL: do NOT call other Supabase APIs synchronously inside this callback —
+        // it can deadlock the auth client. Defer DB work to the next tick.
+        setSession(newSession);
+        setUser(newSession?.user ?? null);
+
+        if (newSession?.user) {
+          const userChanged = newSession.user.id !== lastUserId;
+          lastUserId = newSession.user.id;
+          setTimeout(async () => {
+            try {
+              const { roles: newRoles } = await loadUserData(newSession.user.id);
+              if (initialized && userChanged) {
+                setIpCheck({ allowed: true, ip: "", checked: false });
+                runIpCheckSafe(newRoles);
+              }
+            } catch (e) {
+              console.error("[useAuth] deferred auth-change load failed", e);
+            } finally {
+              if (initialized) setIsLoading(false);
             }
-          } else {
-            setProfile(null);
-            setRoles([]);
-            rolesRef.current = [];
-            lastUserId = null;
-            setIpCheck({ allowed: true, ip: "", checked: false });
-          }
-        } catch (e) {
-          console.error("[useAuth] onAuthStateChange handler failed", e);
-        } finally {
+          }, 0);
+        } else {
+          setProfile(null);
+          setRoles([]);
+          rolesRef.current = [];
+          lastUserId = null;
+          setIpCheck({ allowed: true, ip: "", checked: false });
           if (initialized) setIsLoading(false);
         }
       }
