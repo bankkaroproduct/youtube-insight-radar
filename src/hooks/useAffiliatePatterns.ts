@@ -78,6 +78,8 @@ export function useAffiliatePatterns() {
     } else {
       toast.success("Pattern confirmed");
       fetchPatterns();
+      // Item 10: Trigger lightweight reclassification (fire-and-forget)
+      supabase.functions.invoke("reclassify-links", { body: { pattern_id: id } }).catch(() => {});
     }
   };
 
