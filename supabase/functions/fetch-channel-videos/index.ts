@@ -65,14 +65,16 @@ async function processChannel(
   const channelId = channel.channel_id;
   let currentKey = apiKeys[keyIndex.val % apiKeys.length];
 
-  // Step 1: Get the true total video count from channels.list (statistics.videoCount).
-  // YouTube's search.list pageInfo.totalResults is an estimate and is wildly inaccurate.
+  // Step 1: Get the true total video count AND the uploads playlist id.
+  // The uploads playlist is the authoritative ordered list of all channel uploads —
+  // far more reliable than search.list, which only returns a recent slice.
   let youtubeTotal: number | null = channel.youtube_total_videos == null
     ? null
     : Number(channel.youtube_total_videos);
+  let uploadsPlaylistId: string | null = null;
   try {
     const chParams = new URLSearchParams({
-      part: "statistics",
+      part: "statistics,contentDetails",
       id: channelId,
       key: currentKey.api_key,
     });
@@ -80,8 +82,10 @@ async function processChannel(
     if (chResp.ok) {
       await incrementQuota(supabase, currentKey.id, 1, quotaCache);
       const chData = await chResp.json();
-      const vc = chData?.items?.[0]?.statistics?.videoCount;
+      const item = chData?.items?.[0];
+      const vc = item?.statistics?.videoCount;
       if (vc != null) youtubeTotal = parseInt(String(vc)) || 0;
+      uploadsPlaylistId = item?.contentDetails?.relatedPlaylists?.uploads || null;
     }
   } catch (e) {
     console.error(`channels.list failed for ${channelId}:`, e);
