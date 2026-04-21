@@ -269,6 +269,10 @@ async function processChannel(
     .update({
       total_videos_fetched: newTotal ?? 0,
       last_analyzed_at: new Date().toISOString(),
+      ...(fullyScanned ? {
+        uploads_fully_scanned_at: new Date().toISOString(),
+        scanned_at_youtube_total: youtubeTotal,
+      } : {}),
     })
     .eq("channel_id", channelId);
 
