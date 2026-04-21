@@ -13,11 +13,18 @@ class LinkProcessingService {
   private batchNum = 0;
   private startedAt: string | null = null;
   private logs: LogEntry[] = [];
+  private lastBatchCompletedAt = 0;
   private listeners = new Set<Listener>();
-  private snapshot: { running: boolean; logs: LogEntry[]; startedAt: string | null } = {
+  private snapshot: {
+    running: boolean;
+    logs: LogEntry[];
+    startedAt: string | null;
+    lastBatchCompletedAt: number;
+  } = {
     running: false,
     logs: [],
     startedAt: null,
+    lastBatchCompletedAt: 0,
   };
 
   constructor() {
