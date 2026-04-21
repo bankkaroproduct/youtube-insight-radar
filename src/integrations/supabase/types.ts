@@ -805,6 +805,13 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_affiliate_classification_stats: {
+        Args: never
+        Returns: {
+          classification: string
+          count: number
+        }[]
+      }
       get_keyword_stats: {
         Args: never
         Returns: {
