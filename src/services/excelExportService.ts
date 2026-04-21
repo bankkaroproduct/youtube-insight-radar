@@ -58,6 +58,8 @@ type Channel = {
   affiliate_status: string | null;
   custom_links: Array<{ header: string; url: string }> | null;
   custom_links_scraped_at: string | null;
+  total_videos_fetched: number | null;
+  youtube_total_videos: number | null;
 };
 
 type IGProfile = {
@@ -183,7 +185,7 @@ async function ensureChannelLinksScraped(channels: Channel[], onProgress?: (msg:
   onProgress?.("Refreshing channels...");
   return fetchAll<Channel>(
     "channels",
-    "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at"
+    "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos"
   );
 }
 
@@ -381,7 +383,7 @@ function buildSheet5(
   retailerByDomain: Map<string, string>,
   affiliateByDomain: Map<string, string>,
 ) {
-  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Channel Description", "Link #", "Link Header", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Videos Fetched (max 50)", "Total Videos on YouTube", "Channel Description", "Link #", "Link Header", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
     const description = ch.description?.trim() ? ch.description : "No Description";
@@ -394,6 +396,8 @@ function buildSheet5(
       ch.median_views ?? 0,
       ch.median_likes ?? 0,
       ch.median_comments ?? 0,
+      ch.total_videos_fetched ?? 0,
+      ch.youtube_total_videos ?? "N/A",
       description,
     ];
 
@@ -547,7 +551,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
 
   onProgress?.("Fetching channels...");
-  let channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at");
+  let channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos");
   channels = await ensureChannelLinksScraped(channels, onProgress);
 
   onProgress?.("Fetching Instagram...");
@@ -636,7 +640,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 20, 21), "S2 - Video Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 15, 16), "S5 - Channel Deep Data");
+  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 17, 18), "S5 - Channel Deep Data");
   XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
 
   onProgress?.("Downloading file...");
