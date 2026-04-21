@@ -222,6 +222,7 @@ export default function Auth() {
                         setSignupSent(false);
                         setSignupEmail("");
                         setSignupPassword("");
+                        setSignupConfirmPassword("");
                         setSignupName("");
                       }}
                     >
@@ -260,11 +261,11 @@ export default function Auth() {
                     <Input
                       id="signup-password"
                       type={showSignupPw ? "text" : "password"}
-                      placeholder="Min. 6 characters"
+                      placeholder="Min. 8 characters"
                       value={signupPassword}
                       onChange={(e) => setSignupPassword(e.target.value)}
                       required
-                      minLength={6}
+                      minLength={8}
                       className="h-11 pr-10"
                     />
                     <button
@@ -275,8 +276,54 @@ export default function Auth() {
                       {showSignupPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
+                  {signupPassword && (
+                    <div className="space-y-1">
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {[1, 2, 3, 4].map((seg) => (
+                          <div
+                            key={seg}
+                            className={`h-1.5 rounded-full transition-colors ${
+                              passwordStrength.level >= seg ? passwordStrength.colorClass : "bg-muted"
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      {passwordStrength.label && (
+                        <p className="text-xs text-muted-foreground">Strength: {passwordStrength.label}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <Button type="submit" className="w-full h-11 font-semibold text-sm" disabled={submitting}>
+                <div className="space-y-2">
+                  <Label htmlFor="signup-confirm-password" className="text-sm font-medium">Confirm password</Label>
+                  <div className="relative">
+                    <Input
+                      id="signup-confirm-password"
+                      type={showSignupConfirmPw ? "text" : "password"}
+                      placeholder="Re-enter your password"
+                      value={signupConfirmPassword}
+                      onChange={(e) => setSignupConfirmPassword(e.target.value)}
+                      required
+                      minLength={8}
+                      className="h-11 pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSignupConfirmPw(!showSignupConfirmPw)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showSignupConfirmPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {!passwordsMatch && (
+                    <p className="text-xs text-destructive">Passwords don't match</p>
+                  )}
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full h-11 font-semibold text-sm"
+                  disabled={submitting || !passwordsMatch || signupConfirmPassword.length === 0}
+                >
                   {submitting ? "Creating account..." : (
                     <span className="flex items-center gap-2">Create Account <ArrowRight className="h-4 w-4" /></span>
                   )}
