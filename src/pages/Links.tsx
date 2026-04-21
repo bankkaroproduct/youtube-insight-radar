@@ -697,8 +697,8 @@ function ProcessingTab() {
             className="w-28"
           />
         </div>
-        <Button variant="outline" onClick={fetchStats} disabled={loading} size="lg">
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} /> Refresh Stats
+        <Button variant="outline" onClick={fetchStats} disabled={refreshing} size="lg">
+          <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} /> Refresh Stats
         </Button>
         <AlertDialog>
           <AlertDialogTrigger asChild>
