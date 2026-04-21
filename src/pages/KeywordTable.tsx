@@ -36,13 +36,15 @@ export default function KeywordTable() {
   const [tableFilters, setTableFilters] = useState({ keyword: "", category: "", source: "", priority: "", status: "", businessAim: "" });
   const [keywordStats, setKeywordStats] = useState<Map<string, { video_count: number; link_count: number }>>(new Map());
   const [uniqueVideoCount, setUniqueVideoCount] = useState(0);
+  const [totalLinkCount, setTotalLinkCount] = useState(0);
   const { sortKey, sortDirection, handleSort, sortFn } = useSort<any>();
 
   useEffect(() => {
     async function fetchStats() {
-      const [statsRes, videoCountRes] = await Promise.all([
+      const [statsRes, videoCountRes, linkCountRes] = await Promise.all([
         supabase.rpc("get_keyword_stats"),
         supabase.from("videos").select("id", { count: "exact", head: true }),
+        supabase.from("video_links").select("id", { count: "exact", head: true }),
       ]);
       if (!statsRes.error && statsRes.data) {
         const map = new Map<string, { video_count: number; link_count: number }>();
@@ -52,6 +54,7 @@ export default function KeywordTable() {
         setKeywordStats(map);
       }
       setUniqueVideoCount(videoCountRes.count ?? 0);
+      setTotalLinkCount(linkCountRes.count ?? 0);
     }
     fetchStats();
   }, [allKeywords]);
@@ -86,18 +89,14 @@ export default function KeywordTable() {
   }, [filtered, sortFn, keywordStats]);
 
   const stats = useMemo(() => {
-    let totalLinks = 0;
-    for (const s of keywordStats.values()) {
-      totalLinks += s.link_count;
-    }
     return {
       total: allKeywords.length,
       completed: allKeywords.filter((k) => k.status === "completed").length,
       pending: allKeywords.filter((k) => k.status === "pending").length,
       videos: uniqueVideoCount,
-      links: totalLinks,
+      links: totalLinkCount,
     };
-  }, [allKeywords, keywordStats, uniqueVideoCount]);
+  }, [allKeywords, uniqueVideoCount, totalLinkCount]);
 
   const exportFiltered = () => {
     const data = filtered.map((k) => ({
