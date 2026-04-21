@@ -1,144 +1,45 @@
 
-## What’s actually going wrong
 
-There are three separate issues causing the “still only 1 video” behavior:
+## Fix: Blank screen on load
 
-1. **The backfill fetcher is not using the full channel upload history**
-   - `fetch-channel-videos` currently uses YouTube `search.list` with:
-     - `order=date`
-     - `type=video`
-     - `maxSearchPages = 12`
-   - That means it inspects only a limited recent slice of the channel.
-   - For channels with lots of Shorts or mixed content, the function may skip most results and end up inserting only 1–9 usable videos even if the channel has thousands.
+### Root cause
 
-2. **The backfill keeps sampling only the first low-count channels**
-   - The function selects a small ordered window of channels with the lowest `total_videos_fetched`.
-   - With 1710 channels and many tied at `1`, later channels can be starved and never meaningfully revisited.
+`ProtectedRoute` in `src/App.tsx` renders `null` while either `isLoading` is true or `ipCheck.checked` is false. In `src/hooks/useAuth.tsx`, the initial-session bootstrap (`supabase.auth.getSession().then(async ...)`) has **no try/catch**. If any await inside throws (network blip, IP check rejection, profile query error), the promise rejects silently and `setIsLoading(false)` is never called — leaving the app stuck on a permanent blank screen.
 
-3. **The Channels page uses unstable pagination**
-   - `useChannels()` paginates by ordering only on `total_videos_fetched`.
-   - When many rows share the same count, paginated ranges can duplicate or skip rows.
-   - This matches the console warning about duplicate React keys and can make the table look inconsistent.
+The console even shows `[vite] server connection lost` around the same window, which is exactly the kind of transient that would cause one of those awaits to reject mid-bootstrap.
 
-## Implementation plan
+Secondary issues found:
+- The deactivation check re-queries `user_profiles` even though `loadUserData` already loaded the profile a line earlier — wasteful and adds another failure point.
+- `loadUserData` itself has no error handling; a single failed query throws and bubbles up.
+- The `onAuthStateChange` async handler also lacks try/catch around `loadUserData`, which can leave `isLoading` true after a token refresh failure.
 
-### 1. Replace the channel backfill source with the uploads playlist
-Update `supabase/functions/fetch-channel-videos/index.ts` so backfill does not depend on `search.list` for channel history.
+### Changes
 
-New approach per channel:
-- Call `channels.list(part=contentDetails,statistics)` to get:
-  - `statistics.videoCount`
-  - `contentDetails.relatedPlaylists.uploads`
-- Page through `playlistItems.list` on the channel’s uploads playlist
-- Collect uploaded video IDs until:
-  - 50 eligible stored videos are reached, or
-  - the channel is exhausted
-- Then call `videos.list(part=snippet,statistics,contentDetails)` in batches for details
-- Continue filtering out Shorts if that is still desired
+**`src/hooks/useAuth.tsx`**
 
-Why this fixes it:
-- The uploads playlist is the authoritative ordered list of channel uploads
-- It can reach older videos instead of being trapped in a recent search slice
-- Channels like the one you shared can actually backfill toward 50
+1. Wrap the entire `getSession().then(async ...)` body in `try/catch/finally`. The `finally` block always sets `initialized = true` and `setIsLoading(false)`, plus marks `ipCheck` as checked with a safe fallback (`{ checked: true, allowed: true, ip: "unknown", error: true }` if the IP check never ran), so the app is never stranded.
 
-### 2. Remove the 12-page underfetch bottleneck
-Inside `fetch-channel-videos`, replace the current:
-- `searchPagesFetched`
-- `maxSearchPages = 12`
+2. Wrap the `onAuthStateChange` async handler body the same way — guarantee `setIsLoading(false)` runs.
 
-with a bounded uploads-playlist loop:
-- stop when 50 valid non-Short videos are stored
-- or when playlist pages are exhausted
-- or when a safe per-channel cap is reached for timeout protection
+3. Use the already-loaded `profile` from `loadUserData` for the deactivation check instead of re-querying. Removes the duplicate `user_profiles` fetch.
 
-Suggested safety guard:
-- playlist page cap around 20–30 pages per invocation
-- detail requests in small batches
-- keep existing frontend batch loop
+4. Add a try/catch inside `loadUserData` so a single failed sub-query doesn't poison the whole auth bootstrap. Default to empty profile/roles on failure and surface a toast.
 
-### 3. Make channel selection rotate through all underfilled channels
-Revise the `backfill_under_50` channel selection logic so it doesn’t always re-read the same leading window.
+5. Add a safety timeout (e.g. 8 seconds): if bootstrap hasn't finished by then, force `setIsLoading(false)` and mark `ipCheck.checked = true` so the user sees either the IP-blocked screen, the auth screen, or the app — never an indefinite blank.
 
-Recommended change:
-- query channels under 50 with a deterministic secondary order, e.g.
-  - `total_videos_fetched ASC`
-  - `last_analyzed_at ASC nulls first`
-  - `channel_id ASC`
-- process the first `limit`
-- after each processed channel, update `last_analyzed_at`
-- next invocation naturally moves to the next underfilled channels
+**`src/App.tsx`** (small belt-and-braces change)
 
-This ensures all 1710 channels get turns instead of the first tied subset monopolizing the queue.
+- Replace the two `return null` branches in `ProtectedRoute` with a tiny centered loading spinner so even if something hangs, the user sees a visible state instead of a white screen. This also helps debugging future regressions.
 
-### 4. Keep `total_videos_fetched` synced from actual stored rows
-Retain the recent fix, but make it consistent in all code paths:
-- after successful upsert
-- after zero-new-video result
-- after “channel exhausted” result
+### Verification
 
-For each processed channel:
-- recount rows in `videos` for that `channel_id`
-- update `channels.total_videos_fetched`
-- update `channels.youtube_total_videos` when available
+After the fix:
+- Hard reload `/` — should show spinner briefly, then the dashboard.
+- Throttle network in DevTools and reload — should still resolve to either dashboard, IP-blocked screen, or `/auth`, never a permanent blank.
+- The existing `useDashboard` 60s auto-refresh and error banner continue to work unchanged.
 
-### 5. Stabilize Channels page pagination
-Update `src/hooks/useChannels.ts` so paginated fetches use a stable secondary sort.
+### Files touched
 
-Current issue:
-- ordering only by `total_videos_fetched` causes duplicate/omitted rows across `.range(...)`
+- `src/hooks/useAuth.tsx` — error-hardened bootstrap, dedup deactivation check, safety timeout
+- `src/App.tsx` — replace `return null` with a small loading state in `ProtectedRoute`
 
-Fix:
-- add a second order clause such as:
-  - `order("total_videos_fetched", { ascending: false })`
-  - then `order("channel_id", { ascending: true })` or `order("id", { ascending: true })`
-
-This should also eliminate the duplicate key warnings seen in the console.
-
-### 6. Refresh UI behavior after each backfill batch
-Keep the existing live `refresh()` in `Channels.tsx`, but make sure it works with the stable ordering fix so the table reflects accurate progress instead of reshuffled duplicate rows.
-
-## Files to update
-
-- `supabase/functions/fetch-channel-videos/index.ts`
-- `src/hooks/useChannels.ts`
-
-Possibly no database migration is required if reusing `last_analyzed_at` for rotation. If that field should remain dedicated to stats analysis only, then add a new channel backfill timestamp column instead.
-
-## Technical details
-
-### Current root cause in code
-In `fetch-channel-videos/index.ts`:
-- backfill depends on `search.list`
-- capped at `maxSearchPages = 12`
-- filters out Shorts after fetch
-- so a Shorts-heavy channel can still end with very few qualifying videos
-
-In `useChannels.ts`:
-- pagination uses `.range(...)`
-- ordered only by `total_videos_fetched`
-- ties create unstable page boundaries
-
-### Safer fetch flow
-```text
-channels.list -> uploads playlist id
-      ↓
-playlistItems.list (page through uploads)
-      ↓
-videos.list (details for collected IDs)
-      ↓
-filter Shorts / already stored
-      ↓
-upsert videos
-      ↓
-recount videos table
-      ↓
-update channels.total_videos_fetched
-```
-
-## Acceptance criteria
-
-- High-volume channels can reach at least 50 stored videos if they have 50 eligible non-Short uploads
-- Channels are no longer stuck at 1–9 because only recent search results were examined
-- Backfill progresses across the whole 1710-channel set instead of repeatedly favoring the same subset
-- Channels page no longer shows duplicate row key warnings
-- Counts on `/channels` reflect actual stored videos after each batch
