@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Navigate, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,19 +9,43 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { Youtube, ArrowRight, Eye, EyeOff, MailCheck } from "lucide-react";
 
+type StrengthLevel = 0 | 1 | 2 | 3 | 4;
+
+function computePasswordStrength(pw: string): { level: StrengthLevel; label: string; colorClass: string } {
+  if (!pw) return { level: 0, label: "", colorClass: "bg-muted" };
+  const hasMixedCase = /[a-z]/.test(pw) && /[A-Z]/.test(pw);
+  const hasDigitOrSymbol = /[0-9]/.test(pw) || /[^A-Za-z0-9]/.test(pw);
+  if (pw.length < 8) return { level: 1, label: "Weak", colorClass: "bg-destructive" };
+  if (pw.length < 12) return { level: 2, label: "Fair", colorClass: "bg-orange-500" };
+  if (pw.length >= 12 && hasMixedCase && hasDigitOrSymbol)
+    return { level: 4, label: "Strong", colorClass: "bg-green-500" };
+  if (pw.length >= 12 && hasMixedCase) return { level: 3, label: "Good", colorClass: "bg-yellow-500" };
+  return { level: 2, label: "Fair", colorClass: "bg-orange-500" };
+}
+
 export default function Auth() {
   const { session, isLoading } = useAuth();
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState("");
   const [signupName, setSignupName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showLoginPw, setShowLoginPw] = useState(false);
   const [showSignupPw, setShowSignupPw] = useState(false);
+  const [showSignupConfirmPw, setShowSignupConfirmPw] = useState(false);
   const [signupSent, setSignupSent] = useState(false);
   const [resending, setResending] = useState(false);
   const { signIn, signUp } = useAuth();
+
+  useEffect(() => { document.title = "Sign In | YT Intel"; }, []);
+
+  const passwordStrength = useMemo(() => computePasswordStrength(signupPassword), [signupPassword]);
+  const passwordsMatch =
+    signupPassword.length === 0 ||
+    signupConfirmPassword.length === 0 ||
+    signupPassword === signupConfirmPassword;
 
   if (isLoading) return null;
   if (session) return <Navigate to="/" replace />;
@@ -36,6 +60,10 @@ export default function Auth() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (signupPassword !== signupConfirmPassword) {
+      toast.error("Passwords don't match");
+      return;
+    }
     setSubmitting(true);
     const { error } = await signUp(signupEmail, signupPassword, signupName);
     if (error) {
