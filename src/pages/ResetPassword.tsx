@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 import { Youtube, Eye, EyeOff, ArrowRight } from "lucide-react";
 
 export default function ResetPassword() {
@@ -49,21 +49,21 @@ export default function ResetPassword() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password.length < 6) {
-      toast({ title: "Password too short", description: "Use at least 6 characters.", variant: "destructive" });
+      toast.error("Password too short", { description: "Use at least 6 characters." });
       return;
     }
     if (password !== confirmPassword) {
-      toast({ title: "Passwords don't match", description: "Please re-enter your new password.", variant: "destructive" });
+      toast.error("Passwords don't match", { description: "Please re-enter your new password." });
       return;
     }
     setSubmitting(true);
     const { error: updErr } = await supabase.auth.updateUser({ password });
     setSubmitting(false);
     if (updErr) {
-      toast({ title: "Could not update password", description: updErr.message, variant: "destructive" });
+      toast.error("Could not update password", { description: updErr.message });
       return;
     }
-    toast({ title: "Password updated", description: "Sign in with your new password." });
+    toast.success("Password updated", { description: "Sign in with your new password." });
     await supabase.auth.signOut();
     navigate("/auth", { replace: true });
   };

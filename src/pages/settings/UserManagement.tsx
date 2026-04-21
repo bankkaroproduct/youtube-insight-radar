@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 import { UserCog } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Constants } from "@/integrations/supabase/types";
@@ -49,9 +49,9 @@ export default function UserManagement() {
       _new_role: newRole,
     });
     if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast.error("Error", { description: error.message });
     } else {
-      toast({ title: "Role updated" });
+      toast.success("Role updated");
       fetchUsers();
     }
   };
