@@ -173,10 +173,12 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
     // Cache the keyword even with 0 results
     await supabase.from("keyword_cache").upsert({
       keyword: job.keyword.toLowerCase().trim(),
+      order_by: job.order_by || "relevance",
+      published_after: job.published_after || null,
       fetched_at: new Date().toISOString(),
       video_ids: [],
       videos_found: 0,
-    }, { onConflict: "keyword" });
+    }, { onConflict: "keyword,order_by,published_after" });
     return { channelIds: [], keyUsed: currentKey };
   }
 
@@ -312,10 +314,12 @@ async function processJob(supabase: any, job: any, apiKeyData: any, quotaCache: 
   // Cache the keyword
   await supabase.from("keyword_cache").upsert({
     keyword: job.keyword.toLowerCase().trim(),
+    order_by: job.order_by || "relevance",
+    published_after: job.published_after || null,
     fetched_at: new Date().toISOString(),
     video_ids: allVideoIds.slice(0, 100),
     videos_found: videoRecords.length,
-  }, { onConflict: "keyword" });
+  }, { onConflict: "keyword,order_by,published_after" });
 
   return { channelIds: [...allChannelIds], keyUsed: currentKey };
 }

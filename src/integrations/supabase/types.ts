@@ -445,18 +445,24 @@ export type Database = {
         Row: {
           fetched_at: string
           keyword: string
+          order_by: string
+          published_after: string
           video_ids: Json | null
           videos_found: number | null
         }
         Insert: {
           fetched_at?: string
           keyword: string
+          order_by?: string
+          published_after: string
           video_ids?: Json | null
           videos_found?: number | null
         }
         Update: {
           fetched_at?: string
           keyword?: string
+          order_by?: string
+          published_after?: string
           video_ids?: Json | null
           videos_found?: number | null
         }
