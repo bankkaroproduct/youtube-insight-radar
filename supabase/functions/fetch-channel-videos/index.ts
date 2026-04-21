@@ -247,16 +247,26 @@ serve(async (req) => {
     const videosPerChannel = body.videos_per_channel || 50;
     const minVideos = body.min_videos ?? null;
     const maxVideos = body.max_videos ?? null;
+    const backfillUnder50 = body.backfill_under_50 === true;
 
     // Get channels, optionally filtered by total_videos_fetched range
     let query = supabase
       .from("channels")
-      .select("channel_id, channel_name")
-      .order("total_videos_fetched", { ascending: false })
+      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos")
       .limit(limit);
 
-    if (minVideos !== null) query = query.gte("total_videos_fetched", minVideos);
-    if (maxVideos !== null) query = query.lte("total_videos_fetched", maxVideos);
+    if (backfillUnder50) {
+      // Only channels under 50 AND where YouTube still has more uploads to fetch
+      // (or youtube_total_videos unknown — try anyway)
+      query = query
+        .lt("total_videos_fetched", 50)
+        .or("youtube_total_videos.is.null,youtube_total_videos.gt.total_videos_fetched")
+        .order("total_videos_fetched", { ascending: true });
+    } else {
+      query = query.order("total_videos_fetched", { ascending: false });
+      if (minVideos !== null) query = query.gte("total_videos_fetched", minVideos);
+      if (maxVideos !== null) query = query.lte("total_videos_fetched", maxVideos);
+    }
 
     const { data: channels, error: chErr } = await query;
 
@@ -318,6 +328,11 @@ serve(async (req) => {
       method: "POST", headers: triggerHeaders,
       body: JSON.stringify({ channel_ids: channelIds }),
     }).catch(e => console.error("Failed to trigger scrape-instagram-profiles:", e));
+
+    fetch(`${supabaseUrl}/functions/v1/scrape-channel-links`, {
+      method: "POST", headers: triggerHeaders,
+      body: JSON.stringify({ channel_ids: channelIds }),
+    }).catch(e => console.error("Failed to trigger scrape-channel-links:", e));
 
     return new Response(JSON.stringify({
       success: true,
