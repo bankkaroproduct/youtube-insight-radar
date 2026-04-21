@@ -20,6 +20,7 @@ import Links from "@/pages/Links";
 import UserManagement from "@/pages/settings/UserManagement";
 import ApiKeys from "@/pages/settings/ApiKeys";
 import IpWhitelist from "@/pages/settings/IpWhitelist";
+import AuditLog from "@/pages/settings/AuditLog";
 import NotFound from "@/pages/NotFound";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -89,6 +90,7 @@ function AppRoutes() {
       <Route path="/settings/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
       <Route path="/settings/api-keys" element={<ProtectedRoute><ApiKeys /></ProtectedRoute>} />
       <Route path="/settings/ip-whitelist" element={<ProtectedRoute><IpWhitelist /></ProtectedRoute>} />
+      <Route path="/settings/audit-log" element={<ProtectedRoute><AuditLog /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
