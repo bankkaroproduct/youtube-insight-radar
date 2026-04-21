@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/hooks/use-toast";
 import { UserCog } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,7 +20,7 @@ interface UserWithRole extends Profile {
 }
 
 export default function UserManagement() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, user: currentUser } = useAuth();
   const [users, setUsers] = useState<UserWithRole[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -42,13 +43,11 @@ export default function UserManagement() {
     if (isAdmin) fetchUsers();
   }, [isAdmin]);
 
-  const updateRole = async (userId: string, currentRoles: AppRole[], newRole: AppRole) => {
-    // Remove existing roles
-    for (const role of currentRoles) {
-      await supabase.from("user_roles").delete().eq("user_id", userId).eq("role", role);
-    }
-    // Add new role
-    const { error } = await supabase.from("user_roles").insert({ user_id: userId, role: newRole });
+  const updateRole = async (userId: string, _currentRoles: AppRole[], newRole: AppRole) => {
+    const { error } = await supabase.rpc("replace_user_role", {
+      _target_user_id: userId,
+      _new_role: newRole,
+    });
     if (error) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } else {
@@ -100,21 +99,38 @@ export default function UserManagement() {
                     <TableCell className="font-medium">{user.full_name || "—"}</TableCell>
                     <TableCell>{user.email}</TableCell>
                     <TableCell>
-                      <Select
-                        value={user.roles[0] || "viewer"}
-                        onValueChange={(v) => updateRole(user.user_id, user.roles, v as AppRole)}
-                      >
-                        <SelectTrigger className="w-36">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Constants.public.Enums.app_role.map((role) => (
-                            <SelectItem key={role} value={role}>
-                              {role.replace("_", " ")}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {currentUser?.id === user.user_id ? (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="inline-block">
+                                <Select value={user.roles[0] || "viewer"} disabled>
+                                  <SelectTrigger className="w-36" disabled>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                </Select>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>You cannot change your own role</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : (
+                        <Select
+                          value={user.roles[0] || "viewer"}
+                          onValueChange={(v) => updateRole(user.user_id, user.roles, v as AppRole)}
+                        >
+                          <SelectTrigger className="w-36">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Constants.public.Enums.app_role.map((role) => (
+                              <SelectItem key={role} value={role}>
+                                {role.replace("_", " ")}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={user.is_active ? "default" : "secondary"}>

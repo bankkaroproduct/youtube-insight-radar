@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Navigate, Link } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
-import { Youtube, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { Youtube, ArrowRight, Eye, EyeOff, MailCheck } from "lucide-react";
 
 export default function Auth() {
   const { session, isLoading } = useAuth();
@@ -18,6 +19,8 @@ export default function Auth() {
   const [submitting, setSubmitting] = useState(false);
   const [showLoginPw, setShowLoginPw] = useState(false);
   const [showSignupPw, setShowSignupPw] = useState(false);
+  const [signupSent, setSignupSent] = useState(false);
+  const [resending, setResending] = useState(false);
   const { signIn, signUp } = useAuth();
 
   if (isLoading) return null;
@@ -38,9 +41,24 @@ export default function Auth() {
     if (error) {
       toast({ title: "Signup failed", description: error.message, variant: "destructive" });
     } else {
-      toast({ title: "Account created", description: "Check your email to confirm your account." });
+      setSignupSent(true);
     }
     setSubmitting(false);
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: signupEmail,
+      options: { emailRedirectTo: `${window.location.origin}/auth` },
+    });
+    if (error) {
+      toast({ title: "Resend failed", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Confirmation email sent", description: `Check your inbox at ${signupEmail}.` });
+    }
+    setResending(false);
   };
 
   return (
@@ -153,6 +171,37 @@ export default function Auth() {
             </TabsContent>
 
             <TabsContent value="signup">
+              {signupSent ? (
+                <div className="rounded-xl border bg-card p-6 text-center space-y-4">
+                  <div className="mx-auto h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                    <MailCheck className="h-6 w-6 text-primary" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="font-semibold text-foreground">Check your inbox</h3>
+                    <p className="text-sm text-muted-foreground">
+                      We sent a confirmation link to <span className="font-medium text-foreground">{signupEmail}</span>.
+                      Click it to activate your account.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Button onClick={handleResend} variant="outline" disabled={resending} className="w-full">
+                      {resending ? "Resending..." : "Resend confirmation email"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="w-full"
+                      onClick={() => {
+                        setSignupSent(false);
+                        setSignupEmail("");
+                        setSignupPassword("");
+                        setSignupName("");
+                      }}
+                    >
+                      Use a different email
+                    </Button>
+                  </div>
+                </div>
+              ) : (
               <form onSubmit={handleSignup} className="space-y-5">
                 <div className="space-y-2">
                   <Label htmlFor="signup-name" className="text-sm font-medium">Full Name</Label>
@@ -205,6 +254,7 @@ export default function Auth() {
                   )}
                 </Button>
               </form>
+              )}
             </TabsContent>
           </Tabs>
 
