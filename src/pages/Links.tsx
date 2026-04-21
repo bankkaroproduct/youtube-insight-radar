@@ -482,11 +482,13 @@ export default function Links() {
 
 function ProcessingTab() {
   const [stats, setStats] = useState({ total: 0, processed: 0, unprocessed: 0, withPlatform: 0, withRetailer: 0, failed: 0 });
-  const [loading, setLoading] = useState(false);
+  const [statsLoaded, setStatsLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [retryingFailed, setRetryingFailed] = useState(false);
   const [batchSize, setBatchSize] = useState(200);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const inFlightRef = useRef(false);
 
   const serviceState = useSyncExternalStore(
     (cb) => linkProcessingService.subscribe(cb),
@@ -499,30 +501,61 @@ function ProcessingTab() {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
+  // Sequential `estimated` counts: parallel `exact` counts on the 161k-row
+  // video_links table were timing out under heavy write load, leaving the
+  // cards stuck on "...". Estimated counts use planner stats and return in ms.
+  // `failed` stays exact (small set, must be precise for the retry banner).
   const fetchStats = useCallback(async () => {
-    setLoading(true);
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setRefreshing(true);
     try {
-      const [totalRes, processedRes, platformRes, retailerRes, failedRes] = await Promise.all([
-        supabase.from("video_links").select("id", { count: "exact", head: true }),
-        supabase.from("video_links").select("id", { count: "exact", head: true }).not("unshortened_url", "is", null),
-        supabase.from("video_links").select("id", { count: "exact", head: true }).not("affiliate_platform", "is", null),
-        supabase.from("video_links").select("id", { count: "exact", head: true }).not("resolved_retailer", "is", null),
-        supabase.from("video_links").select("id", { count: "exact", head: true }).eq("resolution_status", "failed"),
-      ]);
+      const totalRes = await supabase
+        .from("video_links")
+        .select("id", { count: "estimated", head: true });
+      const processedRes = await supabase
+        .from("video_links")
+        .select("id", { count: "estimated", head: true })
+        .not("unshortened_url", "is", null);
+      const platformRes = await supabase
+        .from("video_links")
+        .select("id", { count: "estimated", head: true })
+        .not("affiliate_platform", "is", null);
+      const retailerRes = await supabase
+        .from("video_links")
+        .select("id", { count: "estimated", head: true })
+        .not("resolved_retailer", "is", null);
+      const failedRes = await supabase
+        .from("video_links")
+        .select("id", { count: "exact", head: true })
+        .eq("resolution_status", "failed");
+
+      const errs = [totalRes, processedRes, platformRes, retailerRes, failedRes]
+        .map((r) => r.error)
+        .filter(Boolean);
+      if (errs.length > 0) {
+        console.error("Stats fetch errors:", errs.map((e) => e?.message));
+        setStatsLoaded(true);
+        return;
+      }
+
       const total = totalRes.count || 0;
       const processed = processedRes.count || 0;
       setStats({
         total,
         processed,
-        unprocessed: total - processed,
+        unprocessed: Math.max(0, total - processed),
         withPlatform: platformRes.count || 0,
         withRetailer: retailerRes.count || 0,
         failed: failedRes.count || 0,
       });
+      setStatsLoaded(true);
     } catch (e) {
       console.error("Failed to fetch stats", e);
+      setStatsLoaded(true);
     } finally {
-      setLoading(false);
+      inFlightRef.current = false;
+      setRefreshing(false);
     }
   }, []);
 
@@ -547,7 +580,8 @@ function ProcessingTab() {
 
   useEffect(() => {
     if (!running) return;
-    const interval = setInterval(fetchStats, 5000);
+    // 15s (was 5s) — reduce contention with the active link processor
+    const interval = setInterval(fetchStats, 15000);
     return () => clearInterval(interval);
   }, [running, fetchStats]);
 
@@ -609,7 +643,7 @@ function ProcessingTab() {
             <CardContent className="pt-4 pb-3 px-4">
               <p className="text-sm text-muted-foreground">{s.label}</p>
               <p className={`text-2xl font-bold ${s.danger && stats.failed > 0 ? "text-destructive" : ""}`}>
-                {loading ? "..." : s.value.toLocaleString()}
+                {!statsLoaded ? "..." : s.value.toLocaleString()}
               </p>
             </CardContent>
           </Card>
@@ -663,8 +697,8 @@ function ProcessingTab() {
             className="w-28"
           />
         </div>
-        <Button variant="outline" onClick={fetchStats} disabled={loading} size="lg">
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} /> Refresh Stats
+        <Button variant="outline" onClick={fetchStats} disabled={refreshing} size="lg">
+          <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} /> Refresh Stats
         </Button>
         <AlertDialog>
           <AlertDialogTrigger asChild>
