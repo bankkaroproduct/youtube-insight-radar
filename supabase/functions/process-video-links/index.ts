@@ -1005,6 +1005,7 @@ Deno.serve(async (req) => {
       cached: totalCached,
       resolved: totalResolved,
       failed: totalFailed,
+      db_errors: dbErrors,
       metricsByDomain,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
