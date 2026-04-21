@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useIpWhitelist } from "@/hooks/useIpWhitelist";
+import { useState, useMemo } from "react";
+import { useIpWhitelist, isValidIpOrCidr } from "@/hooks/useIpWhitelist";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -8,9 +8,31 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Shield, Plus, Trash2, Globe, Wifi } from "lucide-react";
+import { Shield, Plus, Trash2, Globe, Wifi, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
+
+function ipToInt(ip: string): number {
+  return ip.split(".").reduce((acc, o) => (acc << 8) + parseInt(o, 10), 0) >>> 0;
+}
+function matchesCidr(ip: string, cidr: string): boolean {
+  if (!cidr.includes("/")) return ip === cidr;
+  const [base, bitsStr] = cidr.split("/");
+  const bits = parseInt(bitsStr, 10);
+  if (isNaN(bits) || bits < 0 || bits > 32) return false;
+  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+  return (ipToInt(ip) & mask) === (ipToInt(base) & mask);
+}
 
 export default function IpWhitelist() {
   const { entries, isLoading, currentIp, addIp, removeIp, toggleActive } = useIpWhitelist();
@@ -18,24 +40,50 @@ export default function IpWhitelist() {
   const [newIp, setNewIp] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [adding, setAdding] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingIp, setPendingIp] = useState<{ ip: string; desc: string } | null>(null);
 
-  const handleAdd = async () => {
-    if (!newIp.trim()) return;
+  const activeEntries = useMemo(() => entries.filter((e) => e.is_active), [entries]);
+  const whitelistIsEmpty = activeEntries.length === 0;
+
+  const lockoutRisk = useMemo(() => {
+    if (!pendingIp || !currentIp || currentIp === "unknown") return false;
+    if (!whitelistIsEmpty) return false;
+    try {
+      return !matchesCidr(currentIp, pendingIp.ip.trim());
+    } catch {
+      return true;
+    }
+  }, [pendingIp, currentIp, whitelistIsEmpty]);
+
+  const requestAdd = (ip: string, desc: string) => {
+    if (!ip.trim()) return;
+    if (!isValidIpOrCidr(ip)) {
+      // surface error via the hook's toast on actual add; also short-circuit here
+      return;
+    }
+    setPendingIp({ ip, desc });
+    setConfirmOpen(true);
+  };
+
+  const confirmAdd = async () => {
+    if (!pendingIp) return;
     setAdding(true);
-    const ok = await addIp(newIp, newDesc);
+    const ok = await addIp(pendingIp.ip, pendingIp.desc);
+    setAdding(false);
+    setConfirmOpen(false);
+    setPendingIp(null);
     if (ok) {
       setNewIp("");
       setNewDesc("");
       setDialogOpen(false);
     }
-    setAdding(false);
   };
 
-  const handleAddCurrentIp = async () => {
+  const handleAdd = () => requestAdd(newIp, newDesc);
+  const handleAddCurrentIp = () => {
     if (!currentIp || currentIp === "unknown") return;
-    setAdding(true);
-    await addIp(currentIp, "My IP (auto-detected)");
-    setAdding(false);
+    requestAdd(currentIp, "My IP (auto-detected)");
   };
 
   return (
@@ -81,12 +129,17 @@ export default function IpWhitelist() {
                   </DialogHeader>
                   <div className="space-y-4 pt-2">
                     <div>
-                      <Label>IP Address</Label>
+                      <Label>IP Address or CIDR</Label>
                       <Input
-                        placeholder="e.g. 203.0.113.5"
+                        placeholder="e.g. 203.0.113.5 or 203.0.113.0/24"
                         value={newIp}
                         onChange={(e) => setNewIp(e.target.value)}
                       />
+                      {newIp.trim() && !isValidIpOrCidr(newIp) && (
+                        <p className="text-xs text-destructive mt-1">
+                          Invalid IP address or CIDR range
+                        </p>
+                      )}
                     </div>
                     <div>
                       <Label>Description (optional)</Label>
@@ -96,8 +149,12 @@ export default function IpWhitelist() {
                         onChange={(e) => setNewDesc(e.target.value)}
                       />
                     </div>
-                    <Button onClick={handleAdd} disabled={!newIp.trim() || adding} className="w-full">
-                      {adding ? "Adding..." : "Add to Whitelist"}
+                    <Button
+                      onClick={handleAdd}
+                      disabled={!newIp.trim() || !isValidIpOrCidr(newIp) || adding}
+                      className="w-full"
+                    >
+                      Continue
                     </Button>
                   </div>
                 </DialogContent>
@@ -168,6 +225,59 @@ export default function IpWhitelist() {
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm IP whitelist addition</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                <p>
+                  Adding an IP will immediately restrict access to only whitelisted IPs.
+                  Anyone not matching will be blocked.
+                </p>
+                <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+                  <div>
+                    <span className="text-muted-foreground">Adding:</span>{" "}
+                    <span className="font-mono font-semibold text-foreground">{pendingIp?.ip}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Your current IP:</span>{" "}
+                    <span className="font-mono font-semibold text-foreground">
+                      {currentIp ?? "unknown"}
+                    </span>
+                  </div>
+                </div>
+                <p>Is the IP you're adding reachable from you?</p>
+                {lockoutRisk && (
+                  <div className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-destructive">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <div className="text-sm">
+                      <strong>You may lock yourself out.</strong> Your current IP{" "}
+                      <span className="font-mono">{currentIp}</span> does not match the IP you're
+                      adding, and the whitelist is currently empty. Adding this will block your
+                      access immediately.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={adding}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                confirmAdd();
+              }}
+              disabled={adding}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {adding ? "Adding..." : "Yes, add and restrict access"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -26,15 +26,21 @@ import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
 
-function IpBlockedScreen({ ip }: { ip: string }) {
+function IpBlockedScreen({ ip, error }: { ip: string; error?: boolean }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="text-center space-y-4 max-w-md p-8">
         <Shield className="h-16 w-16 text-destructive mx-auto" />
         <h1 className="text-2xl font-bold">Access Denied</h1>
-        <p className="text-muted-foreground">
-          Your IP address <span className="font-mono font-semibold">{ip}</span> is not authorized to access this application.
-        </p>
+        {error ? (
+          <p className="text-muted-foreground">
+            Could not verify your IP — access blocked for safety. Contact your admin.
+          </p>
+        ) : (
+          <p className="text-muted-foreground">
+            Your IP address <span className="font-mono font-semibold">{ip}</span> is not authorized to access this application.
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
           Please contact your administrator to whitelist your IP address.
         </p>
@@ -44,23 +50,27 @@ function IpBlockedScreen({ ip }: { ip: string }) {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { session, isLoading } = useAuth();
-  const [ipCheck, setIpCheck] = useState<{ checked: boolean; allowed: boolean; ip: string }>({
+  const { session, isLoading, hasRole } = useAuth();
+  const isSuperAdmin = hasRole("super_admin");
+  const [ipCheck, setIpCheck] = useState<{ checked: boolean; allowed: boolean; ip: string; error?: boolean }>({
     checked: false, allowed: true, ip: "",
   });
 
   useEffect(() => {
-    if (session) {
-      checkIpAccess().then((res) => {
-        setIpCheck({ checked: true, allowed: res.allowed, ip: res.ip });
-      });
+    if (!session) return;
+    if (isSuperAdmin) {
+      setIpCheck({ checked: true, allowed: true, ip: "bypassed" });
+      return;
     }
-  }, [session]);
+    checkIpAccess().then((res) => {
+      setIpCheck({ checked: true, allowed: res.allowed, ip: res.ip, error: res.error });
+    });
+  }, [session, isSuperAdmin]);
 
   if (isLoading) return null;
   if (!session) return <Navigate to="/auth" replace />;
   if (!ipCheck.checked) return null;
-  if (!ipCheck.allowed) return <IpBlockedScreen ip={ipCheck.ip} />;
+  if (!ipCheck.allowed) return <IpBlockedScreen ip={ipCheck.ip} error={ipCheck.error} />;
   return <AppLayout>{children}</AppLayout>;
 }
 
