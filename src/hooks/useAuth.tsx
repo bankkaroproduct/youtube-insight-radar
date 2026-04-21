@@ -47,9 +47,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ]);
       if (profileRes.error) console.warn("[useAuth] profile query error", profileRes.error);
       if (rolesRes.error) console.warn("[useAuth] roles query error", rolesRes.error);
+
+      let rolesData = rolesRes.data ?? [];
+      // Retry once if roles came back empty without error (RLS race during initial JWT activation).
+      if (!rolesRes.error && rolesData.length === 0) {
+        await new Promise((r) => setTimeout(r, 400));
+        const retry = await supabase.from("user_roles").select("role").eq("user_id", userId);
+        if (!retry.error && retry.data && retry.data.length > 0) {
+          rolesData = retry.data;
+        }
+      }
+
       setProfile(profileRes.data ?? null);
-      const newRoles = rolesRes.data?.map((r) => r.role) ?? [];
-      console.log("[useAuth] loaded roles:", newRoles, "for user", userId);
+      const newRoles = (rolesData.map((r) => r.role) ?? []) as AppRole[];
       setRoles(newRoles);
       rolesRef.current = newRoles;
       return { profile: profileRes.data, roles: newRoles };
@@ -99,28 +109,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, 8000);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
-        try {
-          setSession(newSession);
-          setUser(newSession?.user ?? null);
-          if (newSession?.user) {
-            const userChanged = newSession.user.id !== lastUserId;
-            lastUserId = newSession.user.id;
-            const { roles: newRoles } = await loadUserData(newSession.user.id);
-            if (initialized && userChanged) {
-              setIpCheck({ allowed: true, ip: "", checked: false });
-              runIpCheckSafe(newRoles);
+      (_event, newSession) => {
+        // CRITICAL: do NOT call other Supabase APIs synchronously inside this callback —
+        // it can deadlock the auth client. Defer DB work to the next tick.
+        setSession(newSession);
+        setUser(newSession?.user ?? null);
+
+        if (newSession?.user) {
+          const userChanged = newSession.user.id !== lastUserId;
+          lastUserId = newSession.user.id;
+          setTimeout(async () => {
+            try {
+              const { roles: newRoles } = await loadUserData(newSession.user.id);
+              if (initialized && userChanged) {
+                setIpCheck({ allowed: true, ip: "", checked: false });
+                runIpCheckSafe(newRoles);
+              }
+            } catch (e) {
+              console.error("[useAuth] deferred auth-change load failed", e);
+            } finally {
+              if (initialized) setIsLoading(false);
             }
-          } else {
-            setProfile(null);
-            setRoles([]);
-            rolesRef.current = [];
-            lastUserId = null;
-            setIpCheck({ allowed: true, ip: "", checked: false });
-          }
-        } catch (e) {
-          console.error("[useAuth] onAuthStateChange handler failed", e);
-        } finally {
+          }, 0);
+        } else {
+          setProfile(null);
+          setRoles([]);
+          rolesRef.current = [];
+          lastUserId = null;
+          setIpCheck({ allowed: true, ip: "", checked: false });
           if (initialized) setIsLoading(false);
         }
       }
