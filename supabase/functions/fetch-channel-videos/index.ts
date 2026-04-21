@@ -153,7 +153,10 @@ async function processChannel(
     pagesFetched++;
 
     if (pageVideoIds.length === 0) {
-      if (!nextPageToken) break;
+      if (!nextPageToken) {
+        fullyScanned = true;
+        break;
+      }
       continue;
     }
 
