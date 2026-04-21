@@ -271,7 +271,14 @@ Deno.serve(async (req) => {
     const channels = (rawChannels || [])
       .filter((channel: any) => {
         const fetched = Number(channel.total_videos_fetched ?? 0);
-        if (backfillUnder50 && fetched >= 50) return false;
+        const ytTotal = channel.youtube_total_videos == null
+          ? null
+          : Number(channel.youtube_total_videos);
+        if (backfillUnder50) {
+          if (fetched >= 50) return false;
+          // Skip channels already fully covered (YouTube has fewer than 50 total).
+          if (ytTotal !== null && fetched >= ytTotal) return false;
+        }
         if (minVideos !== null && fetched < minVideos) return false;
         if (maxVideos !== null && fetched > maxVideos) return false;
         return true;

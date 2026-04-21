@@ -383,7 +383,7 @@ function buildSheet5(
   retailerByDomain: Map<string, string>,
   affiliateByDomain: Map<string, string>,
 ) {
-  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Videos Fetched (max 50)", "Total Videos on YouTube", "Channel Description", "Link #", "Link Header", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+  const headers = ["Channel Link", "Channel Name", "Channel Subscribers", "Best Video Rank", "Channel Avg Views", "Channel Avg Likes", "Channel Avg Comments", "Videos Fetched (Till Date)", "Total Videos on YouTube", "Channel Description", "Link #", "Link Header", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
   const rows: any[][] = [];
   for (const ch of channels) {
     const description = ch.description?.trim() ? ch.description : "No Description";
