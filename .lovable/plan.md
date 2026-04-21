@@ -1,61 +1,39 @@
 
 
-## Fix: Link processing reports success but persists nothing
+## Fix: Link processing stats cards stuck on "..."
 
-### Root cause (confirmed from Postgres logs)
+### Root cause
 
-Every `video_links` upsert inside `process-video-links` is being silently rejected. Two distinct DB errors are firing on every batch:
+`ProcessingTab.fetchStats` in `src/pages/Links.tsx` runs **5 parallel `count: "exact"`** queries against `video_links` (161k rows, actively being written to). Postgres' statement timeout kills them under load, errors get swallowed into the catch block, but `setLoading(true)` was already set — so the cards render `"..."` and never recover. The 5-second auto-poll while processing makes it worse: each tick stacks more dying queries on the table.
 
-1. **`null value in column "video_id" violates not-null constraint`** — `supabase.from("video_links").upsert(rows, { onConflict: "id" })` is sent by PostgREST as an `INSERT ... ON CONFLICT (id) DO UPDATE`. Postgres validates NOT NULL on the *incoming* row before the conflict swap. The failure-row payload (`{ id, resolution_attempts, resolution_status, last_resolution_error }`) and several other code paths omit `video_id` and `original_url`, so the whole chunk is rejected.
+I confirmed the underlying processing fix from the previous round is working — pending dropped from 96,158 to 95,916 in a few minutes, with fresh `updated_at` timestamps. This plan only addresses the unrelated stats-card visibility issue.
 
-2. **`canceling statement due to statement timeout`** — the large success-row upserts (chunks of 500, ~17 columns each) exceed Postgres' statement timeout. Whole chunks are dropped.
+### Fix (single file: `src/pages/Links.tsx`)
 
-The function never checks `error` on its upserts, so the loop happily reports `success: true, processed: 235`, but the DB is unchanged. That's why `remaining` stays pinned at 96,158 across every batch and `updated_at` on resolved rows is frozen at 17:53:14 from one earlier successful pass.
+1. **Switch to `count: "estimated"`** for the 4 large counts (total / processed / with platform / with retailer). Estimated counts use `pg_class` reltuples + the planner's row estimate — they return in milliseconds even on 160k+ rows under heavy write load. The numbers will be ±1–2% off, which is fine for a progress dashboard. Keep `count: "exact"` only for `failed` (small set, needs to be precise so the "Retry Failed" banner is right).
 
-### Fix
+2. **Run sequentially, not in parallel.** 5 simultaneous count queries during active writes is what's killing them. Sequential adds ~1 extra second total but eliminates the contention.
 
-All changes are in `supabase/functions/process-video-links/index.ts`.
+3. **Replace `loading` state with `statsLoaded`.** Show `"..."` only on the very first load; on subsequent refreshes keep showing the previous numbers (so a transient error never blanks the cards again).
 
-**1. Stop using `upsert` for partial updates — use `update().in("id", ...)` instead.**
+4. **Add an in-flight guard** (`inFlightRef`) so overlapping polls can't pile up if a fetch is slow.
 
-Five upsert sites currently rely on conflict-update behavior but only carry partial payloads. Convert each to a real UPDATE keyed by `id`, which has no NOT NULL pressure since it touches existing rows only:
+5. **Slow the auto-poll from 5s → 15s** while processing is running. Stats don't need second-by-second precision, and 15s gives the heavily-written table breathing room.
 
-- Skip-domain fast path (line ~497): change to `.update({...}).eq("id", link.id)` per row, or use `.update(common).in("id", batchIds)` after grouping rows that share the same payload (they do — all skip rows get the same `classification/is_shortened/link_type/resolution_status` plus a per-row `unshortened_url/domain/original_domain`).
-  - Cleanest: keep per-row but issue them via `Promise.all` chunks of 100, OR build a single SQL via `rpc` — simplest is to loop and `.update(...)` per row in batched parallelism.
-- Skip-batch inside while loop (line ~595): same treatment.
-- Success-row write (line ~842): split each row into an UPDATE by id. To preserve throughput, group rows whose payloads are identical except for id (rare here), or run updates in `Promise.all` chunks of 25.
-- Failure-row write (line ~866): replace upsert with per-id UPDATE — already keyed by id only.
-- Step-3 unmatched-link write (line ~937): same.
+6. **Log errors instead of swallowing them**, so future regressions are visible in the console.
 
-**2. Reduce chunk size and add error logging.**
+### Why not a server-side aggregate function?
 
-- Drop chunk size from 500 → 100 to stay well under statement timeout.
-- After every DB write, check `error` and `console.error` it. Right now failures are invisible. Add at minimum:
-  ```
-  const { error } = await supabase.from("video_links").update(...).eq("id", id);
-  if (error) console.error("video_links update failed", { id, error: error.message });
-  ```
+A single SQL function with `count(*) FILTER (...)` would be the cleanest fix, but adding new SQL functions requires the migration tool which isn't available in this session. The estimated-count approach gets the cards working immediately with zero schema changes. We can switch to a server-side aggregate later if you want pixel-exact numbers.
 
-**3. Surface DB write failures to the caller.**
+### Expected outcome
 
-Track `dbErrors` count alongside `totalProcessed/totalCached/totalFailed` and include it in the response JSON. The client log will then show e.g. `(107 cached, 1 failed, 5 db errors)` instead of pretending everything worked.
-
-**4. One-time cleanup (no migration needed).**
-
-Once the function writes correctly, the next batch run will start draining the 96,158 pending links naturally. No data backfill required.
-
-### Why not just add `video_id`/`original_url` to the failure payload?
-
-Two reasons: (a) the function doesn't always have `original_url` in scope at the failure-write site without re-plumbing, and (b) statement-timeout failures on the 500-row success chunks would still happen. Switching to UPDATE + smaller chunks fixes both classes of failure with one change and removes the fragile "remember to include every NOT NULL column on every upsert" footgun for future edits.
-
-### Expected outcome after fix
-
-- Console log shows: `Batch #1: 235 processed (107 cached, 1 failed), 95,923 remaining` — `remaining` actually decreases.
-- `resolution_status='pending'` count drops by ~200/batch.
-- Stuck `bit.ly`/`myshlf.us` rows get `resolution_attempts` incremented and eventually move to `resolution_status='failed'` after 3 tries (current code already does this, it just wasn't persisting).
-- If anything still fails to write, the response includes `dbErrors > 0` and the edge logs show the exact reason.
+- On reload of the Processing tab, all 6 cards populate within ~1 second.
+- During active processing the numbers refresh every 15 seconds without blanking out.
+- "Failed" stays accurate; the other 5 may be ±1% (acceptable for a progress view).
+- If the DB ever does fail a count, the cards keep showing the last good value and the error appears in the console.
 
 ### Files touched
 
-- `supabase/functions/process-video-links/index.ts` — replace 5 `upsert` calls with `update`, reduce chunk size, add error logging, add `dbErrors` to response.
+- `src/pages/Links.tsx` — `ProcessingTab` component only (~70 lines around the `fetchStats` function and its useEffects).
 
