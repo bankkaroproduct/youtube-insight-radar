@@ -178,11 +178,17 @@ export default function Channels() {
         if (!resp.ok) throw new Error(result.error || "Failed");
         const processed = result.channels_processed || 0;
         if (processed === 0) break;
+        const inserted = result.total_videos_inserted || 0;
         totalProcessed += processed;
-        totalVideos += result.total_videos_inserted || 0;
+        totalVideos += inserted;
         toast.loading(`Backfilled ${totalProcessed} channels (${totalVideos} videos)…`, { id: t });
         // Live-refresh between batches so users see counts climbing
         refresh();
+        if (inserted === 0) {
+          // Selected channels but couldn't insert anything — likely all fully-scanned
+          // or only Shorts left. Stop to avoid an infinite loop.
+          break;
+        }
       }
       toast.success(`Done. Backfilled ${totalProcessed} channels with ${totalVideos} videos.`, { id: t });
       refresh();
