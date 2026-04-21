@@ -15,6 +15,12 @@ const ACTION_LABELS: Record<string, string> = {
   ip_whitelist_added: "IP added",
   ip_whitelist_removed: "IP removed",
   ip_whitelist_toggled: "IP toggled",
+  api_keys_added: "API keys added",
+  api_keys_deleted: "API keys deleted",
+  api_quota_reset: "API quota reset",
+  keyword_deleted: "Keyword deleted",
+  video_links_reset: "Links reset",
+  fetch_jobs_killed: "Fetch jobs killed",
 };
 
 const ACTION_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -22,6 +28,12 @@ const ACTION_VARIANTS: Record<string, "default" | "secondary" | "destructive" | 
   ip_whitelist_added: "default",
   ip_whitelist_removed: "destructive",
   ip_whitelist_toggled: "secondary",
+  api_keys_added: "default",
+  api_keys_deleted: "destructive",
+  api_quota_reset: "secondary",
+  keyword_deleted: "destructive",
+  video_links_reset: "destructive",
+  fetch_jobs_killed: "destructive",
 };
 
 export default function AuditLog() {

@@ -550,6 +550,14 @@ function ProcessingTab() {
         if (data.done) break;
       }
       toast.success("Reset complete", { description: `Reset ${totalProcessed.toLocaleString()} links.` });
+      try {
+        await supabase.rpc("log_audit" as any, {
+          _action: "video_links_reset",
+          _target_type: "video_links",
+          _target_id: null,
+          _details: { total_processed: totalProcessed },
+        } as any);
+      } catch { /* silent */ }
       linkProcessingService.clearLogs();
       await fetchStats();
     } catch (e: any) {

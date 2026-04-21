@@ -53,6 +53,14 @@ export function useApiKeys() {
       const insertedIds = inserted.map((r) => r.id);
       const insertedLast4: Record<string, string> = {};
       for (const r of inserted) insertedLast4[r.id] = r.api_key_last_4;
+      try {
+        await supabase.rpc("log_audit" as any, {
+          _action: "api_keys_added",
+          _target_type: "youtube_api_keys",
+          _target_id: null,
+          _details: { count: inserted.length, last4s: inserted.map((r) => r.api_key_last_4) },
+        } as any);
+      } catch { /* silent */ }
       return { insertedIds, skipped, insertedLast4 };
     },
     onSuccess: async ({ insertedIds, skipped, insertedLast4 }) => {
@@ -97,6 +105,14 @@ export function useApiKeys() {
         .delete()
         .in("id", ids);
       if (error) throw error;
+      try {
+        await supabase.rpc("log_audit" as any, {
+          _action: "api_keys_deleted",
+          _target_type: "youtube_api_keys",
+          _target_id: null,
+          _details: { count: ids.length, ids },
+        } as any);
+      } catch { /* silent */ }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });
@@ -109,6 +125,14 @@ export function useApiKeys() {
     mutationFn: async () => {
       const { error } = await supabase.rpc("reset_daily_quotas" as any);
       if (error) throw error;
+      try {
+        await supabase.rpc("log_audit" as any, {
+          _action: "api_quota_reset",
+          _target_type: "youtube_api_keys",
+          _target_id: null,
+          _details: null,
+        } as any);
+      } catch { /* silent */ }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });

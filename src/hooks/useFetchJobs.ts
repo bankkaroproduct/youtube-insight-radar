@@ -82,6 +82,14 @@ export function useFetchJobs() {
     });
     if (error) toast.error("Failed to kill jobs");
     else {
+      try {
+        await supabase.rpc("log_audit" as any, {
+          _action: "fetch_jobs_killed",
+          _target_type: "fetch_jobs",
+          _target_id: null,
+          _details: null,
+        } as any);
+      } catch { /* silent */ }
       toast.success("All active jobs cancelled");
       fetchJobs();
     }
