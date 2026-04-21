@@ -54,11 +54,15 @@ export function useIpWhitelist() {
       return false;
     }
     const { data: { user } } = await supabase.auth.getUser();
-    const { error } = await supabase.from("ip_whitelist").insert({
-      ip_address: ipAddress.trim(),
-      description: description?.trim() || null,
-      created_by: user?.id ?? null,
-    });
+    const { data: inserted, error } = await supabase
+      .from("ip_whitelist")
+      .insert({
+        ip_address: ipAddress.trim(),
+        description: description?.trim() || null,
+        created_by: user?.id ?? null,
+      })
+      .select()
+      .single();
     if (error) {
       if (error.code === "23505") {
         toast.error("This IP is already in the whitelist");
@@ -67,22 +71,40 @@ export function useIpWhitelist() {
       }
       return false;
     }
+    try {
+      await supabase.rpc("log_audit", {
+        _action: "ip_whitelist_added",
+        _target_type: "ip_whitelist",
+        _target_id: inserted?.id ?? ipAddress.trim(),
+        _details: { ip_address: ipAddress.trim(), description: description?.trim() || null, is_active: true },
+      });
+    } catch { /* logging must not break the user-facing op */ }
     toast.success(`Added IP ${ipAddress}`);
     await fetchEntries();
     return true;
   };
 
   const removeIp = async (id: string) => {
+    const target = entries.find((e) => e.id === id);
     const { error } = await supabase.from("ip_whitelist").delete().eq("id", id);
     if (error) {
       toast.error("Failed to remove IP");
       return;
     }
+    try {
+      await supabase.rpc("log_audit", {
+        _action: "ip_whitelist_removed",
+        _target_type: "ip_whitelist",
+        _target_id: id,
+        _details: { ip_address: target?.ip_address ?? null, description: target?.description ?? null },
+      });
+    } catch { /* noop */ }
     toast.success("IP removed");
     await fetchEntries();
   };
 
   const toggleActive = async (id: string, isActive: boolean) => {
+    const target = entries.find((e) => e.id === id);
     const { error } = await supabase
       .from("ip_whitelist")
       .update({ is_active: isActive })
@@ -91,6 +113,14 @@ export function useIpWhitelist() {
       toast.error("Failed to update IP status");
       return;
     }
+    try {
+      await supabase.rpc("log_audit", {
+        _action: "ip_whitelist_toggled",
+        _target_type: "ip_whitelist",
+        _target_id: id,
+        _details: { ip_address: target?.ip_address ?? null, is_active: isActive },
+      });
+    } catch { /* noop */ }
     await fetchEntries();
   };
 
