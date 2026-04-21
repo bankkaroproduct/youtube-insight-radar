@@ -199,12 +199,15 @@ export type Database = {
       }
       fetch_jobs: {
         Row: {
+          attempt_count: number
           completed_at: string | null
           created_at: string
           error_message: string | null
           id: string
           keyword: string
           keyword_id: string | null
+          last_failure_reason: string | null
+          max_attempts: number
           order_by: string
           published_after: string | null
           started_at: string | null
@@ -213,12 +216,15 @@ export type Database = {
           videos_found: number | null
         }
         Insert: {
+          attempt_count?: number
           completed_at?: string | null
           created_at?: string
           error_message?: string | null
           id?: string
           keyword: string
           keyword_id?: string | null
+          last_failure_reason?: string | null
+          max_attempts?: number
           order_by?: string
           published_after?: string | null
           started_at?: string | null
@@ -227,12 +233,15 @@ export type Database = {
           videos_found?: number | null
         }
         Update: {
+          attempt_count?: number
           completed_at?: string | null
           created_at?: string
           error_message?: string | null
           id?: string
           keyword?: string
           keyword_id?: string | null
+          last_failure_reason?: string | null
+          max_attempts?: number
           order_by?: string
           published_after?: string | null
           started_at?: string | null
