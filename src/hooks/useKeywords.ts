@@ -214,6 +214,14 @@ export function useKeywords(filters: KeywordFilters = defaultKeywordFilters, pag
     if (error) {
       toast.error("Failed to delete keyword");
     } else {
+      try {
+        await supabase.rpc("log_audit" as any, {
+          _action: "keyword_deleted",
+          _target_type: "keywords_search_runs",
+          _target_id: id,
+          _details: null,
+        } as any);
+      } catch { /* silent */ }
       toast.success("Keyword deleted");
       fetchKeywords();
     }
