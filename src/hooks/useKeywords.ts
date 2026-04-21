@@ -196,15 +196,46 @@ export function useKeywords(filters: KeywordFilters = defaultKeywordFilters, pag
 
   const addKeywordsBulk = async (rows: { keyword: string; category: string; business_aim: string }[], sourceName: string) => {
     if (!user) return;
-    const inserts = rows.map((r) => ({
+    // Dedupe within the batch first (case-insensitive)
+    const seen = new Set<string>();
+    const deduped = rows.filter((r) => {
+      const k = r.keyword.toLowerCase().trim();
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    // Check against existing keywords for this user
+    const { data: existing } = await supabase
+      .from("keywords_search_runs")
+      .select("keyword")
+      .eq("user_id", user.id);
+    const existingSet = new Set((existing ?? []).map((e: any) => e.keyword.toLowerCase().trim()));
+    const fresh = deduped.filter((r) => !existingSet.has(r.keyword.toLowerCase().trim()));
+    const duplicatesInDb = deduped.length - fresh.length;
+    const duplicatesInFile = rows.length - deduped.length;
+    const totalSkipped = duplicatesInFile + duplicatesInDb;
+
+    if (fresh.length === 0) {
+      toast.message(`No new keywords to import. ${totalSkipped} duplicate(s) skipped.`);
+      return;
+    }
+
+    const inserts = fresh.map((r) => ({
       keyword: r.keyword, category: r.category, business_aim: r.business_aim || "General",
       source: "excel", source_name: sourceName, user_id: user.id,
     }));
     const { error } = await supabase.from("keywords_search_runs").insert(inserts);
     if (error) {
-      toast.error("Failed to import keywords: " + error.message);
+      if ((error as any).code === "23505") {
+        toast.error("Some keywords were duplicates. Please retry — duplicates have been deduped.");
+      } else {
+        toast.error("Failed to import keywords: " + error.message);
+      }
     } else {
-      toast.success(`Imported ${inserts.length} keywords`);
+      const parts = [`Imported ${inserts.length} keyword(s)`];
+      if (totalSkipped > 0) parts.push(`${totalSkipped} duplicate(s) skipped`);
+      toast.success(parts.join(", "));
       fetchKeywords();
     }
   };

@@ -338,7 +338,12 @@ export default function Links() {
             <Share2 className="h-4 w-4 mr-1" /> Socials ({socialPatterns.length})
           </TabsTrigger>
           <TabsTrigger value="discovered">
-            <RefreshCw className="h-4 w-4 mr-1" /> Discovered ({discoveredPatterns.length})
+            <RefreshCw className="h-4 w-4 mr-1" /> Discovered
+            {discoveredPatterns.length > 0 ? (
+              <Badge variant="destructive" className="ml-2">{discoveredPatterns.length}</Badge>
+            ) : (
+              <span className="ml-1 text-muted-foreground">(0)</span>
+            )}
           </TabsTrigger>
           <TabsTrigger value="processing">
             <Play className="h-4 w-4 mr-1" /> Processing

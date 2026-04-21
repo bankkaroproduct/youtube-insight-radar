@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { useChannels, fetchAllChannelsForExport, ChannelFilters, CHANNELS_PAGE_SIZE } from "@/hooks/useChannels";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon, Loader2, Link2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, RefreshCw, BarChart3, Mail, CheckCircle2, AlertTriangle, HelpCircle, Shuffle, Instagram, Download, ExternalLink, VideoIcon, Loader2, Link2, ChevronLeft, ChevronRight, StopCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
@@ -122,6 +122,10 @@ export default function Channels() {
   const [scrapingLinks, setScrapingLinks] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [downloadingCsv, setDownloadingCsv] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState({ channels: 0, videos: 0 });
+  const [scrapeProgress, setScrapeProgress] = useState({ channels: 0 });
+  const stopBackfillRef = useRef(false);
+  const stopScrapeRef = useRef(false);
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
   const [summary, setSummary] = useState<SummaryStats>({ total: 0, with_us: 0, competitor: 0, mixed: 0, neutral: 0 });
 
@@ -191,12 +195,14 @@ export default function Channels() {
 
   const backfillTo50 = async () => {
     setBackfilling(true);
+    stopBackfillRef.current = false;
+    setBackfillProgress({ channels: 0, videos: 0 });
     let totalProcessed = 0;
     let totalVideos = 0;
     const t = toast.loading("Backfilling channels to 50 videos…");
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      while (true) {
+      while (!stopBackfillRef.current) {
         const resp = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-channel-videos`,
           {
@@ -215,40 +221,48 @@ export default function Channels() {
         const inserted = result.total_videos_inserted || 0;
         totalProcessed += processed;
         totalVideos += inserted;
+        setBackfillProgress({ channels: totalProcessed, videos: totalVideos });
         toast.loading(`Backfilled ${totalProcessed} channels (${totalVideos} videos)…`, { id: t });
         fullRefresh();
         if (inserted === 0) break;
       }
-      toast.success(`Done. Backfilled ${totalProcessed} channels with ${totalVideos} videos.`, { id: t });
+      const stoppedMsg = stopBackfillRef.current ? " (stopped)" : "";
+      toast.success(`Done${stoppedMsg}. Backfilled ${totalProcessed} channels with ${totalVideos} videos.`, { id: t });
       fullRefresh();
     } catch (e: any) {
       toast.error("Backfill failed: " + e.message, { id: t });
     } finally {
       setBackfilling(false);
+      stopBackfillRef.current = false;
     }
   };
 
   const scrapeChannelLinks = async () => {
     setScrapingLinks(true);
+    stopScrapeRef.current = false;
+    setScrapeProgress({ channels: 0 });
     let totalProcessed = 0;
     try {
       const t = toast.loading("Scraping channel links…");
-      while (true) {
+      while (!stopScrapeRef.current) {
         const { data, error } = await supabase.functions.invoke("scrape-channel-links", {
           body: { batch_size: 10 },
         });
         if (error) throw error;
         if (!data?.success) throw new Error(data?.error || "Failed");
         totalProcessed += data.processed || 0;
+        setScrapeProgress({ channels: totalProcessed });
         toast.loading(`Scraped ${totalProcessed} channels (${data.remaining} remaining)…`, { id: t });
         if (!data.processed || data.remaining === 0) break;
       }
-      toast.success(`Done. Scraped links for ${totalProcessed} channels.`, { id: t });
+      const stoppedMsg = stopScrapeRef.current ? " (stopped)" : "";
+      toast.success(`Done${stoppedMsg}. Scraped links for ${totalProcessed} channels.`, { id: t });
       fullRefresh();
     } catch (e: any) {
       toast.error("Failed to scrape links: " + e.message);
     } finally {
       setScrapingLinks(false);
+      stopScrapeRef.current = false;
     }
   };
 
@@ -302,12 +316,22 @@ export default function Channels() {
           </Button>
           <Button variant="outline" size="sm" onClick={backfillTo50} disabled={backfilling}>
             {backfilling ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
-            Backfill to 50 Videos
+            {backfilling ? `Backfilling: ${backfillProgress.channels} ch / ${backfillProgress.videos} vids` : "Backfill to 50 Videos"}
           </Button>
+          {backfilling && (
+            <Button variant="destructive" size="sm" onClick={() => { stopBackfillRef.current = true; toast.message("Stopping after current batch…"); }}>
+              <StopCircle className="h-4 w-4 mr-2" /> Stop
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={scrapeChannelLinks} disabled={scrapingLinks}>
             {scrapingLinks ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Link2 className="h-4 w-4 mr-2" />}
-            Scrape Channel Links
+            {scrapingLinks ? `Scraping: ${scrapeProgress.channels} channels` : "Scrape Channel Links"}
           </Button>
+          {scrapingLinks && (
+            <Button variant="destructive" size="sm" onClick={() => { stopScrapeRef.current = true; toast.message("Stopping after current batch…"); }}>
+              <StopCircle className="h-4 w-4 mr-2" /> Stop
+            </Button>
+          )}
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
