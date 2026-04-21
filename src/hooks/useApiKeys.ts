@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 export interface YouTubeApiKey {
   id: string;
-  api_key: string;
+  api_key_last_4: string;
   label: string | null;
   is_active: boolean;
   daily_quota_limit: number;
@@ -13,6 +13,7 @@ export interface YouTubeApiKey {
   last_test_status: string | null;
   last_used_at: string | null;
   created_at: string;
+  quota_reset_at: string | null;
 }
 
 export function useApiKeys() {
@@ -23,7 +24,7 @@ export function useApiKeys() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("youtube_api_keys" as any)
-        .select("*")
+        .select("id, label, is_active, daily_quota_limit, quota_used_today, last_tested_at, last_test_status, last_used_at, created_at, api_key_last_4, quota_reset_at")
         .order("created_at", { ascending: true });
       if (error) throw error;
       return (data as any[]) as YouTubeApiKey[];
@@ -31,33 +32,30 @@ export function useApiKeys() {
   });
 
   const addKeys = useMutation({
-    mutationFn: async (apiKeys: string[]): Promise<{ insertedIds: string[]; skipped: number }> => {
-      const existing = new Set(keys.map((k) => k.api_key));
+    mutationFn: async (apiKeys: string[]): Promise<{ insertedIds: string[]; skipped: number; insertedLast4: Record<string, string> }> => {
+      // Dedupe within paste (last-4 is too weak for cross-row dedupe; rely on server-side validation)
       const trimmed = apiKeys.map((k) => k.trim()).filter(Boolean);
       const seen = new Set<string>();
       const fresh: string[] = [];
       for (const k of trimmed) {
-        if (existing.has(k) || seen.has(k)) continue;
+        if (seen.has(k)) continue;
         seen.add(k);
         fresh.push(k);
       }
       const skipped = trimmed.length - fresh.length;
-      if (fresh.length === 0) {
-        throw new Error("All pasted keys already exist");
-      }
-      const rows = fresh.map((key, i) => ({
-        api_key: key,
-        label: `Key #${keys.length + i + 1}`,
-      }));
-      const { data, error } = await supabase
-        .from("youtube_api_keys" as any)
-        .insert(rows as any)
-        .select("id, api_key");
+      if (fresh.length === 0) throw new Error("No valid keys to add");
+
+      const { data, error } = await supabase.functions.invoke("add-api-keys", {
+        body: { keys: fresh, label_prefix: "Key", existing_count: keys.length },
+      });
       if (error) throw error;
-      const insertedIds = ((data as any[]) || []).map((r) => r.id);
-      return { insertedIds, skipped };
+      const inserted = (data?.inserted ?? []) as { id: string; api_key_last_4: string }[];
+      const insertedIds = inserted.map((r) => r.id);
+      const insertedLast4: Record<string, string> = {};
+      for (const r of inserted) insertedLast4[r.id] = r.api_key_last_4;
+      return { insertedIds, skipped, insertedLast4 };
     },
-    onSuccess: async ({ insertedIds, skipped }) => {
+    onSuccess: async ({ insertedIds, skipped, insertedLast4 }) => {
       queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });
       if (skipped > 0) toast.message(`Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`);
       if (insertedIds.length === 0) return;
@@ -68,12 +66,9 @@ export function useApiKeys() {
         const restricted = results.filter((r) => r.status === "restricted").length;
         toast.success(`Added ${insertedIds.length} key${insertedIds.length === 1 ? "" : "s"}: ${valid} valid, ${invalid} invalid, ${restricted} restricted`);
         if (invalid > 0) {
-          const { data: invalidKeys } = await supabase
-            .from("youtube_api_keys" as any)
-            .select("api_key")
-            .in("id", results.filter((r) => r.status === "invalid").map((r) => r.id));
-          const masked = ((invalidKeys as any[]) || [])
-            .map((k) => `…${(k.api_key as string).slice(-4)}`)
+          const masked = results
+            .filter((r) => r.status === "invalid")
+            .map((r) => `…${insertedLast4[r.id] ?? "????"}`)
             .join(", ");
           if (masked) toast.error(`Invalid keys: ${masked}`);
         }

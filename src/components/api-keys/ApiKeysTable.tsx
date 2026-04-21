@@ -4,15 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
-import { Copy, FlaskConical, Power, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { FlaskConical, Power, Trash2 } from "lucide-react";
 import type { YouTubeApiKey } from "@/hooks/useApiKeys";
 import { formatDistanceToNow } from "date-fns";
-
-function maskKey(key: string) {
-  if (key.length <= 8) return "****";
-  return `${key.slice(0, 4)}...${key.slice(-4)}`;
-}
 
 interface Props {
   keys: YouTubeApiKey[];
@@ -94,20 +88,7 @@ export function ApiKeysTable({ keys, selectedIds, onSelectChange, onToggleActive
                 </TableCell>
                 <TableCell className="font-medium">{key.label || "—"}</TableCell>
                 <TableCell>
-                  <div className="flex items-center gap-2">
-                    <code className="text-xs bg-muted px-2 py-1 rounded">{maskKey(key.api_key)}</code>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={() => {
-                        navigator.clipboard.writeText(key.api_key);
-                        toast.success("Copied to clipboard");
-                      }}
-                    >
-                      <Copy className="h-3 w-3" />
-                    </Button>
-                  </div>
+                  <code className="text-xs bg-muted px-2 py-1 rounded">…{key.api_key_last_4}</code>
                 </TableCell>
                 <TableCell>{statusBadge(key)}</TableCell>
                 <TableCell>

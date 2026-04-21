@@ -33,7 +33,7 @@ export default function ApiKeys() {
   const handleExport = () => {
     const data = keys.map((k) => ({
       Label: k.label || "",
-      "API Key": k.api_key,
+      "Last 4": k.api_key_last_4,
       Active: k.is_active ? "Yes" : "No",
       "Quota Used": k.quota_used_today,
       "Quota Limit": k.daily_quota_limit,
