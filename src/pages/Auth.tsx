@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 import { Youtube, ArrowRight, Eye, EyeOff, MailCheck } from "lucide-react";
 
 export default function Auth() {
@@ -30,7 +30,7 @@ export default function Auth() {
     e.preventDefault();
     setSubmitting(true);
     const { error } = await signIn(loginEmail, loginPassword);
-    if (error) toast({ title: "Login failed", description: error.message, variant: "destructive" });
+    if (error) toast.error("Login failed", { description: error.message });
     setSubmitting(false);
   };
 
@@ -39,7 +39,7 @@ export default function Auth() {
     setSubmitting(true);
     const { error } = await signUp(signupEmail, signupPassword, signupName);
     if (error) {
-      toast({ title: "Signup failed", description: error.message, variant: "destructive" });
+      toast.error("Signup failed", { description: error.message });
     } else {
       setSignupSent(true);
     }
@@ -54,9 +54,9 @@ export default function Auth() {
       options: { emailRedirectTo: `${window.location.origin}/auth` },
     });
     if (error) {
-      toast({ title: "Resend failed", description: error.message, variant: "destructive" });
+      toast.error("Resend failed", { description: error.message });
     } else {
-      toast({ title: "Confirmation email sent", description: `Check your inbox at ${signupEmail}.` });
+      toast.success("Confirmation email sent", { description: `Check your inbox at ${signupEmail}.` });
     }
     setResending(false);
   };

@@ -17,7 +17,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Link as LinkIcon, Plus, Trash2, Check, RefreshCw, Zap, Store, Globe, Play, RotateCcw, Loader2, Download, Share2, CircleDot } from "lucide-react";
 import { BulkUploadDialog } from "@/components/links/BulkUploadDialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 
 const classColors: Record<string, string> = {
   OWN: "bg-green-500/15 text-green-700 border-green-500/30",
@@ -533,11 +533,11 @@ function ProcessingTab() {
         nextId = data.next_before_id;
         if (data.done) break;
       }
-      toast({ title: "Reset complete", description: `Reset ${totalProcessed.toLocaleString()} links.` });
+      toast.success("Reset complete", { description: `Reset ${totalProcessed.toLocaleString()} links.` });
       linkProcessingService.clearLogs();
       await fetchStats();
     } catch (e: any) {
-      toast({ title: "Reset failed", description: e.message, variant: "destructive" });
+      toast.error("Reset failed", { description: e.message });
     } finally {
       setResetting(false);
     }

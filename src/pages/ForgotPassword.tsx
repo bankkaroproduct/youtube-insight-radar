@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 import { Youtube, ArrowRight, ArrowLeft } from "lucide-react";
 
 export default function ForgotPassword() {
@@ -20,12 +20,11 @@ export default function ForgotPassword() {
     });
     setSubmitting(false);
     if (error) {
-      toast({ title: "Something went wrong", description: error.message, variant: "destructive" });
+      toast.error("Something went wrong", { description: error.message });
       return;
     }
     setSent(true);
-    toast({
-      title: "Check your inbox",
+    toast.success("Check your inbox", {
       description: "If an account exists for this email, a reset link has been sent.",
     });
   };
