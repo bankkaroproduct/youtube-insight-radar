@@ -57,6 +57,27 @@ export default function UserManagement() {
     }
   };
 
+  const toggleActive = async (userId: string, newActive: boolean) => {
+    const { error } = await supabase
+      .from("user_profiles")
+      .update({ is_active: newActive })
+      .eq("user_id", userId);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    try {
+      await supabase.rpc("log_audit" as any, {
+        _action: "user_active_toggled",
+        _target_type: "user_profiles",
+        _target_id: userId,
+        _details: { is_active: newActive },
+      } as any);
+    } catch { /* silent */ }
+    toast.success(`User ${newActive ? "activated" : "deactivated"}`);
+    fetchUsers();
+  };
+
   if (!isAdmin) {
     return (
       <div className="flex items-center justify-center h-64 text-muted-foreground">

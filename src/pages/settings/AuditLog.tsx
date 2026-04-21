@@ -21,6 +21,7 @@ const ACTION_LABELS: Record<string, string> = {
   keyword_deleted: "Keyword deleted",
   video_links_reset: "Links reset",
   fetch_jobs_killed: "Fetch jobs killed",
+  user_active_toggled: "User activated/deactivated",
 };
 
 const ACTION_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
