@@ -1,16 +1,18 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Instagram, Download, RefreshCw, Loader2, ExternalLink, ChevronDown, ChevronRight, Heart, MessageCircle, Eye, Lock } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Instagram, Download, RefreshCw, Loader2, ExternalLink, ChevronDown, ChevronRight, Heart, MessageCircle, Eye, Lock, ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useInstagramProfiles, fetchAllIGProfilesForExport, IGProfile, IGFilters, IG_PAGE_SIZE } from "@/hooks/useInstagramProfiles";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -36,37 +38,9 @@ interface IGPost {
   hashtags?: string[];
 }
 
-interface IGProfile {
-  id: string;
-  channel_id: string;
-  instagram_username: string;
-  full_name: string | null;
-  bio: string | null;
-  follower_count: number | null;
-  following_count: number | null;
-  post_count: number | null;
-  is_business: boolean | null;
-  is_private: boolean | null;
-  business_category: string | null;
-  contact_email: string | null;
-  contact_phone: string | null;
-  external_url: string | null;
-  recent_posts: IGPost[] | null;
-  bio_links: string[] | null;
-  storefront_name: string | null;
-  affiliate_score: string | null;
-  affiliate_reasoning: string | null;
-  avg_post_likes: number | null;
-  avg_post_comments: number | null;
-  scraped_at: string | null;
-  channel_name?: string;
-}
-
 function PostsExpandable({ posts }: { posts: IGPost[] }) {
   const [open, setOpen] = useState(false);
-
   if (!posts || posts.length === 0) return <span className="text-muted-foreground">—</span>;
-
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger asChild>
@@ -147,47 +121,26 @@ function downloadCSV(profiles: IGProfile[]) {
 }
 
 export default function InstagramProfiles() {
-  const [profiles, setProfiles] = useState<IGProfile[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [scraping, setScraping] = useState(false);
   const [search, setSearch] = useState("");
-  const { sortKey, sortDirection, handleSort, sortFn } = useSort<IGProfile>();
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [scraping, setScraping] = useState(false);
+  const [downloadingCsv, setDownloadingCsv] = useState(false);
+  const { sortKey, sortDirection, handleSort } = useSort<IGProfile>("followers", "desc");
+  const sortDir: "asc" | "desc" = sortDirection === "asc" ? "asc" : "desc";
 
-  const fetchProfiles = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from("instagram_profiles")
-      .select("*")
-      .order("follower_count", { ascending: false });
+  // Debounce search
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-    if (error) {
-      toast.error("Failed to load Instagram profiles");
-      setIsLoading(false);
-      return;
-    }
+  const filters: IGFilters = useMemo(() => ({ search: debouncedSearch }), [debouncedSearch]);
 
-    const channelIds = [...new Set((data || []).map((p: any) => p.channel_id))];
-    let channelMap: Record<string, string> = {};
-    if (channelIds.length > 0) {
-      const { data: channels } = await supabase
-        .from("channels")
-        .select("id, channel_name")
-        .in("id", channelIds);
-      if (channels) {
-        for (const c of channels) channelMap[c.id] = c.channel_name;
-      }
-    }
+  // Reset page on filter change
+  useEffect(() => { setPage(0); }, [debouncedSearch]);
 
-    setProfiles((data || []).map((p: any) => ({
-      ...p,
-      recent_posts: Array.isArray(p.recent_posts) ? p.recent_posts : [],
-      bio_links: Array.isArray(p.bio_links) ? p.bio_links : [],
-      channel_name: channelMap[p.channel_id] || "Unknown",
-    })));
-    setIsLoading(false);
-  };
-
-  useEffect(() => { fetchProfiles(); }, []);
+  const { profiles, totalCount, isLoading, refresh } = useInstagramProfiles(filters, page, sortKey, sortDir);
 
   const scrapeNow = async () => {
     setScraping(true);
@@ -207,7 +160,7 @@ export default function InstagramProfiles() {
       const result = await resp.json();
       if (!resp.ok) throw new Error(result.error || "Failed");
       toast.success(result.message || `Scraped ${result.scraped} profiles`);
-      fetchProfiles();
+      refresh();
     } catch (e: any) {
       toast.error("Instagram scrape failed: " + e.message);
     } finally {
@@ -215,49 +168,49 @@ export default function InstagramProfiles() {
     }
   };
 
-  const filtered = useMemo(() => {
-    let result = profiles;
-    if (search) {
-      const q = search.toLowerCase();
-      result = result.filter(p =>
-        p.instagram_username.toLowerCase().includes(q) ||
-        (p.full_name || "").toLowerCase().includes(q) ||
-        (p.channel_name || "").toLowerCase().includes(q)
-      );
+  const handleDownloadCSV = async () => {
+    setDownloadingCsv(true);
+    const tId = toast.loading("Fetching all matching profiles…");
+    try {
+      const all = await fetchAllIGProfilesForExport(filters);
+      downloadCSV(all);
+      toast.success(`Downloaded ${all.length} profiles`, { id: tId });
+    } catch (e: any) {
+      toast.error("CSV download failed: " + (e?.message || "Unknown error"), { id: tId });
+    } finally {
+      setDownloadingCsv(false);
     }
-    return sortFn(result, (item, key) => {
-      switch (key) {
-        case "username": return item.instagram_username;
-        case "channel": return item.channel_name || "";
-        case "fullname": return item.full_name || "";
-        case "followers": return item.follower_count || 0;
-        case "following": return item.following_count || 0;
-        case "posts": return item.post_count || 0;
-        case "avgLikes": return item.avg_post_likes || 0;
-        case "avgComments": return item.avg_post_comments || 0;
-        case "category": return item.business_category || "";
-        case "score": return item.affiliate_score || "";
-        default: return null;
-      }
-    });
-  }, [profiles, search, sortFn]);
+  };
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / IG_PAGE_SIZE));
+  const hasMore = (page + 1) * IG_PAGE_SIZE < totalCount;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold">Instagram Profiles</h1>
-          <p className="text-muted-foreground mt-1">{profiles.length} profiles scraped</p>
+          <p className="text-muted-foreground mt-1">
+            Showing {totalCount === 0 ? 0 : page * IG_PAGE_SIZE + 1}–{Math.min((page + 1) * IG_PAGE_SIZE, totalCount)} of {totalCount.toLocaleString()} profiles.
+          </p>
         </div>
         <div className="flex gap-2 items-center">
           <Button variant="outline" size="sm" onClick={scrapeNow} disabled={scraping}>
             {scraping ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Instagram className="h-4 w-4 mr-2" />}
             Scrape Now
           </Button>
-          <Button variant="outline" size="sm" onClick={() => downloadCSV(filtered)}>
-            <Download className="h-4 w-4 mr-2" /> Download CSV
-          </Button>
-          <Button variant="outline" size="sm" onClick={fetchProfiles}>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" onClick={handleDownloadCSV} disabled={downloadingCsv}>
+                  {downloadingCsv ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
+                  {downloadingCsv ? "Exporting…" : "Download CSV"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Downloads all matching rows — may take a moment for large datasets</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <Button variant="outline" size="sm" onClick={refresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>
         </div>
@@ -270,7 +223,7 @@ export default function InstagramProfiles() {
               <Instagram className="h-5 w-5" /> Profile Data
             </CardTitle>
             <Input
-              placeholder="Search username, name, channel..."
+              placeholder="Search username, name…"
               className="max-w-xs h-8 text-sm"
               value={search}
               onChange={e => setSearch(e.target.value)}
@@ -278,91 +231,110 @@ export default function InstagramProfiles() {
           </div>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {isLoading && profiles.length === 0 ? (
             <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
           ) : profiles.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">
-              No Instagram profiles scraped yet. Profiles are scraped automatically when channels are processed.
+              {totalCount === 0
+                ? "No Instagram profiles scraped yet. Profiles are scraped automatically when channels are processed."
+                : "No profiles match the current search."}
             </div>
           ) : (
-            <div className="overflow-x-auto max-h-[700px]">
-              <Table className="min-w-[1400px]">
-                <TableHeader>
-                  <TableRow>
-                    <SortableHeader label="Username" sortKey="username" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[140px]" />
-                    <SortableHeader label="Channel" sortKey="channel" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[100px]" />
-                    <TableHead className="min-w-[180px] max-w-[220px]">Bio</TableHead>
-                    <SortableHeader label="Followers" sortKey="followers" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[90px]" />
-                    <SortableHeader label="Avg Likes" sortKey="avgLikes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[80px]" />
-                    <SortableHeader label="Avg Comments" sortKey="avgComments" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[80px]" />
-                    <SortableHeader label="Affiliate" sortKey="score" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[120px]" />
-                    <TableHead className="min-w-[140px]">Bio Links</TableHead>
-                    <TableHead className="min-w-[100px]">Storefront</TableHead>
-                    <TableHead className="min-w-[100px]">Recent Posts</TableHead>
-                    <TableHead className="min-w-[100px]">Email</TableHead>
-                    <TableHead className="min-w-[90px]">Scraped</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map(p => (
-                    <TableRow key={p.id} className="align-top">
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-1">
-                          <a href={`https://instagram.com/${p.instagram_username}`} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline">
-                            @{p.instagram_username}
-                          </a>
-                          {p.is_private && <Lock className="h-3 w-3 text-muted-foreground" />}
-                        </div>
-                        {p.full_name && <div className="text-xs text-muted-foreground">{p.full_name}</div>}
-                      </TableCell>
-                      <TableCell className="text-sm">{p.channel_name || "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground min-w-[180px] max-w-[220px]">
-                        <ExpandableText text={p.bio || ""} maxLength={60} />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums whitespace-nowrap">{p.follower_count != null ? formatNumber(p.follower_count) : "—"}</TableCell>
-                      <TableCell className="text-right tabular-nums whitespace-nowrap">{p.avg_post_likes ? formatNumber(p.avg_post_likes) : "—"}</TableCell>
-                      <TableCell className="text-right tabular-nums whitespace-nowrap">{p.avg_post_comments ? formatNumber(p.avg_post_comments) : "—"}</TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <Badge variant="outline" className={scoreColors[p.affiliate_score || "Unknown"]}>
-                            {p.affiliate_score || "—"}
-                          </Badge>
-                          {p.affiliate_reasoning && (
-                            <p className="text-[10px] text-muted-foreground leading-tight max-w-[150px]">{p.affiliate_reasoning}</p>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="max-w-[180px]">
-                        {p.bio_links && p.bio_links.length > 0 ? (
-                          <div className="space-y-1">
-                            {p.bio_links.map((link, i) => (
-                              <a key={i} href={link} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-xs flex items-center gap-1 truncate">
-                                <ExternalLink className="h-3 w-3 shrink-0" />
-                                {new URL(link).hostname.replace("www.", "")}
-                              </a>
-                            ))}
-                          </div>
-                        ) : "—"}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {p.storefront_name ? (
-                          <Badge variant="outline" className="bg-purple-500/15 text-purple-700 border-purple-500/30 text-xs">
-                            {p.storefront_name}
-                          </Badge>
-                        ) : "—"}
-                      </TableCell>
-                      <TableCell>
-                        <PostsExpandable posts={p.recent_posts || []} />
-                      </TableCell>
-                      <TableCell className="text-sm">{p.contact_email || "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                        {p.scraped_at ? new Date(p.scraped_at).toLocaleDateString() : "—"}
-                      </TableCell>
+            <>
+              <div className="overflow-x-auto max-h-[700px]">
+                <Table className="min-w-[1400px]">
+                  <TableHeader>
+                    <TableRow>
+                      <SortableHeader label="Username" sortKey="username" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[140px]" />
+                      <TableHead className="min-w-[100px]">Channel</TableHead>
+                      <TableHead className="min-w-[180px] max-w-[220px]">Bio</TableHead>
+                      <SortableHeader label="Followers" sortKey="followers" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[90px]" />
+                      <SortableHeader label="Avg Likes" sortKey="avgLikes" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[80px]" />
+                      <SortableHeader label="Avg Comments" sortKey="avgComments" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="text-right min-w-[80px]" />
+                      <SortableHeader label="Affiliate" sortKey="score" currentSort={sortKey} currentDirection={sortDirection} onSort={handleSort} className="min-w-[120px]" />
+                      <TableHead className="min-w-[140px]">Bio Links</TableHead>
+                      <TableHead className="min-w-[100px]">Storefront</TableHead>
+                      <TableHead className="min-w-[100px]">Recent Posts</TableHead>
+                      <TableHead className="min-w-[100px]">Email</TableHead>
+                      <TableHead className="min-w-[90px]">Scraped</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {profiles.map(p => (
+                      <TableRow key={p.id} className="align-top">
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-1">
+                            <a href={`https://instagram.com/${p.instagram_username}`} target="_blank" rel="noopener noreferrer" className="text-pink-500 hover:underline">
+                              @{p.instagram_username}
+                            </a>
+                            {p.is_private && <Lock className="h-3 w-3 text-muted-foreground" />}
+                          </div>
+                          {p.full_name && <div className="text-xs text-muted-foreground">{p.full_name}</div>}
+                        </TableCell>
+                        <TableCell className="text-sm">{p.channel_name || "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground min-w-[180px] max-w-[220px]">
+                          <ExpandableText text={p.bio || ""} maxLength={60} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{p.follower_count != null ? formatNumber(p.follower_count) : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{p.avg_post_likes ? formatNumber(p.avg_post_likes) : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{p.avg_post_comments ? formatNumber(p.avg_post_comments) : "—"}</TableCell>
+                        <TableCell>
+                          <div className="space-y-1">
+                            <Badge variant="outline" className={scoreColors[p.affiliate_score || "Unknown"]}>
+                              {p.affiliate_score || "—"}
+                            </Badge>
+                            {p.affiliate_reasoning && (
+                              <p className="text-[10px] text-muted-foreground leading-tight max-w-[150px]">{p.affiliate_reasoning}</p>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="max-w-[180px]">
+                          {p.bio_links && p.bio_links.length > 0 ? (
+                            <div className="space-y-1">
+                              {p.bio_links.map((link, i) => (
+                                <a key={i} href={link} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-xs flex items-center gap-1 truncate">
+                                  <ExternalLink className="h-3 w-3 shrink-0" />
+                                  {(() => { try { return new URL(link).hostname.replace("www.", ""); } catch { return link; } })()}
+                                </a>
+                              ))}
+                            </div>
+                          ) : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {p.storefront_name ? (
+                            <Badge variant="outline" className="bg-purple-500/15 text-purple-700 border-purple-500/30 text-xs">
+                              {p.storefront_name}
+                            </Badge>
+                          ) : "—"}
+                        </TableCell>
+                        <TableCell>
+                          <PostsExpandable posts={p.recent_posts || []} />
+                        </TableCell>
+                        <TableCell className="text-sm">{p.contact_email || "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                          {p.scraped_at ? new Date(p.scraped_at).toLocaleDateString() : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Pagination */}
+              <div className="flex items-center justify-between mt-4">
+                <p className="text-sm text-muted-foreground">
+                  Page {page + 1} of {totalPages}
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" disabled={page === 0 || isLoading} onClick={() => setPage(p => Math.max(0, p - 1))}>
+                    <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={!hasMore || isLoading} onClick={() => setPage(p => p + 1)}>
+                    Next <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

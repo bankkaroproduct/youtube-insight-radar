@@ -812,6 +812,16 @@ export type Database = {
           count: number
         }[]
       }
+      get_channel_summary_stats: {
+        Args: never
+        Returns: {
+          competitor: number
+          mixed: number
+          neutral: number
+          total: number
+          with_us: number
+        }[]
+      }
       get_keyword_stats: {
         Args: never
         Returns: {
