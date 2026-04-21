@@ -54,6 +54,13 @@ export default function ApiKeys() {
 
       <ApiKeyStatsCards {...stats} />
 
+      {stats.healthy === 0 && stats.total > 0 && (
+        <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
+          No healthy keys. Click <strong>Reset Quota</strong> if quotas should have reset (YouTube resets daily at midnight PT).
+          If this persists, check that <code>pg_cron</code> is enabled in your Supabase dashboard.
+        </div>
+      )}
+
       <RotationSummaryBanner
         activeCount={stats.activeCount}
         total={stats.total}
