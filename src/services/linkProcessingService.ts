@@ -181,6 +181,8 @@ class LinkProcessingService {
       this.addLog(
         `✅ Batch #${batchNum}: ${result.processed} processed${breakdown}, ${result.remaining?.toLocaleString()} remaining`,
       );
+      this.lastBatchCompletedAt = Date.now();
+      this.notify();
       onStatsRefresh?.();
 
       if (result.remaining === 0) {
