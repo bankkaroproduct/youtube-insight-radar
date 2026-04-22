@@ -126,7 +126,15 @@ async function processChannel(
   let nonShortInspectedNew = 0;
 
   if (!uploadsPlaylistId) {
-    console.error(`No uploads playlist id for channel ${channelId}`);
+    // Channel is private, deleted, or YouTube returned no contentDetails.
+    // Mark it as terminally exhausted so backfill never re-selects it.
+    console.error(`No uploads playlist id for channel ${channelId} — marking as exhausted`);
+    await supabase.from("channels").update({
+      last_analyzed_at: new Date().toISOString(),
+      youtube_longform_total: existingVideoIds.size,
+      uploads_fully_scanned_at: new Date().toISOString(),
+      scanned_at_youtube_total: youtubeTotal ?? existingVideoIds.size,
+    }).eq("channel_id", channelId);
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
