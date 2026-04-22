@@ -1,74 +1,42 @@
 
 
-## Backfill-under-50 improvements
+## Fix unresponsive screen on Channels page
 
-Tighten the "Backfill" flow so it only targets channels that **can** be backfilled, and report progress against the real maximum achievable (not a flat 50× channels).
+The page freezes because the Recompute Stats loop runs ~340 sequential edge function calls on the main thread with no progress feedback, no UI refresh, and aborts on any error. Combined with the auth bootstrap timeout warning, the app appears completely frozen.
+
+### Root causes
+
+1. **`recomputeStats` in `src/hooks/useChannels.ts`** — sequential `while(true)` / `for` loop awaits each batch (~340 calls × 1–3s = 5–15 min). UI shows no toast progress, no refresh until done, and any single error kills the whole run.
+2. **`backfillTo50` loop in `src/pages/Channels.tsx`** — same pattern: hundreds of sequential `fetch-channel-videos` calls block the user from doing anything else.
+3. **Auth bootstrap safety timeout** firing on `/auth` suggests session restore is also racing — but that's a symptom of the tab being busy, not the cause.
 
 ### What changes
 
-**1. Smarter selection filter (edge function)**
-In `supabase/functions/fetch-channel-videos/index.ts` (the in-memory filter around line 363), replace the current `backfillUnder50` block with explicit case handling:
+**1. `src/hooks/useChannels.ts` — make `recomputeStats` resilient + observable**
+- Show a single sticky `toast.loading` updated with progress (`Recomputed X / ~Y channels`).
+- Continue past transient errors (log + count failures, don't `throw`).
+- Refresh `load()` every 10 batches instead of only at the end, so user sees movement.
+- On final completion, dismiss loading toast and show `toast.success` with success/failure counts.
 
-- `fetched >= 50` → skip (done).
-- YouTube total < 50 and we already have `fetched >= ytTotal` → skip (no more to get).
-- YouTube total < 50 but `fetched < ytTotal` → include (e.g. 20/30 → can still grow to 30).
-- YouTube total ≥ 50 (or unknown) and `fetched < 50` → include.
+**2. `src/pages/Channels.tsx` — same treatment for `backfillTo50`**
+- Already has a progress toast — verify it dismisses cleanly on error.
+- Wrap each iteration in try/catch so one 503 ("No available API keys") doesn't abort the whole run.
+- Add a `Cancel` affordance: a ref-based `abortRef` checked each iteration so the user can stop a long run.
 
-The existing "fully scanned + youtube total unchanged" hard skip above this block stays untouched.
+**3. Defensive: prevent double-clicks**
+- Disable Recompute / Backfill buttons while their respective loops are in flight (track `isRecomputing` / `isBackfilling` state).
 
-**2. Report max-achievable per batch (edge function)**
-Track `totalTargetForBatch` in the channel loop:
-```ts
-const ytTotal = r.value.youtubeTotal;
-totalTargetForBatch += Math.min(50, ytTotal ?? 50);
-```
-Add `total_videos_target` to the JSON response alongside `channels_processed` and `total_videos_inserted`.
+### Why this fixes "unresponsive"
 
-**3. Client loop uses the new field (`src/pages/Channels.tsx`, `backfillTo50`)**
-- Reduce per-call `limit` from 25 → 10 (matches the server's hard cap of 10, avoids a misleading number on the wire).
-- Accumulate `totalTarget` across iterations.
-- Toast shows `"Backfilled X channels (Y/Z videos)…"` during the loop.
-- Final toast shows completion percentage: `"Done. Backfilled X channels — Y videos (Z% of max achievable)."`
-- Stop conditions unchanged: `processed === 0` or `inserted === 0`.
-
-**4. Button label + tooltip (`src/pages/Channels.tsx`)**
-Rename **"Backfill to 50 Videos"** → **"Backfill Under 50"** with a `title` tooltip explaining "Fetches videos for channels that have fewer than 50 stored. Caps at 50 or whatever YouTube has, whichever is smaller."
-
-**5. New "Needs Backfill" stat card**
-
-New SQL function via migration:
-```sql
-create or replace function public.get_channels_needing_backfill()
-returns bigint language sql stable security definer set search_path to 'public' as $$
-  select count(*)::bigint from public.channels
-  where total_videos_fetched < 50
-    and total_videos_fetched > 0
-    and (youtube_total_videos is null or youtube_total_videos > total_videos_fetched)
-    and (
-      uploads_fully_scanned_at is null
-      or scanned_at_youtube_total is null
-      or youtube_total_videos is null
-      or youtube_total_videos > scanned_at_youtube_total
-    );
-$$;
-grant execute on function public.get_channels_needing_backfill() to authenticated;
-```
-
-In `Channels.tsx`:
-- Extend `SummaryStats` with `needs_backfill: number`.
-- Update `loadSummary` to call both RPCs in parallel via `Promise.all`.
-- Add 6th stat card: `{ label: "Needs Backfill", value: summary.needs_backfill, icon: VideoIcon, color: "text-amber-500" }`.
-- Bump grid from `md:grid-cols-5` → `md:grid-cols-6` (or `lg:grid-cols-6`) so the new card lays out cleanly.
-
-### Expected outcome
-
-- Backfill no longer wastes attempts on channels that are already maxed out at YouTube's available count.
-- Toast shows `(Y/Z videos)` so it's obvious when the run is at 100% of what's achievable vs. still has room.
-- Stat card on the page shows at a glance how many channels are eligible for backfill before you click the button (currently ~1,503 of 1,710).
+The screen isn't actually frozen — React is responsive, but the user sees no feedback for 5–15 minutes and the action buttons stay clickable, so additional clicks pile on more concurrent loops. After the fix: visible progress, cancellable, single-flight, survives transient API-key-exhaustion errors.
 
 ### Files touched
 
-- **New migration** — `get_channels_needing_backfill()` SQL function.
-- `supabase/functions/fetch-channel-videos/index.ts` — rewrite the `backfillUnder50` filter block, add `total_videos_target` accumulator + response field.
-- `src/pages/Channels.tsx` — `backfillTo50` loop (target accumulator, completion %), button label/tooltip, `loadSummary` parallel RPC, `SummaryStats` type, 6th stat card, grid columns.
+- `src/hooks/useChannels.ts` — rewrite `recomputeStats` (progress toast, error tolerance, periodic refresh).
+- `src/pages/Channels.tsx` — harden `backfillTo50` (try/catch per iteration, abort ref, button disable state).
+
+### Not in scope
+
+- No new DB functions, no edge function changes, no schema changes.
+- The auth bootstrap warning will resolve on its own once the tab isn't blocked.
 
