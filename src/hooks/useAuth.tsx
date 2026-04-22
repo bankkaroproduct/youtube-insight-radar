@@ -149,7 +149,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(initialSession?.user ?? null);
         if (initialSession?.user) {
           lastUserId = initialSession.user.id;
-          const { profile: loadedProfile, roles: newRoles } = await loadUserData(initialSession.user.id);
+          // Race profile/roles fetch against a 6s timeout so a slow DB
+          // doesn't freeze the UI on a blank screen. App renders in a
+          // best-effort state if either query is slow.
+          const loadResult = await Promise.race([
+            loadUserData(initialSession.user.id),
+            new Promise<{ profile: any; roles: AppRole[] } | null>((resolve) =>
+              setTimeout(() => {
+                console.warn("[useAuth] loadUserData exceeded 6s — proceeding without profile/roles");
+                resolve(null);
+              }, 6000),
+            ),
+          ]);
+
+          const loadedProfile = loadResult?.profile ?? null;
+          const newRoles = loadResult?.roles ?? [];
 
           if (loadedProfile && loadedProfile.is_active === false) {
             await supabase.auth.signOut();
@@ -157,7 +171,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
 
-          await runIpCheckSafe(newRoles);
+          // Race IP check against 4s as well — never block bootstrap on it.
+          await Promise.race([
+            runIpCheckSafe(newRoles),
+            new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+          ]);
         }
       } catch (e) {
         console.error("[useAuth] initial bootstrap failed", e);

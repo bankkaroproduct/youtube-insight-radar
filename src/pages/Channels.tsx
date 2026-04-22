@@ -252,6 +252,8 @@ export default function Channels() {
         );
         fullRefresh();
         if (inserted === 0) break;
+        // Breathing room so the DB connection pool isn't monopolized.
+        await new Promise((r) => setTimeout(r, 750));
       }
       const stoppedMsg = stopBackfillRef.current ? " (stopped)" : "";
       const completionPct = totalTarget > 0 ? Math.round((totalVideos / totalTarget) * 100) : 100;
