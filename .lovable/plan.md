@@ -1,64 +1,74 @@
 
 
-## Fix: Stats cards don't update during processing
+## Backfill-under-50 improvements
 
-### Root cause (two compounding bugs)
+Tighten the "Backfill" flow so it only targets channels that **can** be backfilled, and report progress against the real maximum achievable (not a flat 50× channels).
 
-**1. The "Process Links" button in the page header doesn't refresh stats at all.**
-`src/pages/Links.tsx` line 317 calls `linkProcessingService.start(undefined, 200)` — `undefined` is the `onStatsRefresh` callback. So even though the service correctly fires `onStatsRefresh?.()` after every batch, nothing happens. Only the button *inside* the Processing tab (`startProcessing`, line 589) wires up `fetchStats`. If you started processing from the header, the cards will literally never update from a batch callback.
+### What changes
 
-**2. Even on the Processing tab, the cards show stale numbers because we're using `count: "estimated"`.**
-The previous fix (estimated counts) trades accuracy for speed by reading `pg_class.reltuples` and planner stats — but those are only refreshed by autovacuum/ANALYZE, not after each row update. I just confirmed against the live DB: pending dropped from 96,158 → 94,104 (real progress), but the planner estimate for filtered counts (`unshortened_url IS NOT NULL`, `affiliate_platform IS NOT NULL`, etc.) sits frozen between ANALYZE runs. So the cards refresh every 15s, but to the same numbers.
+**1. Smarter selection filter (edge function)**
+In `supabase/functions/fetch-channel-videos/index.ts` (the in-memory filter around line 363), replace the current `backfillUnder50` block with explicit case handling:
 
-The replay confirms this: the refresh button spinner is firing on schedule, but the values on screen don't change.
+- `fetched >= 50` → skip (done).
+- YouTube total < 50 and we already have `fetched >= ytTotal` → skip (no more to get).
+- YouTube total < 50 but `fetched < ytTotal` → include (e.g. 20/30 → can still grow to 30).
+- YouTube total ≥ 50 (or unknown) and `fetched < 50` → include.
 
-### The fix
+The existing "fully scanned + youtube total unchanged" hard skip above this block stays untouched.
 
-**A. Server-side aggregate function (one round-trip, exact counts, milliseconds).**
+**2. Report max-achievable per batch (edge function)**
+Track `totalTargetForBatch` in the channel loop:
+```ts
+const ytTotal = r.value.youtubeTotal;
+totalTargetForBatch += Math.min(50, ytTotal ?? 50);
+```
+Add `total_videos_target` to the JSON response alongside `channels_processed` and `total_videos_inserted`.
 
-Add a single SQL function via migration:
+**3. Client loop uses the new field (`src/pages/Channels.tsx`, `backfillTo50`)**
+- Reduce per-call `limit` from 25 → 10 (matches the server's hard cap of 10, avoids a misleading number on the wire).
+- Accumulate `totalTarget` across iterations.
+- Toast shows `"Backfilled X channels (Y/Z videos)…"` during the loop.
+- Final toast shows completion percentage: `"Done. Backfilled X channels — Y videos (Z% of max achievable)."`
+- Stop conditions unchanged: `processed === 0` or `inserted === 0`.
 
+**4. Button label + tooltip (`src/pages/Channels.tsx`)**
+Rename **"Backfill to 50 Videos"** → **"Backfill Under 50"** with a `title` tooltip explaining "Fetches videos for channels that have fewer than 50 stored. Caps at 50 or whatever YouTube has, whichever is smaller."
+
+**5. New "Needs Backfill" stat card**
+
+New SQL function via migration:
 ```sql
-CREATE OR REPLACE FUNCTION public.get_video_links_processing_stats()
-RETURNS TABLE(total bigint, processed bigint, with_platform bigint,
-              with_retailer bigint, failed bigint, pending bigint)
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT
-    count(*),
-    count(*) FILTER (WHERE unshortened_url IS NOT NULL),
-    count(*) FILTER (WHERE affiliate_platform IS NOT NULL),
-    count(*) FILTER (WHERE resolved_retailer IS NOT NULL),
-    count(*) FILTER (WHERE resolution_status = 'failed'),
-    count(*) FILTER (WHERE resolution_status = 'pending')
-  FROM public.video_links;
+create or replace function public.get_channels_needing_backfill()
+returns bigint language sql stable security definer set search_path to 'public' as $$
+  select count(*)::bigint from public.channels
+  where total_videos_fetched < 50
+    and total_videos_fetched > 0
+    and (youtube_total_videos is null or youtube_total_videos > total_videos_fetched)
+    and (
+      uploads_fully_scanned_at is null
+      or scanned_at_youtube_total is null
+      or youtube_total_videos is null
+      or youtube_total_videos > scanned_at_youtube_total
+    );
 $$;
-GRANT EXECUTE ON FUNCTION public.get_video_links_processing_stats() TO authenticated;
+grant execute on function public.get_channels_needing_backfill() to authenticated;
 ```
 
-A single sequential scan with `FILTER` clauses on a 161k-row table runs in ~50–150ms even under heavy concurrent writes — much faster than 5 separate count queries.
-
-**B. Replace `fetchStats` to call the RPC.**
-
-In `ProcessingTab` (`src/pages/Links.tsx`), swap the 5 sequential `count` queries for one `supabase.rpc("get_video_links_processing_stats")` call. Keep the `inFlightRef` guard, `statsLoaded` flag, and `refreshing` state. Drop the per-card "..." fallback once the first call succeeds.
-
-**C. Wire the header "Process Links" button to refresh stats too.**
-
-Lift the `fetchStats` callback so the page-level button (line 317) also passes a refresh function. Cleanest: have `linkProcessingService` notify a "batch completed" event that any subscriber can hook into, and have `ProcessingTab` subscribe regardless of which button started the run. Simpler patch: add a `lastBatchCompletedAt` timestamp to the service's snapshot, and have `ProcessingTab` re-run `fetchStats` whenever that timestamp changes (via a `useEffect` on the snapshot field). That works no matter which button started processing.
-
-**D. Tighten the auto-poll back to 5s.**
-
-With the RPC the per-poll cost is ~50ms instead of 5×timeout-prone queries. 5s polling is safe again and gives the user near-realtime feedback. Keep the `inFlightRef` guard so slow polls can't stack.
+In `Channels.tsx`:
+- Extend `SummaryStats` with `needs_backfill: number`.
+- Update `loadSummary` to call both RPCs in parallel via `Promise.all`.
+- Add 6th stat card: `{ label: "Needs Backfill", value: summary.needs_backfill, icon: VideoIcon, color: "text-amber-500" }`.
+- Bump grid from `md:grid-cols-5` → `md:grid-cols-6` (or `lg:grid-cols-6`) so the new card lays out cleanly.
 
 ### Expected outcome
 
-- Click "Process Links" from anywhere on the page → cards update after every batch completes (within ~1s of the batch log line appearing).
-- On the Processing tab, cards also auto-refresh every 5s as a backstop.
-- Numbers are **exact**, not estimated — pending count visibly decrements each batch.
-- One DB round-trip per refresh instead of five, so the stats panel no longer competes with the link processor for connections.
+- Backfill no longer wastes attempts on channels that are already maxed out at YouTube's available count.
+- Toast shows `(Y/Z videos)` so it's obvious when the run is at 100% of what's achievable vs. still has room.
+- Stat card on the page shows at a glance how many channels are eligible for backfill before you click the button (currently ~1,503 of 1,710).
 
 ### Files touched
 
-- **New migration** — adds `get_video_links_processing_stats()` SQL function.
-- `src/pages/Links.tsx` — `ProcessingTab.fetchStats` calls the RPC; subscribe to service `lastBatchCompletedAt` to refresh on batch events; tighten poll to 5s.
-- `src/services/linkProcessingService.ts` — add `lastBatchCompletedAt` to snapshot, bump it after each successful batch alongside the existing `onStatsRefresh?.()` call.
+- **New migration** — `get_channels_needing_backfill()` SQL function.
+- `supabase/functions/fetch-channel-videos/index.ts` — rewrite the `backfillUnder50` filter block, add `total_videos_target` accumulator + response field.
+- `src/pages/Channels.tsx` — `backfillTo50` loop (target accumulator, completion %), button label/tooltip, `loadSummary` parallel RPC, `SummaryStats` type, 6th stat card, grid columns.
 
