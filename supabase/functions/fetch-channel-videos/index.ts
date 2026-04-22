@@ -369,7 +369,7 @@ Deno.serve(async (req) => {
     // instead of repeatedly re-selecting the same leading subset of tied counts.
     const { data: rawChannels, error: chErr } = await supabase
       .from("channels")
-      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, last_analyzed_at, uploads_fully_scanned_at, scanned_at_youtube_total")
+      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, youtube_longform_total, last_uploads_page_token, last_analyzed_at, uploads_fully_scanned_at, scanned_at_youtube_total")
       .order("total_videos_fetched", { ascending: needsVideoCountFilter })
       .order("last_analyzed_at", { ascending: true, nullsFirst: true })
       .order("channel_id", { ascending: true })
@@ -382,6 +382,9 @@ Deno.serve(async (req) => {
         const ytTotal = channel.youtube_total_videos == null
           ? null
           : Number(channel.youtube_total_videos);
+        const longformTotal = channel.youtube_longform_total == null
+          ? null
+          : Number(channel.youtube_longform_total);
         const scannedAt = channel.uploads_fully_scanned_at;
         const scannedYtTotal = channel.scanned_at_youtube_total == null
           ? null
@@ -395,6 +398,10 @@ Deno.serve(async (req) => {
         if (backfillUnder50) {
           // Already at or past 50 stored videos — done.
           if (fetched >= 50) return false;
+
+          // Case 0: We previously fully walked the uploads playlist and counted long-form videos.
+          // If we've already stored all of them, this channel genuinely has fewer than 50 long-form videos.
+          if (longformTotal !== null && fetched >= longformTotal) return false;
 
           // Case A: YouTube has < 50 total — we can only ever reach what exists there.
           //   If we've already fetched everything YouTube has, skip. Otherwise include.
