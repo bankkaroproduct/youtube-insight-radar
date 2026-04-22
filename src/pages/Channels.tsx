@@ -204,6 +204,7 @@ export default function Channels() {
     let totalProcessed = 0;
     let totalVideos = 0;
     let totalTarget = 0;
+    let exhaustedStreak = 0;
     const t = toast.loading("Finding channels under 50 videos…");
     let consecutiveFailures = 0;
     try {
@@ -239,19 +240,27 @@ export default function Channels() {
           continue;
         }
         const processed = result.channels_processed || 0;
+        // No more candidates server-side — genuinely done.
         if (processed === 0) break;
         const inserted = result.total_videos_inserted || 0;
         const target = result.total_videos_target || 0;
         totalProcessed += processed;
         totalVideos += inserted;
         totalTarget += target;
+        // Track streaks of zero-insert iterations. A streak can mean the next batch
+        // is full of dead/exhausted channels — keep going for a few rounds, then bail
+        // so we don't loop forever if the queue is full of unrecoverable channels.
+        if (inserted === 0) exhaustedStreak++;
+        else exhaustedStreak = 0;
         setBackfillProgress({ channels: totalProcessed, videos: totalVideos });
         toast.loading(
-          `Backfilled ${totalProcessed} channels (${totalVideos}/${totalTarget} videos)…`,
+          exhaustedStreak > 0
+            ? `Backfilled ${totalProcessed} channels (${totalVideos}/${totalTarget} vids) — sweeping ${exhaustedStreak} exhausted batch${exhaustedStreak > 1 ? "es" : ""}…`
+            : `Backfilled ${totalProcessed} channels (${totalVideos}/${totalTarget} videos)…`,
           { id: t }
         );
         fullRefresh();
-        if (inserted === 0) break;
+        if (exhaustedStreak >= 3) break;
         // Breathing room so the DB connection pool isn't monopolized.
         await new Promise((r) => setTimeout(r, 750));
       }
