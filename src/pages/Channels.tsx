@@ -107,6 +107,19 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
 }
 
 interface SummaryStats { total: number; with_us: number; competitor: number; mixed: number; neutral: number; needs_backfill: number; }
+interface GrowthStats { total: number; added24h: number; added1h: number; lastAt: string | null; }
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return "never";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 export default function Channels() {
   useEffect(() => { document.title = "Channels | YT Intel"; }, []);
@@ -128,15 +141,17 @@ export default function Channels() {
   const stopScrapeRef = useRef(false);
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
   const [summary, setSummary] = useState<SummaryStats>({ total: 0, with_us: 0, competitor: 0, mixed: 0, neutral: 0, needs_backfill: 0 });
+  const [growth, setGrowth] = useState<GrowthStats>({ total: 0, added24h: 0, added1h: 0, lastAt: null });
 
   // Reset to page 0 when filters change
   useEffect(() => { setPage(0); }, [filters]);
 
   // Load global summary stats
   const loadSummary = useCallback(async () => {
-    const [summaryRes, backfillCountRes] = await Promise.all([
+    const [summaryRes, backfillCountRes, growthRes] = await Promise.all([
       supabase.rpc("get_channel_summary_stats"),
       supabase.rpc("get_channels_needing_backfill"),
+      supabase.rpc("get_channel_growth_stats"),
     ]);
     if (summaryRes.data && summaryRes.data.length > 0) {
       const r = summaryRes.data[0] as any;
@@ -147,6 +162,15 @@ export default function Channels() {
         mixed: Number(r.mixed) || 0,
         neutral: Number(r.neutral) || 0,
         needs_backfill: Number(backfillCountRes.data) || 0,
+      });
+    }
+    if (growthRes.data && (growthRes.data as any[]).length > 0) {
+      const g = (growthRes.data as any[])[0];
+      setGrowth({
+        total: Number(g.total_channels) || 0,
+        added24h: Number(g.added_last_24h) || 0,
+        added1h: Number(g.added_last_hour) || 0,
+        lastAt: g.last_channel_at || null,
       });
     }
   }, []);
@@ -350,6 +374,13 @@ export default function Channels() {
           <h1 className="text-3xl font-display font-bold">Channels</h1>
           <p className="text-muted-foreground mt-1">
             Showing {totalCount === 0 ? 0 : page * CHANNELS_PAGE_SIZE + 1}–{Math.min((page + 1) * CHANNELS_PAGE_SIZE, totalCount)} of {totalCount.toLocaleString()} channels.
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Total in DB: <span className="font-medium text-foreground">{growth.total.toLocaleString()}</span>
+            {" · "}+{growth.added24h} today
+            {" · "}+{growth.added1h} last hour
+            {" · "}Last discovered: {formatRelativeTime(growth.lastAt)}
+            {" · "}<span title="New channels are only added by keyword fetches, never by Backfill Under 50.">ⓘ</span>
           </p>
         </div>
         <div className="flex gap-2 items-center">
