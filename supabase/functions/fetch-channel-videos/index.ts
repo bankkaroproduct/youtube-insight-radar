@@ -32,11 +32,17 @@ function parseInteger(value: unknown, fallback: number | null): number | null {
 
 async function processChannel(
   supabase: any,
-  channel: { channel_id: string; total_videos_fetched?: number | null; youtube_total_videos?: number | null },
+  channel: {
+    channel_id: string;
+    total_videos_fetched?: number | null;
+    youtube_total_videos?: number | null;
+    last_uploads_page_token?: string | null;
+  },
   apiKeys: KeyData[],
   keyIndex: { val: number },
   quotaCache: Map<string, number>,
   videosPerChannel: number,
+  maxPagesOverride?: number,
 ): Promise<{ videosInserted: number; youtubeTotal: number | null }> {
   const channelId = channel.channel_id;
   let currentKey = apiKeys[keyIndex.val % apiKeys.length];
