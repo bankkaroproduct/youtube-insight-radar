@@ -16,6 +16,9 @@ export interface YouTubeApiKey {
   quota_reset_at: string | null;
 }
 
+const TEST_KEYS_BATCH_SIZE = 20;
+const TEST_KEYS_BATCH_DELAY_MS = 250;
+
 export function useApiKeys() {
   const queryClient = useQueryClient();
 
@@ -153,12 +156,28 @@ export function useApiKeys() {
   });
 
   const testKeys = async (ids: string[]) => {
-    const { data, error } = await supabase.functions.invoke("test-api-key", {
-      body: { key_ids: ids },
-    });
-    if (error) throw error;
-    queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });
-    return data.results as { id: string; status: string }[];
+    const uniqueIds = Array.from(new Set(ids));
+    const results: { id: string; status: string }[] = [];
+
+    for (let index = 0; index < uniqueIds.length; index += TEST_KEYS_BATCH_SIZE) {
+      const batch = uniqueIds.slice(index, index + TEST_KEYS_BATCH_SIZE);
+      const { data, error } = await supabase.functions.invoke("test-api-key", {
+        body: { key_ids: batch },
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      results.push(...((data?.results ?? []) as { id: string; status: string }[]));
+
+      if (index + TEST_KEYS_BATCH_SIZE < uniqueIds.length) {
+        await new Promise((resolve) => setTimeout(resolve, TEST_KEYS_BATCH_DELAY_MS));
+      }
+    }
+
+    await queryClient.invalidateQueries({ queryKey: ["youtube-api-keys"] });
+    return results;
   };
 
   const activeKeys = keys.filter((k) => k.is_active && k.last_test_status !== "invalid" && k.last_test_status !== "restricted");
