@@ -6,6 +6,20 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const MAX_KEYS_PER_REQUEST = 25;
+const GOOGLE_FETCH_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(input: string, init?: RequestInit, timeoutMs = GOOGLE_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -28,6 +42,9 @@ Deno.serve(async (req) => {
     const { key_ids } = await req.json();
     if (!key_ids || !Array.isArray(key_ids) || key_ids.length === 0) {
       throw new Error("key_ids array is required");
+    }
+    if (key_ids.length > MAX_KEYS_PER_REQUEST) {
+      throw new Error(`Too many keys in one request. Max ${MAX_KEYS_PER_REQUEST}.`);
     }
 
     const encryptionSecret = Deno.env.get("API_KEY_ENCRYPTION_KEY");
@@ -56,7 +73,7 @@ Deno.serve(async (req) => {
         if (decErr || !rawKey) { status = "invalid"; throw new Error("decrypt failed"); }
         // videos.list costs 1 unit (vs search.list = 100)
         const url = `https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key=${rawKey}`;
-        const resp = await fetch(url);
+        const resp = await fetchWithTimeout(url);
 
         if (resp.ok) {
           status = "valid";
@@ -86,14 +103,16 @@ Deno.serve(async (req) => {
       }
       // Successful API call (valid or restricted-but-responded) consumed 1 unit.
       if (status === "valid" || status === "restricted") {
-        const { data: current } = await supabase
+        const { data: current, error: currentError } = await supabase
           .from("youtube_api_keys")
           .select("quota_used_today")
           .eq("id", key.id)
           .single();
+        if (currentError) throw currentError;
         updatePayload.quota_used_today = (current?.quota_used_today ?? 0) + 1;
       }
-      await supabase.from("youtube_api_keys").update(updatePayload).eq("id", key.id);
+      const { error: updateError } = await supabase.from("youtube_api_keys").update(updatePayload).eq("id", key.id);
+      if (updateError) throw updateError;
 
       results.push({ id: key.id, status });
     }
@@ -102,8 +121,9 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
+    const message = e instanceof Error ? e.message : "Unknown error";
     const status = e.message === "Forbidden: admin only" ? 403 : e.message === "Unauthorized" ? 401 : 500;
-    return new Response(JSON.stringify({ error: e.message }), {
+    return new Response(JSON.stringify({ error: message }), {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
