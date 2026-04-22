@@ -113,12 +113,17 @@ async function processChannel(
 
   // Step 2: Page through the channel's uploads playlist (cheap: 1 unit/page, returns all uploads
   // in reverse-chronological order) until we collect enough non-Short videos.
+  // If we have a saved resume token from a previous incomplete pass, start from there.
   const videoRecordsById = new Map<string, any>();
   const videoSnippets = new Map<string, any>();
   const seenVideoIds = new Set<string>(existingVideoIds);
-  let nextPageToken: string | null = null;
+  let nextPageToken: string | null = channel.last_uploads_page_token ?? null;
   let pagesFetched = 0;
-  const maxPages = 25; // 25 pages × 50 = up to 1250 uploads inspected per invocation
+  // 25 pages × 50 = 1250 uploads inspected per default invocation.
+  // Backfill mode raises this to 60 pages (3000 uploads) for Shorts-heavy creators.
+  const maxPages = maxPagesOverride ?? 25;
+  // Track inspected uploads so we can compute long-form total once a full walk completes.
+  let nonShortInspectedNew = 0;
 
   if (!uploadsPlaylistId) {
     console.error(`No uploads playlist id for channel ${channelId}`);
@@ -199,8 +204,12 @@ async function processChannel(
       const totalSeconds = durationMatch
         ? (parseInt(durationMatch[1] || "0") * 3600) + (parseInt(durationMatch[2] || "0") * 60) + parseInt(durationMatch[3] || "0")
         : 0;
-      if (totalSeconds > 0 && totalSeconds < 60) continue;
-      if ((snippet.title || "").toLowerCase().includes("#shorts")) continue;
+      const isShort =
+        (totalSeconds > 0 && totalSeconds < 60) ||
+        (snippet.title || "").toLowerCase().includes("#shorts");
+      if (isShort) continue;
+
+      nonShortInspectedNew++;
 
       videoRecordsById.set(video.id, {
         video_id: video.id,
@@ -226,17 +235,32 @@ async function processChannel(
     }
   }
 
+  // Persist resume token: clear it if we either finished the walk or hit the target;
+  // save it if we stopped because of page cap with more pages remaining.
+  const stoppedAtPageCap = !fullyScanned && nextPageToken && videoRecordsById.size < missingVideos;
+  const resumeTokenUpdate = stoppedAtPageCap
+    ? { last_uploads_page_token: nextPageToken }
+    : { last_uploads_page_token: null };
+
+  // If we walked the entire uploads playlist, we now know exactly how many long-form
+  // videos this channel has. Future passes can use this to know when to stop trying.
+  const longformTotalUpdate = fullyScanned
+    ? { youtube_longform_total: existingVideoIds.size + nonShortInspectedNew }
+    : {};
+
   const videoRecords = Array.from(videoRecordsById.values());
   if (videoRecords.length === 0) {
+    const baseUpdate: Record<string, any> = {
+      last_analyzed_at: new Date().toISOString(),
+      ...resumeTokenUpdate,
+      ...longformTotalUpdate,
+    };
     if (fullyScanned) {
-      const finalCount = videoRecordsById.size + existingVideoIds.size;
-      await supabase.from("channels").update({
-        total_videos_fetched: finalCount,
-        last_analyzed_at: new Date().toISOString(),
-        uploads_fully_scanned_at: new Date().toISOString(),
-        scanned_at_youtube_total: youtubeTotal,
-      }).eq("channel_id", channelId);
+      baseUpdate.uploads_fully_scanned_at = new Date().toISOString();
+      baseUpdate.scanned_at_youtube_total = youtubeTotal;
+      baseUpdate.total_videos_fetched = existingVideoIds.size;
     }
+    await supabase.from("channels").update(baseUpdate).eq("channel_id", channelId);
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
