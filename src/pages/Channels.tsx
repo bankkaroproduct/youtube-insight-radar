@@ -116,7 +116,7 @@ export default function Channels() {
   const { sortKey, sortDirection, handleSort } = useSort<any>("videos", "desc");
   const sortDir: "asc" | "desc" = sortDirection === "asc" ? "asc" : "desc";
 
-  const { channels, totalCount, isLoading, refresh, recomputeStats } = useChannels(filters, page, sortKey, sortDir);
+  const { channels, totalCount, isLoading, refresh, recomputeStats, isRecomputing, stopRecompute } = useChannels(filters, page, sortKey, sortDir);
 
   const [fetchingNew, setFetchingNew] = useState(false);
   const [scrapingLinks, setScrapingLinks] = useState(false);
@@ -205,22 +205,39 @@ export default function Channels() {
     let totalVideos = 0;
     let totalTarget = 0;
     const t = toast.loading("Finding channels under 50 videos…");
+    let consecutiveFailures = 0;
     try {
       const { data: { session } } = await supabase.auth.getSession();
       while (!stopBackfillRef.current) {
-        const resp = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-channel-videos`,
-          {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${session?.access_token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ backfill_under_50: true, limit: 10 }),
+        let result: any;
+        try {
+          const resp = await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-channel-videos`,
+            {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${session?.access_token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ backfill_under_50: true, limit: 10 }),
+            }
+          );
+          result = await resp.json();
+          if (!resp.ok) throw new Error(result.error || `HTTP ${resp.status}`);
+          consecutiveFailures = 0;
+        } catch (iterErr: any) {
+          consecutiveFailures++;
+          console.error("[backfillTo50] iteration failed:", iterErr?.message);
+          toast.loading(
+            `Backfilled ${totalProcessed} channels (${totalVideos}/${totalTarget}) — transient error, retrying… (${consecutiveFailures}/3)`,
+            { id: t },
+          );
+          if (consecutiveFailures >= 3) {
+            throw new Error(`Aborted after 3 consecutive failures: ${iterErr?.message}`);
           }
-        );
-        const result = await resp.json();
-        if (!resp.ok) throw new Error(result.error || "Failed");
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
         const processed = result.channels_processed || 0;
         if (processed === 0) break;
         const inserted = result.total_videos_inserted || 0;
@@ -234,8 +251,6 @@ export default function Channels() {
           { id: t }
         );
         fullRefresh();
-        // Stop if this iteration inserted nothing — all remaining channels are either
-        // fully scanned or their YouTube total is already matched.
         if (inserted === 0) break;
       }
       const stoppedMsg = stopBackfillRef.current ? " (stopped)" : "";
@@ -368,9 +383,15 @@ export default function Channels() {
               <TooltipContent>Downloads all matching rows — may take a moment for large datasets</TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
-            <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
+          <Button variant="outline" size="sm" onClick={() => recomputeStats()} disabled={isRecomputing}>
+            {isRecomputing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <BarChart3 className="h-4 w-4 mr-2" />}
+            {isRecomputing ? "Recomputing…" : "Recompute Stats"}
           </Button>
+          {isRecomputing && (
+            <Button variant="destructive" size="sm" onClick={stopRecompute}>
+              <StopCircle className="h-4 w-4 mr-2" /> Stop
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={fullRefresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>
