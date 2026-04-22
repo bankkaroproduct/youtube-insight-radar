@@ -575,6 +575,19 @@ function ProcessingTab() {
     return () => clearInterval(interval);
   }, [running, fetchStats]);
 
+  // Reconcile stale localStorage logs with live backend state. If the queue is
+  // fully drained (no pending, no failed) and we're not actively running, drop
+  // any persisted "resume" logs so the UI doesn't falsely prompt to resume.
+  const hasPendingWork = stats.unprocessed > 0;
+  const isCompleted = statsLoaded && !running && stats.unprocessed === 0 && stats.failed === 0;
+  useEffect(() => {
+    if (isCompleted && logs.length > 0) {
+      linkProcessingService.clearIfCompleted();
+    }
+  }, [isCompleted, logs.length]);
+
+  const canResume = !running && logs.length > 0 && hasPendingWork;
+
   const startProcessing = () => {
     linkProcessingService.start(fetchStats, batchSize);
   };
