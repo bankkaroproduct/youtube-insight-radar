@@ -1,61 +1,58 @@
 
-## Where your data went — and how to recover/prevent it
 
-You're not seeing a bug in the UI this time. The data physically isn't there anymore. Here's what happened, what's still salvageable, and what to change so it stops happening.
+## Backfill stopped after 1 channel — root cause and fix
 
-### What's actually in the database right now
+The toast "Backfilled 1 channels — 0 videos (0% of max achievable)" is correct but misleading. Two real bugs combined to end the run prematurely.
 
-From earlier diagnosis on your live backend:
-- `videos`: **3,525 rows** (you remember ~53,000)
-- `video_links`: **24,643 rows** (you remember ~200,000 / "2 lakh")
-- `channels.total_videos_fetched` sums to **53,197** — this is a *cumulative fetch counter*, not a row count. It only goes up, even when the underlying videos are later deleted.
+### What actually happened
 
-So the "53k" number you remember was real at fetch time, but those video rows have since been removed from the `videos` table. The "2 lakh links" figure came from stale browser logs showing an in-flight processing queue from before a reset/cleanup — those link rows were also deleted.
+Edge function logs show:
+```
+ERROR No uploads playlist id for channel UC6vvFZl62d_7lxVjz1dpZFw
+```
 
-### Why the rows disappeared
+That channel (`Torquekick_KL31`, 1 video stored, `youtube_total_videos = NULL`) is private, deleted, or YouTube refuses to return its `contentDetails`. The function:
+1. Couldn't fetch the uploads playlist → returned 0 videos.
+2. **Did not** flag the channel as terminally exhausted, so the next backfill iteration would pick it again.
+3. Returned `total_videos_inserted: 0` to the client.
 
-There are three deletion paths in this project, and at least two of them have been firing:
+The client (`Channels.tsx` line 254) then hit `if (inserted === 0) break;` — **wrong stop condition**. A batch of dead/exhausted channels legitimately returns 0 videos but the next batch could still be productive.
 
-1. **`cleanup_orphaned_videos()`** — deletes any video in `videos` that has no row in `video_keywords`. So the moment a keyword is deleted, every video that was *only* attached to that keyword is wiped, and every `video_links` row tied to those videos goes with it (cascade via app logic / FK behavior).
-2. **`reset-video-links` edge function** — clears resolved fields on links. This doesn't delete rows, but it's often run alongside #3.
-3. **Manual "Reset All Links" / keyword deletes from the UI** — when keywords were removed, their videos became orphans and the cleanup job swept them.
+Also, of the 114 channels still flagged "needs backfill", **most have `youtube_total_videos = NULL`** (the channel-stats fetch never succeeded, likely from a past API-key exhaustion). They sit at the front of the queue and may all be in the same broken state.
 
-The cumulative `total_videos_fetched` counter on `channels` was never decremented when any of this happened, which is why the channel-level number (53k) and the actual `videos` table (3.5k) drifted so far apart.
+### Fix (2 small changes, no new schema)
 
-### Plan — three parts
+**1. `supabase/functions/fetch-channel-videos/index.ts` — handle "no uploads playlist"**
 
-**Part 1: Forensics (read-only, no changes)**
-- Check `audit_log` for `cleanup_orphaned_videos`, keyword deletions, and link resets in the last 30 days to confirm timing and who triggered them.
-- Pull edge function logs for `reset-video-links`, `process-video-links`, and any cleanup invocations to build a timeline of what was deleted when.
-- Cross-check `channels.total_videos_fetched` vs actual per-channel `videos` count to quantify the gap per channel (we already know the total gap is ~49,500 videos).
-- Report back: how many videos were lost, when, and which action caused each wave.
+When `channels.list` returns no `contentDetails.relatedPlaylists.uploads`, mark the channel as terminally exhausted so backfill never re-selects it:
+- Set `youtube_longform_total = current stored count` (the new "needs backfill" RPC will exclude it).
+- Set `uploads_fully_scanned_at = now()` and `scanned_at_youtube_total = youtubeTotal ?? stored count`.
+- Bump `last_analyzed_at`.
 
-**Part 2: Recover what we can**
-- **Re-fetch from YouTube**: every channel still has its `channel_id`, `last_uploads_page_token`, and uploads playlist. We can reset `uploads_fully_scanned_at = NULL` and `total_videos_fetched = 0` on the affected channels and re-run the existing fetch flow. This will repopulate `videos` and `video_keywords` for channels that still exist on YouTube. Cost: YouTube API quota (~1 unit per 50 videos via playlistItems).
-- **Re-resolve links**: once videos come back, the link extraction + `process-video-links` pipeline will rebuild `video_links` from video descriptions. The 24,643 currently-resolved links stay intact.
-- We **cannot** recover the *exact same* `video_links.id` UUIDs or any link that was in a video description that has since been edited/deleted on YouTube. Any manual classifications stored only on `video_links` rows are gone.
+This drains the queue of dead/private channels in a single pass.
 
-**Part 3: Stop the bleeding (schema + UX guardrails)**
-- **Add a confirmation gate to keyword deletion**: before deleting a keyword, show the user how many videos and links will be orphaned and require typed confirmation. Right now this is silent.
-- **Soft-delete instead of hard-delete for videos**: add `deleted_at` to `videos` and have `cleanup_orphaned_videos` set `deleted_at` instead of `DELETE`. Add a separate "Purge soft-deleted older than N days" job the admin runs explicitly. This gives a recovery window.
-- **Fix `total_videos_fetched` to mean what it says**: replace the cumulative counter with a live count derived from `videos` per channel (or add a separate `lifetime_videos_seen` column so the two concepts are not conflated). Recompute current values from `videos` so the Channels page stops lying.
-- **Audit-log every destructive action**: keyword delete, link reset, orphan cleanup, channel reset — all should write to `audit_log` with row counts so this is never a mystery again.
-- **Dashboard "data health" card**: show `videos` row count, `video_links` row count, last cleanup run, last reset run, and the gap between `SUM(total_videos_fetched)` and actual `videos` count — so drift is visible immediately, not weeks later.
+**2. `src/pages/Channels.tsx > backfillTo50` — fix the stop condition**
 
-### Decisions I need from you before implementing
+Replace the brittle `if (inserted === 0) break;` with a tolerant version:
+- Only stop on `processed === 0` (server returned no candidates → genuinely done).
+- Allow up to **3 consecutive zero-insert iterations** before breaking — covers a streak of exhausted channels but still bails if nothing is moving.
+- Show a clearer toast distinguishing "X channels exhausted (already at their ceiling)" from "Y new videos backfilled".
 
-1. **Recovery scope** — re-fetch videos for **(A)** all 114+ channels under 50 videos, **(B)** only channels that currently have 0 videos in the `videos` table but >0 in `total_videos_fetched`, or **(C)** skip recovery and just put guardrails in?
-2. **Soft-delete** — okay to add `deleted_at` to `videos` and `video_links` and make cleanup a two-stage process (mark, then purge after 30 days)? This is the single biggest protection against repeats.
-3. **Counter fix** — replace `total_videos_fetched` with a live count, or keep it as "lifetime fetched" and add a new `videos_in_db` column next to it? The second is more honest, the first is simpler.
+### Files touched
 
-### Files / objects that will change once you decide
+- `supabase/functions/fetch-channel-videos/index.ts` — mark "no uploads playlist" channels as exhausted (lines 128–132).
+- `src/pages/Channels.tsx` — relax `backfillTo50` stop condition + better progress copy (around line 254).
 
-- `supabase/migrations/<new>.sql` — soft-delete columns, counter recompute, audit triggers
-- `supabase/functions/cleanup-orphaned-videos` (new) or update existing RPC — soft-delete behavior
-- `supabase/functions/recover-channel-videos` (new) — orchestrates the re-fetch for selected channels
-- `src/pages/Keywords.tsx` — confirmation dialog with impact preview before delete
-- `src/pages/Channels.tsx` — surface the `videos_in_db` vs `total_videos_fetched` gap
-- `src/hooks/useDashboard.ts` + new `DataHealthCard` — drift visibility on the dashboard
-- `src/pages/Links.tsx` — show last reset timestamp and row count from audit log
+### Not in scope
 
-No data has been touched while preparing this plan. Nothing will be deleted or re-fetched until you pick A/B/C and confirm the soft-delete + counter approach.
+- No DB migration (the previous one already added the columns we use).
+- No change to the Shorts filter or 50-video target.
+- No retry logic for `channels.list` failures — those are handled by the existing key-rotation wrapper; truly missing playlists mean the channel is gone.
+
+### What to expect after the fix
+
+Click **Backfill Under 50** again. The next pass will:
+1. Sweep through the ~10–20 dead/private channels in one go, marking them exhausted so they drop off the "Needs Backfill" counter.
+2. Continue past zero-insert batches and reach the channels that genuinely have more long-form videos to fetch.
+3. The "Needs Backfill" number will fall meaningfully on the first run instead of getting stuck at 114.
+

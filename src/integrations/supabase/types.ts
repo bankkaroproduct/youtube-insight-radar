@@ -892,7 +892,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      cleanup_truly_orphaned_videos: { Args: never; Returns: number }
+      cleanup_orphaned_videos: { Args: never; Returns: number }
       cleanup_url_cache: { Args: never; Returns: number }
       get_affiliate_classification_stats: {
         Args: never
