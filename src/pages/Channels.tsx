@@ -141,15 +141,17 @@ export default function Channels() {
   const stopScrapeRef = useRef(false);
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
   const [summary, setSummary] = useState<SummaryStats>({ total: 0, with_us: 0, competitor: 0, mixed: 0, neutral: 0, needs_backfill: 0 });
+  const [growth, setGrowth] = useState<GrowthStats>({ total: 0, added24h: 0, added1h: 0, lastAt: null });
 
   // Reset to page 0 when filters change
   useEffect(() => { setPage(0); }, [filters]);
 
   // Load global summary stats
   const loadSummary = useCallback(async () => {
-    const [summaryRes, backfillCountRes] = await Promise.all([
+    const [summaryRes, backfillCountRes, growthRes] = await Promise.all([
       supabase.rpc("get_channel_summary_stats"),
       supabase.rpc("get_channels_needing_backfill"),
+      supabase.rpc("get_channel_growth_stats"),
     ]);
     if (summaryRes.data && summaryRes.data.length > 0) {
       const r = summaryRes.data[0] as any;
@@ -160,6 +162,15 @@ export default function Channels() {
         mixed: Number(r.mixed) || 0,
         neutral: Number(r.neutral) || 0,
         needs_backfill: Number(backfillCountRes.data) || 0,
+      });
+    }
+    if (growthRes.data && (growthRes.data as any[]).length > 0) {
+      const g = (growthRes.data as any[])[0];
+      setGrowth({
+        total: Number(g.total_channels) || 0,
+        added24h: Number(g.added_last_24h) || 0,
+        added1h: Number(g.added_last_hour) || 0,
+        lastAt: g.last_channel_at || null,
       });
     }
   }, []);
