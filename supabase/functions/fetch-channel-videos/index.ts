@@ -443,10 +443,15 @@ Deno.serve(async (req) => {
     const BATCH_SIZE = backfillUnder50 ? 5 : 10;
     const channelIds = channels.map((c: any) => c.channel_id);
 
+    // Backfill mode: walk up to 60 pages (3000 uploads) per channel so Shorts-heavy creators
+    // can actually reach 50 long-form videos. Default mode keeps the lighter 25-page cap.
+    const maxPagesPerChannel = backfillUnder50 ? 60 : 25;
+
     for (let i = 0; i < channelIds.length; i += BATCH_SIZE) {
       const batch = channels.slice(i, i + BATCH_SIZE);
       const results = await Promise.allSettled(
-        batch.map((channel: any) => processChannel(supabase, channel, apiKeys, keyIndex, quotaCache, videosPerChannel))
+        batch.map((channel: any) =>
+          processChannel(supabase, channel, apiKeys, keyIndex, quotaCache, videosPerChannel, maxPagesPerChannel))
       );
       for (const r of results) {
         if (r.status === "fulfilled") {
