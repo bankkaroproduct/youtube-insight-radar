@@ -595,21 +595,45 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const XLSX = (await import("xlsx-js-style")).default;
 
   onProgress?.("Fetching videos...");
-  const videos = await fetchAll<Video>("videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at");
+  const videos = await fetchAll<Video>(
+    "videos",
+    "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at",
+    { label: "videos", onProgress: (n) => onProgress?.(`Fetching videos... ${n.toLocaleString()}`) }
+  );
 
   onProgress?.("Fetching links...");
-  const links = await fetchAll<VideoLink>("video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification");
+  const links = await fetchAll<VideoLink>(
+    "video_links",
+    "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification",
+    { label: "video_links", onProgress: (n) => onProgress?.(`Fetching links... ${n.toLocaleString()}`) }
+  );
 
   onProgress?.("Fetching keywords...");
-  const vks = await fetchAll<VideoKeyword>("video_keywords", "video_id,keyword_id,search_rank");
-  const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
+  const vks = await fetchAll<VideoKeyword>(
+    "video_keywords",
+    "video_id,keyword_id,search_rank",
+    { label: "video_keywords", onProgress: (n) => onProgress?.(`Fetching keyword links... ${n.toLocaleString()}`) }
+  );
+  const keywordsAll = await fetchAll<Keyword>(
+    "keywords_search_runs",
+    "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at",
+    { label: "keywords_search_runs" }
+  );
 
   onProgress?.("Fetching channels...");
-  let channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos");
+  let channels = await fetchAll<Channel>(
+    "channels",
+    "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos",
+    { label: "channels", onProgress: (n) => onProgress?.(`Fetching channels... ${n.toLocaleString()}`) }
+  );
   channels = await ensureChannelLinksScraped(channels, onProgress);
 
   onProgress?.("Fetching Instagram...");
-  const igs = await fetchAll<IGProfile>("instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category");
+  const igs = await fetchAll<IGProfile>(
+    "instagram_profiles",
+    "channel_id,instagram_username,follower_count,bio,business_category",
+    { label: "instagram_profiles" }
+  );
 
   onProgress?.("Building sheets...");
 
