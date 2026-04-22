@@ -205,22 +205,39 @@ export default function Channels() {
     let totalVideos = 0;
     let totalTarget = 0;
     const t = toast.loading("Finding channels under 50 videos…");
+    let consecutiveFailures = 0;
     try {
       const { data: { session } } = await supabase.auth.getSession();
       while (!stopBackfillRef.current) {
-        const resp = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-channel-videos`,
-          {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${session?.access_token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ backfill_under_50: true, limit: 10 }),
+        let result: any;
+        try {
+          const resp = await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fetch-channel-videos`,
+            {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${session?.access_token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ backfill_under_50: true, limit: 10 }),
+            }
+          );
+          result = await resp.json();
+          if (!resp.ok) throw new Error(result.error || `HTTP ${resp.status}`);
+          consecutiveFailures = 0;
+        } catch (iterErr: any) {
+          consecutiveFailures++;
+          console.error("[backfillTo50] iteration failed:", iterErr?.message);
+          toast.loading(
+            `Backfilled ${totalProcessed} channels (${totalVideos}/${totalTarget}) — transient error, retrying… (${consecutiveFailures}/3)`,
+            { id: t },
+          );
+          if (consecutiveFailures >= 3) {
+            throw new Error(`Aborted after 3 consecutive failures: ${iterErr?.message}`);
           }
-        );
-        const result = await resp.json();
-        if (!resp.ok) throw new Error(result.error || "Failed");
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
         const processed = result.channels_processed || 0;
         if (processed === 0) break;
         const inserted = result.total_videos_inserted || 0;
@@ -234,8 +251,6 @@ export default function Channels() {
           { id: t }
         );
         fullRefresh();
-        // Stop if this iteration inserted nothing — all remaining channels are either
-        // fully scanned or their YouTube total is already matched.
         if (inserted === 0) break;
       }
       const stoppedMsg = stopBackfillRef.current ? " (stopped)" : "";
