@@ -547,46 +547,59 @@ function buildSheet6(channels: Channel[], igByChannelId: Map<string, IGProfile>)
   return { headers, rows };
 }
 
-// ===== Worksheet construction with styles =====
-function buildWorksheet(XLSX: any, sheetData: { headers: string[]; rows: any[][] }, socialColIdx: number | null, excludedColIdx: number | null) {
-  const { headers, rows } = sheetData;
-  const aoa = [headers, ...rows];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
+// ===== Worksheet construction with styles (ExcelJS) =====
+// ExcelJS style equivalents of the previous xlsx-js-style objects.
+const ejsHeaderStyle = {
+  font: { bold: true, name: "Arial", size: 10 },
+  fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFE0E0E0" } },
+  alignment: { vertical: "middle" as const, wrapText: true },
+};
+const ejsPlaceholderFont = { name: "Arial", size: 10, italic: true, color: { argb: "FF808080" } };
+const ejsRedFont = { name: "Arial", size: 10, color: { argb: "FFFF0000" } };
+const ejsBlueFont = { name: "Arial", size: 10, color: { argb: "FF0000FF" } };
 
-  const colCount = headers.length;
-  const rowCount = aoa.length;
+function addSheetToWorkbook(
+  workbook: any,
+  name: string,
+  sheetData: { headers: string[]; rows: any[][] },
+  socialColIdx: number | null,
+  excludedColIdx: number | null,
+  colWidths?: number[],
+) {
+  const { headers, rows } = sheetData;
+  const ws = workbook.addWorksheet(name, {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
 
   // Column widths
-  ws["!cols"] = headers.map(h => ({ wch: Math.max(12, Math.min(50, h.length + 4)) }));
-  // Freeze top row
-  ws["!freeze"] = { xSplit: 0, ySplit: 1 };
-  ws["!views"] = [{ state: "frozen", ySplit: 1, xSplit: 0, topLeftCell: "A2", activePane: "bottomLeft" }];
+  ws.columns = headers.map((h, i) => ({
+    width: colWidths?.[i] ?? Math.max(12, Math.min(50, h.length + 4)),
+  }));
 
-  // Style ONLY header row + meaningful data cells (placeholder/red/blue).
-  // Leaving plain data cells unstyled drastically reduces file size.
   // Header row
-  for (let c = 0; c < colCount; c++) {
-    const addr = XLSX.utils.encode_cell({ r: 0, c });
-    if (!ws[addr]) ws[addr] = { v: headers[c] ?? "", t: "s" };
-    ws[addr].s = headerStyle;
+  const headerRow = ws.addRow(headers);
+  for (let c = 1; c <= headers.length; c++) {
+    const cell = headerRow.getCell(c);
+    cell.font = ejsHeaderStyle.font;
+    cell.fill = ejsHeaderStyle.fill;
+    cell.alignment = ejsHeaderStyle.alignment;
   }
-  // Data rows: only style cells that need color/italic
-  for (let r = 1; r < rowCount; r++) {
-    for (let c = 0; c < colCount; c++) {
-      const addr = XLSX.utils.encode_cell({ r, c });
-      const cell = ws[addr];
-      if (!cell) continue;
-      const val = cell.v;
-      if (excludedColIdx !== null && c === excludedColIdx && typeof val === "string" && val.startsWith("Excluded")) {
-        cell.s = redStyle;
-      } else if (socialColIdx !== null && c === socialColIdx && typeof val === "string" && val) {
-        cell.s = blueStyle;
+
+  // Data rows — apply only conditional cell styles to keep memory low.
+  for (let r = 0; r < rows.length; r++) {
+    const row = ws.addRow(rows[r]);
+    for (let c = 0; c < headers.length; c++) {
+      const val = rows[r][c];
+      const colIdx0 = c;
+      if (excludedColIdx !== null && colIdx0 === excludedColIdx && typeof val === "string" && val.startsWith("Excluded")) {
+        row.getCell(c + 1).font = ejsRedFont;
+      } else if (socialColIdx !== null && colIdx0 === socialColIdx && typeof val === "string" && val) {
+        row.getCell(c + 1).font = ejsBlueFont;
       } else if (typeof val === "string" && PLACEHOLDERS.has(val)) {
-        cell.s = placeholderStyle;
+        row.getCell(c + 1).font = ejsPlaceholderFont;
       }
     }
   }
-  return ws;
 }
 
 // ===== Main entry =====
@@ -708,20 +721,33 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const s6 = buildSheet6(channels, igByChannelId);
 
   onProgress?.("Formatting workbook...");
-  const wb = XLSX.utils.book_new();
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
   // Sheet 2: 22 cols → Social=20, Excluded=21 (added Search Rank at idx 4)
   // Sheet 3: 17 cols → Social=15, Excluded=16 (unchanged)
-  // Sheet 5: 17 cols → Social=15, Excluded=16 (added Link Header at idx 9)
-  const s1Ws = buildWorksheet(XLSX, s1, null, null);
-  s1Ws["!cols"] = [{ wch: 30 }, { wch: 20 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 22 }];
-  XLSX.utils.book_append_sheet(wb, s1Ws, "S1 - Keyword Summary");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s2, 20, 21), "S2 - Video Deep Data");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s3, 15, 16), "S3 - Last 50 Deep Data");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s4, null, null), "S4 - Last 50 Channel Map");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s5, 17, 18), "S5 - Channel Deep Data");
-  XLSX.utils.book_append_sheet(wb, buildWorksheet(XLSX, s6, null, null), "S6 - Contact Info");
+  // Sheet 5: 19 cols → Social=17, Excluded=18 (added Link Header at idx 11)
+  addSheetToWorkbook(wb, "S1 - Keyword Summary", s1, null, null, [30, 20, 12, 18, 22, 18, 22]);
+  addSheetToWorkbook(wb, "S2 - Video Deep Data", s2, 20, 21);
+  addSheetToWorkbook(wb, "S3 - Last 50 Deep Data", s3, 15, 16);
+  addSheetToWorkbook(wb, "S4 - Last 50 Channel Map", s4, null, null);
+  addSheetToWorkbook(wb, "S5 - Channel Deep Data", s5, 17, 18);
+  addSheetToWorkbook(wb, "S6 - Contact Info", s6, null, null);
 
   onProgress?.("Downloading file...");
   const date = new Date().toISOString().split("T")[0];
-  XLSX.writeFile(wb, `youtube_full_report_${date}.xlsx`, { compression: true });
+  // ExcelJS writeBuffer streams XML through JSZip — no single-string serialization,
+  // so it bypasses the V8 ~512 MB string-length ceiling that broke xlsx-js-style.
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `youtube_full_report_${date}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
