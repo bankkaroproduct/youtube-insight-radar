@@ -156,6 +156,8 @@ export function useChannels(
             { id: t },
           );
           if (batchNum % 10 === 0) load();
+          // Breathing room so interactive queries (auth, page loads) aren't starved.
+          await new Promise((r) => setTimeout(r, 500));
         }
       } else {
         while (!stopRecomputeRef.current) {
@@ -178,6 +180,7 @@ export function useChannels(
           );
           if (batchNum % 10 === 0) load();
           if (remaining === 0) break;
+          await new Promise((r) => setTimeout(r, 500));
         }
       }
       const stoppedMsg = stopRecomputeRef.current ? " (stopped)" : "";
