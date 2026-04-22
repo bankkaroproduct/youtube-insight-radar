@@ -106,7 +106,7 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
   URL.revokeObjectURL(url);
 }
 
-interface SummaryStats { total: number; with_us: number; competitor: number; mixed: number; neutral: number; }
+interface SummaryStats { total: number; with_us: number; competitor: number; mixed: number; neutral: number; needs_backfill: number; }
 
 export default function Channels() {
   useEffect(() => { document.title = "Channels | YT Intel"; }, []);
@@ -127,22 +127,26 @@ export default function Channels() {
   const stopBackfillRef = useRef(false);
   const stopScrapeRef = useRef(false);
   const [igProfiles, setIgProfiles] = useState<Record<string, any>>({});
-  const [summary, setSummary] = useState<SummaryStats>({ total: 0, with_us: 0, competitor: 0, mixed: 0, neutral: 0 });
+  const [summary, setSummary] = useState<SummaryStats>({ total: 0, with_us: 0, competitor: 0, mixed: 0, neutral: 0, needs_backfill: 0 });
 
   // Reset to page 0 when filters change
   useEffect(() => { setPage(0); }, [filters]);
 
   // Load global summary stats
   const loadSummary = useCallback(async () => {
-    const { data } = await supabase.rpc("get_channel_summary_stats");
-    if (data && data.length > 0) {
-      const r = data[0] as any;
+    const [summaryRes, backfillCountRes] = await Promise.all([
+      supabase.rpc("get_channel_summary_stats"),
+      supabase.rpc("get_channels_needing_backfill"),
+    ]);
+    if (summaryRes.data && summaryRes.data.length > 0) {
+      const r = summaryRes.data[0] as any;
       setSummary({
         total: Number(r.total) || 0,
         with_us: Number(r.with_us) || 0,
         competitor: Number(r.competitor) || 0,
         mixed: Number(r.mixed) || 0,
         neutral: Number(r.neutral) || 0,
+        needs_backfill: Number(backfillCountRes.data) || 0,
       });
     }
   }, []);
@@ -199,7 +203,8 @@ export default function Channels() {
     setBackfillProgress({ channels: 0, videos: 0 });
     let totalProcessed = 0;
     let totalVideos = 0;
-    const t = toast.loading("Backfilling channels to 50 videos…");
+    let totalTarget = 0;
+    const t = toast.loading("Finding channels under 50 videos…");
     try {
       const { data: { session } } = await supabase.auth.getSession();
       while (!stopBackfillRef.current) {
@@ -211,7 +216,7 @@ export default function Channels() {
               "Authorization": `Bearer ${session?.access_token}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ backfill_under_50: true, limit: 25 }),
+            body: JSON.stringify({ backfill_under_50: true, limit: 10 }),
           }
         );
         const result = await resp.json();
@@ -219,15 +224,26 @@ export default function Channels() {
         const processed = result.channels_processed || 0;
         if (processed === 0) break;
         const inserted = result.total_videos_inserted || 0;
+        const target = result.total_videos_target || 0;
         totalProcessed += processed;
         totalVideos += inserted;
+        totalTarget += target;
         setBackfillProgress({ channels: totalProcessed, videos: totalVideos });
-        toast.loading(`Backfilled ${totalProcessed} channels (${totalVideos} videos)…`, { id: t });
+        toast.loading(
+          `Backfilled ${totalProcessed} channels (${totalVideos}/${totalTarget} videos)…`,
+          { id: t }
+        );
         fullRefresh();
+        // Stop if this iteration inserted nothing — all remaining channels are either
+        // fully scanned or their YouTube total is already matched.
         if (inserted === 0) break;
       }
       const stoppedMsg = stopBackfillRef.current ? " (stopped)" : "";
-      toast.success(`Done${stoppedMsg}. Backfilled ${totalProcessed} channels with ${totalVideos} videos.`, { id: t });
+      const completionPct = totalTarget > 0 ? Math.round((totalVideos / totalTarget) * 100) : 100;
+      toast.success(
+        `Done${stoppedMsg}. Backfilled ${totalProcessed} channels — ${totalVideos} videos (${completionPct}% of max achievable).`,
+        { id: t }
+      );
       fullRefresh();
     } catch (e: any) {
       toast.error("Backfill failed: " + e.message, { id: t });
@@ -295,6 +311,7 @@ export default function Channels() {
     { label: "Competitor", value: summary.competitor, icon: AlertTriangle, color: "text-red-500" },
     { label: "Mixed", value: summary.mixed, icon: Shuffle, color: "text-orange-500" },
     { label: "Neutral", value: summary.neutral, icon: HelpCircle, color: "text-muted-foreground" },
+    { label: "Needs Backfill", value: summary.needs_backfill, icon: VideoIcon, color: "text-amber-500" },
   ];
 
   const totalPages = Math.max(1, Math.ceil(totalCount / CHANNELS_PAGE_SIZE));
@@ -314,9 +331,17 @@ export default function Channels() {
             {fetchingNew ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
             Fetch New Channel Videos
           </Button>
-          <Button variant="outline" size="sm" onClick={backfillTo50} disabled={backfilling}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={backfillTo50}
+            disabled={backfilling}
+            title="Fetches videos for channels that have fewer than 50 stored. Caps at 50 or whatever YouTube has, whichever is smaller."
+          >
             {backfilling ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <VideoIcon className="h-4 w-4 mr-2" />}
-            {backfilling ? `Backfilling: ${backfillProgress.channels} ch / ${backfillProgress.videos} vids` : "Backfill to 50 Videos"}
+            {backfilling
+              ? `Backfilling: ${backfillProgress.channels} ch / ${backfillProgress.videos} vids`
+              : "Backfill Under 50"}
           </Button>
           {backfilling && (
             <Button variant="destructive" size="sm" onClick={() => { stopBackfillRef.current = true; toast.message("Stopping after current batch…"); }}>
