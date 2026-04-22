@@ -71,6 +71,26 @@ class LinkProcessingService {
     this.notify();
   }
 
+  /**
+   * Clear stale resumable state when the server confirms there is no pending work.
+   * Keeps the user from seeing a misleading "Resume Processing" banner after a
+   * completed run, especially on page refresh where logs are restored from
+   * localStorage but the queue is actually empty.
+   */
+  clearIfCompleted() {
+    if (this.running) return;
+    if (this.logs.length === 0 && this.batchNum === 0) return;
+    this.logs = [];
+    this.startedAt = null;
+    this.batchNum = 0;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    this.notify();
+  }
+
   private saveState() {
     try {
       localStorage.setItem(

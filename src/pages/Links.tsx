@@ -575,6 +575,19 @@ function ProcessingTab() {
     return () => clearInterval(interval);
   }, [running, fetchStats]);
 
+  // Reconcile stale localStorage logs with live backend state. If the queue is
+  // fully drained (no pending, no failed) and we're not actively running, drop
+  // any persisted "resume" logs so the UI doesn't falsely prompt to resume.
+  const hasPendingWork = stats.unprocessed > 0;
+  const isCompleted = statsLoaded && !running && stats.unprocessed === 0 && stats.failed === 0;
+  useEffect(() => {
+    if (isCompleted && logs.length > 0) {
+      linkProcessingService.clearIfCompleted();
+    }
+  }, [isCompleted, logs.length]);
+
+  const canResume = !running && logs.length > 0 && hasPendingWork;
+
   const startProcessing = () => {
     linkProcessingService.start(fetchStats, batchSize);
   };
@@ -656,7 +669,7 @@ function ProcessingTab() {
       </div>
       <p className="text-sm text-muted-foreground text-center">{pct}% processed</p>
 
-      {logs.length > 0 && !running && (
+      {canResume && (
         <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
           Previous run logs loaded. Click <strong>Resume Processing</strong> to continue.
         </div>
@@ -668,8 +681,8 @@ function ProcessingTab() {
             <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Stop Processing
           </Button>
         ) : (
-          <Button onClick={startProcessing} disabled={stats.unprocessed === 0 || resetting} size="lg">
-            <Play className="h-4 w-4 mr-2" /> {logs.length > 0 ? "Resume Processing" : "Start Processing"}
+          <Button onClick={startProcessing} disabled={!hasPendingWork || resetting} size="lg">
+            <Play className="h-4 w-4 mr-2" /> {canResume ? "Resume Processing" : "Start Processing"}
           </Button>
         )}
         {resetting && !running && (
