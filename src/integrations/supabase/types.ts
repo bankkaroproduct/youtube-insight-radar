@@ -905,6 +905,7 @@ export type Database = {
           with_us: number
         }[]
       }
+      get_channels_needing_backfill: { Args: never; Returns: number }
       get_decrypted_api_key: {
         Args: { _key_id: string; _secret: string }
         Returns: string

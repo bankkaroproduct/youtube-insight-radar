@@ -361,8 +361,18 @@ Deno.serve(async (req) => {
         }
 
         if (backfillUnder50) {
+          // Already at or past 50 stored videos — done.
           if (fetched >= 50) return false;
-          if (ytTotal !== null && ytTotal >= fetched && fetched >= ytTotal) return false;
+
+          // Case A: YouTube has < 50 total — we can only ever reach what exists there.
+          //   If we've already fetched everything YouTube has, skip. Otherwise include.
+          if (ytTotal !== null && ytTotal < 50) {
+            if (fetched >= ytTotal) return false;
+            return true;
+          }
+
+          // Case B: YouTube has >= 50 (or unknown). We haven't scanned fully and haven't hit 50 yet. Include.
+          return true;
         }
         if (minVideos !== null && fetched < minVideos) return false;
         if (maxVideos !== null && fetched > maxVideos) return false;
@@ -389,6 +399,7 @@ Deno.serve(async (req) => {
 
     const keyIndex = { val: 0 };
     let totalVideos = 0;
+    let totalTargetForBatch = 0;
     let processedChannels = 0;
     const BATCH_SIZE = backfillUnder50 ? 5 : 10;
     const channelIds = channels.map((c: any) => c.channel_id);
@@ -401,6 +412,9 @@ Deno.serve(async (req) => {
       for (const r of results) {
         if (r.status === "fulfilled") {
           totalVideos += r.value.videosInserted;
+          // Max achievable for this channel = min(50, youtube_total). If unknown, assume 50.
+          const ytTotal = r.value.youtubeTotal;
+          totalTargetForBatch += Math.min(50, ytTotal ?? 50);
           processedChannels++;
         } else {
           console.error("Channel processing failed:", r.reason);
@@ -437,6 +451,7 @@ Deno.serve(async (req) => {
       success: true,
       channels_processed: processedChannels,
       total_videos_inserted: totalVideos,
+      total_videos_target: totalTargetForBatch,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
