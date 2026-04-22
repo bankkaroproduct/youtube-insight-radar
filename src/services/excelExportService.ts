@@ -151,15 +151,61 @@ function inferHeaderFromUrl(url: string): string {
   return root.charAt(0).toUpperCase() + root.slice(1);
 }
 
-async function fetchAll<T>(table: string, select = "*"): Promise<T[]> {
-  const BATCH = 1000;
-  let all: T[] = [];
+// Retry wrapper: catches transient network errors (Failed to fetch),
+// 5xx, 429, and Postgres statement timeouts. Exponential backoff with jitter.
+async function withRetry<T>(fn: () => Promise<T>, label: string, retries = 6): Promise<T> {
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message || e || "");
+      const code = String(e?.code || "");
+      const status = Number(e?.status || e?.statusCode || 0);
+      const transient =
+        msg.includes("Failed to fetch") ||
+        msg.includes("NetworkError") ||
+        msg.includes("network") ||
+        msg.includes("timeout") ||
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("ECONNRESET") ||
+        code === "57014" || // statement_timeout
+        code === "PGRST" ||
+        status === 429 ||
+        (status >= 500 && status < 600);
+      if (!transient || attempt === retries) throw e;
+      const base = Math.min(800 * Math.pow(2, attempt), 15000);
+      const jitter = Math.floor(Math.random() * 400);
+      const delay = base + jitter;
+      // eslint-disable-next-line no-console
+      console.warn(`[export] retry ${attempt + 1}/${retries} for ${label} after ${delay}ms — ${msg}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchAll<T>(
+  table: string,
+  select = "*",
+  opts?: { batch?: number; onProgress?: (loaded: number) => void; label?: string }
+): Promise<T[]> {
+  const BATCH = opts?.batch ?? 500;
+  const label = opts?.label ?? table;
+  const all: T[] = [];
   let from = 0;
   while (true) {
-    const { data, error } = await (supabase.from(table as any).select(select).range(from, from + BATCH - 1) as any);
-    if (error) throw error;
-    const rows = (data ?? []) as T[];
-    all = all.concat(rows);
+    const rows = await withRetry<T[]>(async () => {
+      const { data, error } = await (supabase
+        .from(table as any)
+        .select(select)
+        .range(from, from + BATCH - 1) as any);
+      if (error) throw error;
+      return (data ?? []) as T[];
+    }, `${label} range ${from}-${from + BATCH - 1}`);
+    for (const r of rows) all.push(r);
+    opts?.onProgress?.(all.length);
     if (rows.length < BATCH) break;
     from += BATCH;
   }
