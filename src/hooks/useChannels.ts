@@ -114,33 +114,88 @@ export function useChannels(
 
   useEffect(() => { load(); }, [load]);
 
+  const isRecomputingRef = useRef(false);
+  const stopRecomputeRef = useRef(false);
+  const [isRecomputing, setIsRecomputing] = useState(false);
+
+  const stopRecompute = useCallback(() => {
+    stopRecomputeRef.current = true;
+    toast.message("Stopping recompute after current batch…");
+  }, []);
+
   const recomputeStats = useCallback(async (channelIds?: string[]) => {
+    if (isRecomputingRef.current) {
+      toast.message("Recompute already in progress");
+      return;
+    }
+    isRecomputingRef.current = true;
+    stopRecomputeRef.current = false;
+    setIsRecomputing(true);
+    const t = toast.loading("Recomputing channel stats…");
+    let processed = 0;
+    let failed = 0;
+    let batchNum = 0;
     try {
       if (channelIds && channelIds.length > 0) {
         for (let i = 0; i < channelIds.length; i += 5) {
+          if (stopRecomputeRef.current) break;
           const batch = channelIds.slice(i, i + 5);
-          const { error } = await supabase.functions.invoke("compute-channel-stats", {
-            body: { channel_ids: batch },
-          });
-          if (error) throw error;
+          try {
+            const { error } = await supabase.functions.invoke("compute-channel-stats", {
+              body: { channel_ids: batch },
+            });
+            if (error) throw error;
+            processed += batch.length;
+          } catch (e: any) {
+            failed += batch.length;
+            console.error("[recomputeStats] batch failed:", e?.message);
+          }
+          batchNum++;
+          toast.loading(
+            `Recomputing… ${processed} done${failed ? `, ${failed} failed` : ""} (${i + batch.length}/${channelIds.length})`,
+            { id: t },
+          );
+          if (batchNum % 10 === 0) load();
         }
       } else {
-        while (true) {
-          const { data, error } = await supabase.functions.invoke("compute-channel-stats", {
-            body: { batch_size: 5 },
-          });
-          if (error) throw error;
-          if (!data.remaining || data.remaining === 0) break;
+        while (!stopRecomputeRef.current) {
+          let remaining: number | undefined;
+          try {
+            const { data, error } = await supabase.functions.invoke("compute-channel-stats", {
+              body: { batch_size: 5 },
+            });
+            if (error) throw error;
+            processed += 5;
+            remaining = data?.remaining;
+          } catch (e: any) {
+            failed += 5;
+            console.error("[recomputeStats] batch failed:", e?.message);
+          }
+          batchNum++;
+          toast.loading(
+            `Recomputing… ${processed} done${failed ? `, ${failed} failed` : ""}${remaining !== undefined ? ` (~${remaining} left)` : ""}`,
+            { id: t },
+          );
+          if (batchNum % 10 === 0) load();
+          if (remaining === 0) break;
         }
       }
-      toast.success("Channel stats recomputed");
+      const stoppedMsg = stopRecomputeRef.current ? " (stopped)" : "";
+      toast.success(
+        `Recompute done${stoppedMsg}. ${processed} updated${failed ? `, ${failed} failed` : ""}.`,
+        { id: t },
+      );
       load();
     } catch (e: any) {
-      toast.error("Failed to compute stats: " + e.message);
+      toast.error("Failed to compute stats: " + e.message, { id: t });
+    } finally {
+      isRecomputingRef.current = false;
+      stopRecomputeRef.current = false;
+      setIsRecomputing(false);
     }
   }, [load]);
 
-  return { channels, totalCount, isLoading, refresh: load, recomputeStats };
+  return { channels, totalCount, isLoading, refresh: load, recomputeStats, isRecomputing, stopRecompute };
 }
 
 /** Fetches ALL channels matching the filters across pages. For CSV export. */
