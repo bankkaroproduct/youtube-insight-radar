@@ -32,11 +32,17 @@ function parseInteger(value: unknown, fallback: number | null): number | null {
 
 async function processChannel(
   supabase: any,
-  channel: { channel_id: string; total_videos_fetched?: number | null; youtube_total_videos?: number | null },
+  channel: {
+    channel_id: string;
+    total_videos_fetched?: number | null;
+    youtube_total_videos?: number | null;
+    last_uploads_page_token?: string | null;
+  },
   apiKeys: KeyData[],
   keyIndex: { val: number },
   quotaCache: Map<string, number>,
   videosPerChannel: number,
+  maxPagesOverride?: number,
 ): Promise<{ videosInserted: number; youtubeTotal: number | null }> {
   const channelId = channel.channel_id;
   let currentKey = apiKeys[keyIndex.val % apiKeys.length];
@@ -107,12 +113,17 @@ async function processChannel(
 
   // Step 2: Page through the channel's uploads playlist (cheap: 1 unit/page, returns all uploads
   // in reverse-chronological order) until we collect enough non-Short videos.
+  // If we have a saved resume token from a previous incomplete pass, start from there.
   const videoRecordsById = new Map<string, any>();
   const videoSnippets = new Map<string, any>();
   const seenVideoIds = new Set<string>(existingVideoIds);
-  let nextPageToken: string | null = null;
+  let nextPageToken: string | null = channel.last_uploads_page_token ?? null;
   let pagesFetched = 0;
-  const maxPages = 25; // 25 pages × 50 = up to 1250 uploads inspected per invocation
+  // 25 pages × 50 = 1250 uploads inspected per default invocation.
+  // Backfill mode raises this to 60 pages (3000 uploads) for Shorts-heavy creators.
+  const maxPages = maxPagesOverride ?? 25;
+  // Track inspected uploads so we can compute long-form total once a full walk completes.
+  let nonShortInspectedNew = 0;
 
   if (!uploadsPlaylistId) {
     console.error(`No uploads playlist id for channel ${channelId}`);
@@ -193,8 +204,12 @@ async function processChannel(
       const totalSeconds = durationMatch
         ? (parseInt(durationMatch[1] || "0") * 3600) + (parseInt(durationMatch[2] || "0") * 60) + parseInt(durationMatch[3] || "0")
         : 0;
-      if (totalSeconds > 0 && totalSeconds < 60) continue;
-      if ((snippet.title || "").toLowerCase().includes("#shorts")) continue;
+      const isShort =
+        (totalSeconds > 0 && totalSeconds < 60) ||
+        (snippet.title || "").toLowerCase().includes("#shorts");
+      if (isShort) continue;
+
+      nonShortInspectedNew++;
 
       videoRecordsById.set(video.id, {
         video_id: video.id,
@@ -220,17 +235,32 @@ async function processChannel(
     }
   }
 
+  // Persist resume token: clear it if we either finished the walk or hit the target;
+  // save it if we stopped because of page cap with more pages remaining.
+  const stoppedAtPageCap = !fullyScanned && nextPageToken && videoRecordsById.size < missingVideos;
+  const resumeTokenUpdate = stoppedAtPageCap
+    ? { last_uploads_page_token: nextPageToken }
+    : { last_uploads_page_token: null };
+
+  // If we walked the entire uploads playlist, we now know exactly how many long-form
+  // videos this channel has. Future passes can use this to know when to stop trying.
+  const longformTotalUpdate = fullyScanned
+    ? { youtube_longform_total: existingVideoIds.size + nonShortInspectedNew }
+    : {};
+
   const videoRecords = Array.from(videoRecordsById.values());
   if (videoRecords.length === 0) {
+    const baseUpdate: Record<string, any> = {
+      last_analyzed_at: new Date().toISOString(),
+      ...resumeTokenUpdate,
+      ...longformTotalUpdate,
+    };
     if (fullyScanned) {
-      const finalCount = videoRecordsById.size + existingVideoIds.size;
-      await supabase.from("channels").update({
-        total_videos_fetched: finalCount,
-        last_analyzed_at: new Date().toISOString(),
-        uploads_fully_scanned_at: new Date().toISOString(),
-        scanned_at_youtube_total: youtubeTotal,
-      }).eq("channel_id", channelId);
+      baseUpdate.uploads_fully_scanned_at = new Date().toISOString();
+      baseUpdate.scanned_at_youtube_total = youtubeTotal;
+      baseUpdate.total_videos_fetched = existingVideoIds.size;
     }
+    await supabase.from("channels").update(baseUpdate).eq("channel_id", channelId);
     keyIndex.val++;
     return { videosInserted: 0, youtubeTotal };
   }
@@ -269,6 +299,8 @@ async function processChannel(
     .update({
       total_videos_fetched: newTotal ?? 0,
       last_analyzed_at: new Date().toISOString(),
+      ...resumeTokenUpdate,
+      ...longformTotalUpdate,
       ...(fullyScanned ? {
         uploads_fully_scanned_at: new Date().toISOString(),
         scanned_at_youtube_total: youtubeTotal,
@@ -337,7 +369,7 @@ Deno.serve(async (req) => {
     // instead of repeatedly re-selecting the same leading subset of tied counts.
     const { data: rawChannels, error: chErr } = await supabase
       .from("channels")
-      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, last_analyzed_at, uploads_fully_scanned_at, scanned_at_youtube_total")
+      .select("channel_id, channel_name, total_videos_fetched, youtube_total_videos, youtube_longform_total, last_uploads_page_token, last_analyzed_at, uploads_fully_scanned_at, scanned_at_youtube_total")
       .order("total_videos_fetched", { ascending: needsVideoCountFilter })
       .order("last_analyzed_at", { ascending: true, nullsFirst: true })
       .order("channel_id", { ascending: true })
@@ -350,6 +382,9 @@ Deno.serve(async (req) => {
         const ytTotal = channel.youtube_total_videos == null
           ? null
           : Number(channel.youtube_total_videos);
+        const longformTotal = channel.youtube_longform_total == null
+          ? null
+          : Number(channel.youtube_longform_total);
         const scannedAt = channel.uploads_fully_scanned_at;
         const scannedYtTotal = channel.scanned_at_youtube_total == null
           ? null
@@ -363,6 +398,10 @@ Deno.serve(async (req) => {
         if (backfillUnder50) {
           // Already at or past 50 stored videos — done.
           if (fetched >= 50) return false;
+
+          // Case 0: We previously fully walked the uploads playlist and counted long-form videos.
+          // If we've already stored all of them, this channel genuinely has fewer than 50 long-form videos.
+          if (longformTotal !== null && fetched >= longformTotal) return false;
 
           // Case A: YouTube has < 50 total — we can only ever reach what exists there.
           //   If we've already fetched everything YouTube has, skip. Otherwise include.
@@ -404,10 +443,15 @@ Deno.serve(async (req) => {
     const BATCH_SIZE = backfillUnder50 ? 5 : 10;
     const channelIds = channels.map((c: any) => c.channel_id);
 
+    // Backfill mode: walk up to 60 pages (3000 uploads) per channel so Shorts-heavy creators
+    // can actually reach 50 long-form videos. Default mode keeps the lighter 25-page cap.
+    const maxPagesPerChannel = backfillUnder50 ? 60 : 25;
+
     for (let i = 0; i < channelIds.length; i += BATCH_SIZE) {
       const batch = channels.slice(i, i + BATCH_SIZE);
       const results = await Promise.allSettled(
-        batch.map((channel: any) => processChannel(supabase, channel, apiKeys, keyIndex, quotaCache, videosPerChannel))
+        batch.map((channel: any) =>
+          processChannel(supabase, channel, apiKeys, keyIndex, quotaCache, videosPerChannel, maxPagesPerChannel))
       );
       for (const r of results) {
         if (r.status === "fulfilled") {

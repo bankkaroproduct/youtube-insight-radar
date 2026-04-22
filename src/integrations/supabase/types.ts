@@ -150,6 +150,7 @@ export type Database = {
           is_relevant: boolean | null
           last_analyzed_at: string | null
           last_relevance_check_at: string | null
+          last_uploads_page_token: string | null
           median_comments: number | null
           median_likes: number | null
           median_views: number | null
@@ -164,6 +165,7 @@ export type Database = {
           total_videos_fetched: number | null
           uploads_fully_scanned_at: string | null
           youtube_category: string | null
+          youtube_longform_total: number | null
           youtube_total_videos: number | null
         }
         Insert: {
@@ -184,6 +186,7 @@ export type Database = {
           is_relevant?: boolean | null
           last_analyzed_at?: string | null
           last_relevance_check_at?: string | null
+          last_uploads_page_token?: string | null
           median_comments?: number | null
           median_likes?: number | null
           median_views?: number | null
@@ -198,6 +201,7 @@ export type Database = {
           total_videos_fetched?: number | null
           uploads_fully_scanned_at?: string | null
           youtube_category?: string | null
+          youtube_longform_total?: number | null
           youtube_total_videos?: number | null
         }
         Update: {
@@ -218,6 +222,7 @@ export type Database = {
           is_relevant?: boolean | null
           last_analyzed_at?: string | null
           last_relevance_check_at?: string | null
+          last_uploads_page_token?: string | null
           median_comments?: number | null
           median_likes?: number | null
           median_views?: number | null
@@ -232,6 +237,7 @@ export type Database = {
           total_videos_fetched?: number | null
           uploads_fully_scanned_at?: string | null
           youtube_category?: string | null
+          youtube_longform_total?: number | null
           youtube_total_videos?: number | null
         }
         Relationships: []
