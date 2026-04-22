@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
-    const status = e.message === "Forbidden: admin only" ? 403 : e.message === "Unauthorized" ? 401 : 500;
+    const status = message === "Forbidden: admin only" ? 403 : message === "Unauthorized" ? 401 : 500;
     return new Response(JSON.stringify({ error: message }), {
       status,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
