@@ -1,42 +1,46 @@
 
 
-## Fix unresponsive screen on Channels page
+## Diagnose & relieve unresponsive backend
 
-The page freezes because the Recompute Stats loop runs ~340 sequential edge function calls on the main thread with no progress feedback, no UI refresh, and aborts on any error. Combined with the auth bootstrap timeout warning, the app appears completely frozen.
+The unresponsiveness is **not in the React code**. Network logs show `504 upstream timeout` and `IDLE_TIMEOUT (150s)` on trivial queries (`user_profiles`, `user_roles`, `check-ip`, `fetch_jobs`). The Lovable Cloud instance / database is overloaded — every page load stalls in auth bootstrap because even a single-row `user_profiles` lookup never returns.
 
-### Root causes
+### Likely cause
 
-1. **`recomputeStats` in `src/hooks/useChannels.ts`** — sequential `while(true)` / `for` loop awaits each batch (~340 calls × 1–3s = 5–15 min). UI shows no toast progress, no refresh until done, and any single error kills the whole run.
-2. **`backfillTo50` loop in `src/pages/Channels.tsx`** — same pattern: hundreds of sequential `fetch-channel-videos` calls block the user from doing anything else.
-3. **Auth bootstrap safety timeout** firing on `/auth` suggests session restore is also racing — but that's a symptom of the tab being busy, not the cause.
+Heavy recent workloads (recompute-stats over ~340 channels, backfill-to-50 sequential loops, `process-fetch-queue`, `scrape-channel-links`) are saturating the DB connection pool and CPU. New requests sit in queue past the 150s gateway timeout and fail.
 
-### What changes
+### Two-track fix
 
-**1. `src/hooks/useChannels.ts` — make `recomputeStats` resilient + observable**
-- Show a single sticky `toast.loading` updated with progress (`Recomputed X / ~Y channels`).
-- Continue past transient errors (log + count failures, don't `throw`).
-- Refresh `load()` every 10 batches instead of only at the end, so user sees movement.
-- On final completion, dismiss loading toast and show `toast.success` with success/failure counts.
+**Track 1 — Immediate relief (user action, no code change)**
 
-**2. `src/pages/Channels.tsx` — same treatment for `backfillTo50`**
-- Already has a progress toast — verify it dismisses cleanly on error.
-- Wrap each iteration in try/catch so one 503 ("No available API keys") doesn't abort the whole run.
-- Add a `Cancel` affordance: a ref-based `abortRef` checked each iteration so the user can stop a long run.
+Upgrade the Lovable Cloud instance so the backend can absorb concurrent edge-function load + interactive queries:
 
-**3. Defensive: prevent double-clicks**
-- Disable Recompute / Backfill buttons while their respective loops are in flight (track `isRecomputing` / `isBackfilling` state).
+- Project → **Cloud** (Connectors) → **Advanced settings** → **Upgrade instance**
+- Docs: https://docs.lovable.dev/features/cloud#advanced-settings-upgrade-instance
 
-### Why this fixes "unresponsive"
+If upgrade is unavailable, the workspace plan may need to change. Resizing takes a few minutes; the app will stay slow until it completes.
 
-The screen isn't actually frozen — React is responsive, but the user sees no feedback for 5–15 minutes and the action buttons stay clickable, so additional clicks pile on more concurrent loops. After the fix: visible progress, cancellable, single-flight, survives transient API-key-exhaustion errors.
+**Track 2 — Code hardening (after upgrade, prevents recurrence)**
 
-### Files touched
+1. **Stop background loops from starving the pool.** In `useChannels.ts > recomputeStats` and `Channels.tsx > backfillTo50`, add a small inter-batch delay (e.g. `await sleep(500)`) so simple reads can interleave; today batches fire back-to-back.
+2. **Cap concurrency on the server.** In `compute-channel-stats`, `fetch-channel-videos`, and `process-fetch-queue` edge functions, ensure each invocation uses ONE Postgres client (no per-row clients) and `await`s sequentially within the batch — verify no `Promise.all` over many DB writes.
+3. **Auth bootstrap timeout guard.** In `useAuth.tsx`, wrap the initial `user_profiles` / `user_roles` fetch in a `Promise.race` with a 5s timeout and render the app in a degraded state if it loses, so a slow DB doesn't freeze the entire UI on `/auth`.
+4. **Single-flight guard for heavy jobs.** Add a DB row in a `running_jobs` table (or a simple `localStorage` flag) so refreshing the tab during a recompute can't kick off a parallel run.
 
-- `src/hooks/useChannels.ts` — rewrite `recomputeStats` (progress toast, error tolerance, periodic refresh).
-- `src/pages/Channels.tsx` — harden `backfillTo50` (try/catch per iteration, abort ref, button disable state).
+### Files touched (Track 2)
+
+- `src/hooks/useChannels.ts` — add 500ms `await sleep` between batches in `recomputeStats`.
+- `src/pages/Channels.tsx` — same delay in `backfillTo50`.
+- `src/hooks/useAuth.tsx` — `Promise.race` timeout around initial profile/role fetch + fallback render.
+- `supabase/functions/compute-channel-stats/index.ts` — confirm sequential DB writes, single client.
 
 ### Not in scope
 
-- No new DB functions, no edge function changes, no schema changes.
-- The auth bootstrap warning will resolve on its own once the tab isn't blocked.
+- No schema changes.
+- No new tables or RLS edits.
+- We will NOT touch `src/integrations/supabase/{client,types}.ts`.
+
+### Order of operations
+
+1. **You upgrade the Cloud instance first** (Track 1) — this restores responsiveness right now.
+2. After it's back, approve Track 2 and I'll apply the code hardening so this doesn't recur next backfill.
 
