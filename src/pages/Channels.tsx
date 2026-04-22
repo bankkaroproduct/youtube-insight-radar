@@ -107,6 +107,19 @@ function downloadCSV(channels: any[], igProfiles: Record<string, any> = {}) {
 }
 
 interface SummaryStats { total: number; with_us: number; competitor: number; mixed: number; neutral: number; needs_backfill: number; }
+interface GrowthStats { total: number; added24h: number; added1h: number; lastAt: string | null; }
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return "never";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 export default function Channels() {
   useEffect(() => { document.title = "Channels | YT Intel"; }, []);
