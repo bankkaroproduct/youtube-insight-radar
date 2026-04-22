@@ -151,15 +151,61 @@ function inferHeaderFromUrl(url: string): string {
   return root.charAt(0).toUpperCase() + root.slice(1);
 }
 
-async function fetchAll<T>(table: string, select = "*"): Promise<T[]> {
-  const BATCH = 1000;
-  let all: T[] = [];
+// Retry wrapper: catches transient network errors (Failed to fetch),
+// 5xx, 429, and Postgres statement timeouts. Exponential backoff with jitter.
+async function withRetry<T>(fn: () => Promise<T>, label: string, retries = 6): Promise<T> {
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message || e || "");
+      const code = String(e?.code || "");
+      const status = Number(e?.status || e?.statusCode || 0);
+      const transient =
+        msg.includes("Failed to fetch") ||
+        msg.includes("NetworkError") ||
+        msg.includes("network") ||
+        msg.includes("timeout") ||
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("ECONNRESET") ||
+        code === "57014" || // statement_timeout
+        code === "PGRST" ||
+        status === 429 ||
+        (status >= 500 && status < 600);
+      if (!transient || attempt === retries) throw e;
+      const base = Math.min(800 * Math.pow(2, attempt), 15000);
+      const jitter = Math.floor(Math.random() * 400);
+      const delay = base + jitter;
+      // eslint-disable-next-line no-console
+      console.warn(`[export] retry ${attempt + 1}/${retries} for ${label} after ${delay}ms — ${msg}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchAll<T>(
+  table: string,
+  select = "*",
+  opts?: { batch?: number; onProgress?: (loaded: number) => void; label?: string }
+): Promise<T[]> {
+  const BATCH = opts?.batch ?? 500;
+  const label = opts?.label ?? table;
+  const all: T[] = [];
   let from = 0;
   while (true) {
-    const { data, error } = await (supabase.from(table as any).select(select).range(from, from + BATCH - 1) as any);
-    if (error) throw error;
-    const rows = (data ?? []) as T[];
-    all = all.concat(rows);
+    const rows = await withRetry<T[]>(async () => {
+      const { data, error } = await (supabase
+        .from(table as any)
+        .select(select)
+        .range(from, from + BATCH - 1) as any);
+      if (error) throw error;
+      return (data ?? []) as T[];
+    }, `${label} range ${from}-${from + BATCH - 1}`);
+    for (const r of rows) all.push(r);
+    opts?.onProgress?.(all.length);
     if (rows.length < BATCH) break;
     from += BATCH;
   }
@@ -174,18 +220,21 @@ async function ensureChannelLinksScraped(channels: Channel[], onProgress?: (msg:
   for (let i = 0; i < pending.length; i += 25) {
     const batch = pending.slice(i, i + 25);
     onProgress?.(`Scraping channel link headers (${processed + 1}-${processed + batch.length} of ${pending.length})...`);
-    const { data, error } = await supabase.functions.invoke("scrape-channel-links", {
-      body: { channel_ids: batch, batch_size: batch.length },
-    });
-    if (error) throw error;
-    if (!data?.success) throw new Error(data?.error || "Failed to scrape channel link headers");
+    await withRetry(async () => {
+      const { data, error } = await supabase.functions.invoke("scrape-channel-links", {
+        body: { channel_ids: batch, batch_size: batch.length },
+      });
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || "Failed to scrape channel link headers");
+    }, `scrape-channel-links batch ${i}`);
     processed += batch.length;
   }
 
   onProgress?.("Refreshing channels...");
   return fetchAll<Channel>(
     "channels",
-    "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos"
+    "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos",
+    { label: "channels" }
   );
 }
 
@@ -546,21 +595,45 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   const XLSX = (await import("xlsx-js-style")).default;
 
   onProgress?.("Fetching videos...");
-  const videos = await fetchAll<Video>("videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at");
+  const videos = await fetchAll<Video>(
+    "videos",
+    "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at",
+    { label: "videos", onProgress: (n) => onProgress?.(`Fetching videos... ${n.toLocaleString()}`) }
+  );
 
   onProgress?.("Fetching links...");
-  const links = await fetchAll<VideoLink>("video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification");
+  const links = await fetchAll<VideoLink>(
+    "video_links",
+    "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification",
+    { label: "video_links", onProgress: (n) => onProgress?.(`Fetching links... ${n.toLocaleString()}`) }
+  );
 
   onProgress?.("Fetching keywords...");
-  const vks = await fetchAll<VideoKeyword>("video_keywords", "video_id,keyword_id,search_rank");
-  const keywordsAll = await fetchAll<Keyword>("keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
+  const vks = await fetchAll<VideoKeyword>(
+    "video_keywords",
+    "video_id,keyword_id,search_rank",
+    { label: "video_keywords", onProgress: (n) => onProgress?.(`Fetching keyword links... ${n.toLocaleString()}`) }
+  );
+  const keywordsAll = await fetchAll<Keyword>(
+    "keywords_search_runs",
+    "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at",
+    { label: "keywords_search_runs" }
+  );
 
   onProgress?.("Fetching channels...");
-  let channels = await fetchAll<Channel>("channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos");
+  let channels = await fetchAll<Channel>(
+    "channels",
+    "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos",
+    { label: "channels", onProgress: (n) => onProgress?.(`Fetching channels... ${n.toLocaleString()}`) }
+  );
   channels = await ensureChannelLinksScraped(channels, onProgress);
 
   onProgress?.("Fetching Instagram...");
-  const igs = await fetchAll<IGProfile>("instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category");
+  const igs = await fetchAll<IGProfile>(
+    "instagram_profiles",
+    "channel_id,instagram_username,follower_count,bio,business_category",
+    { label: "instagram_profiles" }
+  );
 
   onProgress?.("Building sheets...");
 
