@@ -1,46 +1,68 @@
 
 
-## Diagnose & relieve unresponsive backend
+## Why channels are stuck at 49, 16, 4 videos and 114 still "need backfill"
 
-The unresponsiveness is **not in the React code**. Network logs show `504 upstream timeout` and `IDLE_TIMEOUT (150s)` on trivial queries (`user_profiles`, `user_roles`, `check-ip`, `fetch_jobs`). The Lovable Cloud instance / database is overloaded — every page load stalls in auth bootstrap because even a single-row `user_profiles` lookup never returns.
+### The diagnosis (from your live data)
 
-### Likely cause
+I ran the actual numbers on your `channels` table. The pattern is **not** a bug in the 50-video target — it's the Shorts filter combined with `uploads_fully_scanned_at` flagging.
 
-Heavy recent workloads (recompute-stats over ~340 channels, backfill-to-50 sequential loops, `process-fetch-queue`, `scrape-channel-links`) are saturating the DB connection pool and CPU. New requests sit in queue past the 150s gateway timeout and fail.
+**Example slices of stuck channels (under 50 videos):**
 
-### Two-track fix
+| Stored count | # channels | Avg YT total uploads | Already fully scanned |
+|---|---|---|---|
+| 49 | 27 | 296 | **25 / 27** |
+| 16 | 34 | 351 | 28 / 34 |
+| 4  | 40 | 425 | **39 / 40** |
+| 8  | 43 | 490 | 33 / 43 |
 
-**Track 1 — Immediate relief (user action, no code change)**
+The avg YouTube total for these channels is **300–800 uploads**, well above 50. So why do we only store 4, 16, or 49?
 
-Upgrade the Lovable Cloud instance so the backend can absorb concurrent edge-function load + interactive queries:
+### Root cause: the Shorts filter eats the budget
 
-- Project → **Cloud** (Connectors) → **Advanced settings** → **Upgrade instance**
-- Docs: https://docs.lovable.dev/features/cloud#advanced-settings-upgrade-instance
+In `fetch-channel-videos/index.ts` (lines 191–197), every video shorter than 60 seconds OR with `#shorts` in the title is skipped:
 
-If upgrade is unavailable, the workspace plan may need to change. Resizing takes a few minutes; the app will stay slow until it completes.
+```ts
+if (totalSeconds > 0 && totalSeconds < 60) continue;
+if ((snippet.title || "").toLowerCase().includes("#shorts")) continue;
+```
 
-**Track 2 — Code hardening (after upgrade, prevents recurrence)**
+We page through the uploads playlist up to `maxPages = 25` (1250 uploads inspected). For Shorts-heavy creators, those 1250 uploads might contain only 4 or 16 long-form videos. We then mark `uploads_fully_scanned_at` and never revisit them. **So your rule "every channel must have 50 videos unless YouTube has fewer than 50" is silently being violated for any channel where YouTube has <50 *long-form* videos — even if it has 500 Shorts.**
 
-1. **Stop background loops from starving the pool.** In `useChannels.ts > recomputeStats` and `Channels.tsx > backfillTo50`, add a small inter-batch delay (e.g. `await sleep(500)`) so simple reads can interleave; today batches fire back-to-back.
-2. **Cap concurrency on the server.** In `compute-channel-stats`, `fetch-channel-videos`, and `process-fetch-queue` edge functions, ensure each invocation uses ONE Postgres client (no per-row clients) and `await`s sequentially within the batch — verify no `Promise.all` over many DB writes.
-3. **Auth bootstrap timeout guard.** In `useAuth.tsx`, wrap the initial `user_profiles` / `user_roles` fetch in a `Promise.race` with a 5s timeout and render the app in a degraded state if it loses, so a slow DB doesn't freeze the entire UI on `/auth`.
-4. **Single-flight guard for heavy jobs.** Add a DB row in a `running_jobs` table (or a simple `localStorage` flag) so refreshing the tab during a recompute can't kick off a parallel run.
+The 49-video bucket is a different flavor: scan stopped exactly one short of target on a page boundary, then got marked fully scanned.
 
-### Files touched (Track 2)
+### The 114 "needs backfill"
 
-- `src/hooks/useChannels.ts` — add 500ms `await sleep` between batches in `recomputeStats`.
-- `src/pages/Channels.tsx` — same delay in `backfillTo50`.
-- `src/hooks/useAuth.tsx` — `Promise.race` timeout around initial profile/role fetch + fallback render.
-- `supabase/functions/compute-channel-stats/index.ts` — confirm sequential DB writes, single client.
+These are the channels where `uploads_fully_scanned_at IS NULL` AND stored count <50 AND YouTube total > stored. They simply haven't had Backfill Under 50 run on them yet (or a previous run hit an API-key exhaustion and bailed before finishing). Just clicking **Backfill Under 50** and letting it run should clear them — *but* many will end up in the same "stuck under 50 because of Shorts" bucket above.
+
+### What I propose to fix
+
+**1. Make the Shorts filter explicit in the rule.** Decide one of:
+- **(A)** Treat Shorts as valid videos for the "must have 50" rule (count them, store them).
+- **(B)** Keep filtering Shorts, but redefine the rule as: "50 long-form videos, or all long-form videos that exist if fewer than 50."
+
+I recommend **(B)** since you've been deliberately filtering Shorts — but we make this honest by computing a separate `youtube_longform_total` once we've fully scanned, and treating that as the cap. Then the UI's "Needs Backfill" only counts channels that genuinely have more long-form videos available.
+
+**2. Tighten the "fully scanned" gate.** Right now we mark `uploads_fully_scanned_at` even if we returned 0 long-form videos after 25 pages, because `nextPageToken` is null. That's correct for "we saw every upload" but wrong for "we hit page cap". I'll separate:
+- `uploads_fully_scanned_at` — only set when `nextPageToken` actually became null (whole channel walked).
+- If we hit `maxPages` without finishing, leave the flag null so the next backfill pass continues from where we left off (we'd need to persist `last_uploads_page_token` to resume — added as a column).
+
+**3. Bump `maxPages` for backfill mode.** Currently 25 pages × 50 = 1250 uploads. For Shorts-heavy creators with 5k+ uploads, that's not enough. I'll raise it to 60 pages (3000 uploads) when `backfill_under_50=true`, and keep 25 for normal first-pass.
+
+**4. Resume token.** Add `channels.last_uploads_page_token TEXT NULL`. When a backfill iteration hits `maxPages` without finding 50 long-form videos, save the token. Next iteration resumes from it instead of restarting at the newest upload.
+
+### Files touched
+
+- `supabase/functions/fetch-channel-videos/index.ts` — separate "page cap hit" from "fully scanned"; raise maxPages for backfill; persist + resume `last_uploads_page_token`; track `youtube_longform_total` once a true full scan finishes.
+- DB migration — add `channels.last_uploads_page_token TEXT`, `channels.youtube_longform_total INT`.
+- `get_channels_needing_backfill()` — update to use `youtube_longform_total` when present, so the count reflects channels that *can actually* reach 50.
 
 ### Not in scope
 
-- No schema changes.
-- No new tables or RLS edits.
-- We will NOT touch `src/integrations/supabase/{client,types}.ts`.
+- No change to the Shorts definition (still <60s OR `#shorts` in title) unless you pick option (A) instead.
+- No change to UI buttons or Channels page layout.
+- No change to compute-channel-stats / API key rotation.
 
-### Order of operations
+### Decision I need from you before implementing
 
-1. **You upgrade the Cloud instance first** (Track 1) — this restores responsiveness right now.
-2. After it's back, approve Track 2 and I'll apply the code hardening so this doesn't recur next backfill.
+Do you want **(A)** count Shorts toward the 50-video minimum, or **(B)** keep filtering Shorts and accept that some channels will legitimately have fewer than 50 long-form videos (with the UI honestly reflecting that)?
 
