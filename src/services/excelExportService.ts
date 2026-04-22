@@ -604,9 +604,6 @@ function addSheetToWorkbook(
 
 // ===== Main entry =====
 export async function exportFullReport(onProgress?: (msg: string) => void) {
-  onProgress?.("Loading library...");
-  const XLSX = (await import("xlsx-js-style")).default;
-
   onProgress?.("Fetching videos...");
   const videos = await fetchAll<Video>(
     "videos",
