@@ -383,9 +383,15 @@ export default function Channels() {
               <TooltipContent>Downloads all matching rows — may take a moment for large datasets</TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          <Button variant="outline" size="sm" onClick={() => recomputeStats()}>
-            <BarChart3 className="h-4 w-4 mr-2" /> Recompute Stats
+          <Button variant="outline" size="sm" onClick={() => recomputeStats()} disabled={isRecomputing}>
+            {isRecomputing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <BarChart3 className="h-4 w-4 mr-2" />}
+            {isRecomputing ? "Recomputing…" : "Recompute Stats"}
           </Button>
+          {isRecomputing && (
+            <Button variant="destructive" size="sm" onClick={stopRecompute}>
+              <StopCircle className="h-4 w-4 mr-2" /> Stop
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={fullRefresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>
