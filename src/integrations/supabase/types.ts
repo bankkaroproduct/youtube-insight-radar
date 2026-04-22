@@ -892,13 +892,21 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      cleanup_truly_orphaned_videos: { Args: never; Returns: number }
       cleanup_url_cache: { Args: never; Returns: number }
       get_affiliate_classification_stats: {
         Args: never
         Returns: {
           classification: string
           count: number
+        }[]
+      }
+      get_channel_growth_stats: {
+        Args: never
+        Returns: {
+          added_last_24h: number
+          added_last_hour: number
+          last_channel_at: string
+          total_channels: number
         }[]
       }
       get_channel_summary_stats: {
