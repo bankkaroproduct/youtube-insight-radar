@@ -375,6 +375,13 @@ export default function Channels() {
           <p className="text-muted-foreground mt-1">
             Showing {totalCount === 0 ? 0 : page * CHANNELS_PAGE_SIZE + 1}–{Math.min((page + 1) * CHANNELS_PAGE_SIZE, totalCount)} of {totalCount.toLocaleString()} channels.
           </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Total in DB: <span className="font-medium text-foreground">{growth.total.toLocaleString()}</span>
+            {" · "}+{growth.added24h} today
+            {" · "}+{growth.added1h} last hour
+            {" · "}Last discovered: {formatRelativeTime(growth.lastAt)}
+            {" · "}<span title="New channels are only added by keyword fetches, never by Backfill Under 50.">ⓘ</span>
+          </p>
         </div>
         <div className="flex gap-2 items-center">
           <Button variant="outline" size="sm" onClick={fetchNewChannelVideos} disabled={fetchingNew}>
