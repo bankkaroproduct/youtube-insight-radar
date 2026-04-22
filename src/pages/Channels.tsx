@@ -116,7 +116,7 @@ export default function Channels() {
   const { sortKey, sortDirection, handleSort } = useSort<any>("videos", "desc");
   const sortDir: "asc" | "desc" = sortDirection === "asc" ? "asc" : "desc";
 
-  const { channels, totalCount, isLoading, refresh, recomputeStats } = useChannels(filters, page, sortKey, sortDir);
+  const { channels, totalCount, isLoading, refresh, recomputeStats, isRecomputing, stopRecompute } = useChannels(filters, page, sortKey, sortDir);
 
   const [fetchingNew, setFetchingNew] = useState(false);
   const [scrapingLinks, setScrapingLinks] = useState(false);
