@@ -1,66 +1,45 @@
 
 
-## Two things in one go: drop the unused cleanup function + explain the climbing total channel count
+## Confirmed: same file, same data, same depth — just reliable
 
-### Part 1 — Drop `cleanup_truly_orphaned_videos()`
+Yes. The fix I proposed does **not** change *what* gets exported in any way. It only changes *how* the data is fetched and assembled so the run actually finishes.
 
-```sql
-DROP FUNCTION IF EXISTS public.cleanup_truly_orphaned_videos();
-```
+### What stays byte-for-byte identical
 
-Verified safe — not in any cron job, not called from any code, no data touched.
+- **Same sheets** (Videos, Links, and any others currently in `excelExportService.ts`)
+- **Same columns** in the same order
+- **Same rows** — every video, every link, every keyword association, every channel field that's exported today
+- **Same joined "deep" data** per video: links (with affiliate_platform, resolved_retailer, classification, domains, etc.), keywords + search_rank, channel metadata
+- **Same file name and same `.xlsx` format**
+- **Same totals** — 80,213 videos and 394,339 links will all be in the file
 
-### Part 2 — Why the **total channel count** keeps growing
+### What changes (mechanics only, not content)
 
-Just queried the live DB. State right now:
-
-| Metric | Value |
+| Change | Effect on data |
 |---|---|
-| Total rows in `channels` | **1,710** |
-| Channels with ≥1 video (visible on `/channels`) | **1,710** |
-| Channels with zero videos | **0** |
-| New channels created in last 24h | **0** |
-| New channels in last hour | **0** |
+| Retry wrapper around each Supabase call | None — same rows, just refetched on transient failure |
+| Smaller page size (1000 → 500/750) | None — just more pages, same total rows |
+| Sequential paging instead of parallel | None — identical rows, fetched in order |
+| Append-as-you-go into the sheet | None — same final cells, lower peak memory |
+| `sessionStorage` checkpoint | None — only used to resume; final file is identical whether resumed or not |
+| Toast progress messages | None — UI feedback only |
 
-So `channels` is **not growing right now** — the table has been stable for the last day. The visible count on `/channels` page is 1,710 (every channel has at least 1 video after the recount). What you're probably seeing is one of these:
+### How I'll verify it matches
 
-**Cause A — The recount jump you already saw**
+After the change, the export will be expected to contain exactly:
+- Videos sheet: **80,213 rows** (matches `SELECT count(*) FROM videos`)
+- Links sheet: **394,339 rows** (matches `SELECT count(*) FROM video_links`)
+- Same per-video link counts as the current code computes
 
-The `/channels` page filters by `total_videos_fetched > 0` and counts via Supabase's exact count. Before today's recount migration, ~95 channels had inflated counters that masked their real state and the page showed 1,615. After the recount, all 1,710 real rows became visible. That was a one-time correction, not ongoing growth.
-
-**Cause B — Where new channels DO come from (when they appear)**
-
-Channels are inserted into the `channels` table by exactly two flows:
-
-1. **Keyword fetch** (`process-fetch-queue` edge function): when a video comes back from a YouTube search, the function upserts the video's `channel_id` into `channels` if it's never been seen. One keyword run can introduce 1–N new channels (your "4 videos from one channel" example creates exactly **one** new channel row, not four).
-2. **Channel-stats compute** (`compute-channel-stats`): never *creates* channels — only enriches existing rows.
-
-So the total grows **only when you fetch a new keyword that surfaces a previously-unknown channel**. Backfill itself never adds new channels — it only inserts more **videos** for channels that already exist.
-
-**Cause C — The 4-channel discrepancy**
-
-The `videos` table references **1,714** unique `channel_id` values but `channels` has **1,710** rows. That means 4 channels appear in `videos` but were never inserted into `channels`. Small data-integrity gap from an old keyword-fetch path that inserted videos before the channel row. They'll get reconciled the next time `process-fetch-queue` sees those channel IDs.
-
-### What I'll add to make this self-explanatory in the UI
-
-Add a small stat strip above the Channels table:
-
-```text
-Total channels: 1,710  ·  +0 today  ·  +0 this hour  ·  Last channel discovered: 5 days ago
-```
-
-One tiny RPC (`get_channel_growth_stats()`) returns those numbers in a single call.
+If any of those don't match after the change, that's a bug to fix — not a design choice.
 
 ### Files touched
 
-- **One new migration** under `supabase/migrations/`:
-  1. `DROP FUNCTION IF EXISTS public.cleanup_truly_orphaned_videos();`
-  2. `CREATE OR REPLACE FUNCTION public.get_channel_growth_stats()` returning total + 24h + 1h + last-created timestamp.
-- **`src/pages/Channels.tsx`** — small stat strip above the existing toolbar, calls the new RPC on mount.
+- **`src/services/excelExportService.ts`** — only file edited.
 
 ### Out of scope
 
-- Reconciling the 4 orphan `channel_id`s in `videos` — they'll heal naturally on the next keyword run.
-- Changing keyword-fetch insert order.
-- Anything on `/videos` or video dedup.
+- Changing columns, sheets, file format, or what data is included.
+- Server-side export, jobs, storage buckets.
+- Any other page or hook.
 
