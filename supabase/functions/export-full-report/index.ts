@@ -660,13 +660,22 @@ Deno.serve(async (req) => {
   const backgroundTask = (async () => {
     let s2TmpPath: string | null = null;
     try {
-      await updateMsg("Fetching all data in parallel...");
+      await updateMsg(hasFilters ? "Fetching filtered data in parallel..." : "Fetching all data in parallel...");
       const [videos, links, vks, keywordsAll, channelsInitial, igs, patterns] = await Promise.all([
-        fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at"),
+        fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at,created_at",
+          (q: any) => {
+            if (fromDate) q = q.gte("created_at", fromDate);
+            if (toDate) q = q.lte("created_at", toDate);
+            if (channelIds.length > 0) q = q.in("channel_id", channelIds);
+            return q;
+          }),
         fetchAll<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification"),
-        fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank"),
-        fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at"),
-        fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos"),
+        fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank",
+          (q: any) => keywordIds.length > 0 ? q.in("keyword_id", keywordIds) : q),
+        fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at",
+          (q: any) => keywordIds.length > 0 ? q.in("id", keywordIds) : q),
+        fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos",
+          (q: any) => channelIds.length > 0 ? q.in("channel_id", channelIds) : q),
         fetchAll<any>(supabase, "instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category"),
         fetchAll<any>(supabase, "affiliate_patterns", "pattern,name,type,is_confirmed"),
       ]);
