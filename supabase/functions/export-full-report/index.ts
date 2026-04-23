@@ -539,7 +539,36 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </cellXfs>
 </styleSheet>`;
 
-function buildXlsxBuffer(sheetsInOrder: { name: string; data: { headers: string[]; rows: any[][] } }[]): Uint8Array {
+// Builds sheet2.xml by streaming the pre-serialized row XML out of the tmpfile.
+async function buildSheet2XmlFromFile(headers: string[], tmpPath: string): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  const head: string[] = [];
+  head.push('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>');
+  head.push('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">');
+  head.push('<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen" activePane="bottomLeft"/></sheetView></sheetViews>');
+  head.push('<cols>');
+  headers.forEach((h, i) => {
+    const width = Math.max(12, Math.min(50, h.length + 4));
+    head.push(`<col min="${i+1}" max="${i+1}" width="${width}" customWidth="1"/>`);
+  });
+  head.push('</cols>');
+  head.push('<sheetData>');
+  head.push(`<row r="1">${headers.map((h, c) => cellXml(h, 0, c, STYLE_HEADER)).join("")}</row>`);
+
+  const headBytes = encoder.encode(head.join(""));
+  const tailBytes = encoder.encode('</sheetData></worksheet>');
+  const bodyBytes = await Deno.readFile(tmpPath);
+
+  const out = new Uint8Array(headBytes.length + bodyBytes.length + tailBytes.length);
+  out.set(headBytes, 0);
+  out.set(bodyBytes, headBytes.length);
+  out.set(tailBytes, headBytes.length + bodyBytes.length);
+  return out;
+}
+
+function buildXlsxBuffer(
+  sheetsInOrder: { name: string; data?: { headers: string[]; rows: any[][] }; xml?: Uint8Array }[],
+): Uint8Array {
   const zipInput: Record<string, Uint8Array> = {};
   zipInput["[Content_Types].xml"] = strToU8(buildContentTypes(sheetsInOrder.length));
   zipInput["_rels/.rels"] = strToU8(ROOT_RELS);
@@ -547,7 +576,11 @@ function buildXlsxBuffer(sheetsInOrder: { name: string; data: { headers: string[
   zipInput["xl/_rels/workbook.xml.rels"] = strToU8(buildWorkbookRels(sheetsInOrder.length));
   zipInput["xl/styles.xml"] = strToU8(STYLES_XML);
   sheetsInOrder.forEach((s, i) => {
-    zipInput[`xl/worksheets/sheet${i+1}.xml`] = strToU8(buildSheetXml(s.data));
+    if (s.xml) {
+      zipInput[`xl/worksheets/sheet${i+1}.xml`] = s.xml;
+    } else if (s.data) {
+      zipInput[`xl/worksheets/sheet${i+1}.xml`] = strToU8(buildSheetXml(s.data));
+    }
   });
   return zipSync(zipInput, { level: 6 });
 }
