@@ -755,6 +755,10 @@ Deno.serve(async (req) => {
       });
     } catch (e: any) {
       await updateJob({ status: "failed", error: e?.message || String(e), completed_at: new Date().toISOString() });
+    } finally {
+      if (s2TmpPath) {
+        await Deno.remove(s2TmpPath).catch(() => {});
+      }
     }
   })();
 
