@@ -346,8 +346,9 @@ async function tryClaim(supabase: any, jobId: string): Promise<JobRow | null> {
 
 async function selfInvoke(jobId: string) {
   const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/export-full-report`;
-  // Fire-and-forget; don't await body. Use service-role to bypass user auth on self-call.
-  fetch(url, {
+  // Await the handoff so the next worker tick is actually dispatched before this
+  // invocation exits; otherwise jobs can get stranded mid-stage.
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -355,7 +356,12 @@ async function selfInvoke(jobId: string) {
       "x-internal-worker": "1",
     },
     body: JSON.stringify({ action: "work", job_id: jobId }),
-  }).catch(() => {});
+  });
+
+  const bodyText = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(`Failed to dispatch worker (${response.status}): ${bodyText || response.statusText}`);
+  }
 }
 
 // ========== Pattern + affiliate-counts cache (per chunk run) ==========
@@ -1043,8 +1049,8 @@ async function runOneChunk(supabase: any, jobId: string) {
 
     if (job.stage === "queued") {
       await patchJob(supabase, jobId, { stage: "s1", cursor: {} });
-      selfInvoke(jobId);
-      return;
+      job.stage = "s1";
+      job.cursor = {};
     }
 
     if (job.stage === "s1") {
@@ -1077,7 +1083,7 @@ async function runOneChunk(supabase: any, jobId: string) {
       patch.cursor = result.nextCursor ?? {};
     }
     await patchJob(supabase, jobId, patch);
-    selfInvoke(jobId);
+    await selfInvoke(jobId);
   } catch (e: any) {
     await patchJob(supabase, jobId, {
       status: "failed",
@@ -1138,8 +1144,8 @@ Deno.serve(async (req) => {
     if (!data) return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
     // Re-kick stalled jobs opportunistically.
-    if (data.status === "running" && (!data.lease_expires_at || new Date(data.lease_expires_at).getTime() < Date.now() - 10_000)) {
-      selfInvoke(data.id);
+      if (data.status === "running" && (!data.lease_expires_at || new Date(data.lease_expires_at).getTime() < Date.now() - 10_000)) {
+      await selfInvoke(data.id);
     }
 
     let signedUrl: string | null = null;
@@ -1165,7 +1171,7 @@ Deno.serve(async (req) => {
   await patchJob(supabase, jobRow.id, { storage_prefix: storagePrefix });
 
   // Kick off first worker tick.
-  selfInvoke(jobRow.id);
+  await selfInvoke(jobRow.id);
 
   return new Response(JSON.stringify({ job_id: jobRow.id, status: "queued" }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
