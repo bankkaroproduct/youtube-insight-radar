@@ -13,7 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
-import { exportFullReport } from "@/services/excelExportService";
+import { exportFullReport, type ExportFilters } from "@/services/excelExportService";
+import { ExportFilterPanel } from "@/components/export/ExportFilterPanel";
 import { toast } from "sonner";
 
 function formatNumber(n: number): string {
