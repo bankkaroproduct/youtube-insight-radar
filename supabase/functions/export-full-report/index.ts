@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { zipSync, strToU8 } from "https://esm.sh/fflate@0.8.2";
+import { Zip, ZipPassThrough, strToU8 } from "https://esm.sh/fflate@0.8.2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -888,37 +888,82 @@ async function runStageS6(supabase: any, job: JobRow): Promise<{ done: boolean; 
     : { done: true, nextStage: "finalize", nextCursor: {} };
 }
 
-// Stitch fragments + zip + upload final.
+// Stitch fragments + zip + upload final. Streams via fflate async Zip to keep memory low.
 async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
-  const sheetXmls: Uint8Array[] = [];
   const encoder = new TextEncoder();
-  for (const sheet of SHEETS_IN_ORDER) {
+
+  // Collected compressed zip output chunks (these are small relative to raw XML).
+  const zipChunks: Uint8Array[] = [];
+  let zipDone = false;
+  let zipError: Error | null = null;
+
+  const zip = new Zip((err, dat, final) => {
+    if (err) {
+      zipError = err as Error;
+      return;
+    }
+    if (dat && dat.length > 0) zipChunks.push(dat);
+    if (final) zipDone = true;
+  });
+
+  const checkErr = () => { if (zipError) throw zipError; };
+
+  // Helper: push a small fixed file as a single ZipPassThrough entry.
+  const addFixedFile = (name: string, bytes: Uint8Array) => {
+    const f = new ZipPassThrough(name);
+    zip.add(f);
+    f.push(bytes, true);
+    checkErr();
+  };
+
+  // Fixed workbook parts.
+  addFixedFile("[Content_Types].xml", strToU8(buildContentTypes(SHEETS_IN_ORDER.length)));
+  addFixedFile("_rels/.rels", strToU8(ROOT_RELS));
+  addFixedFile("xl/workbook.xml", strToU8(buildWorkbookXml(SHEETS_IN_ORDER.map(s => s.name))));
+  addFixedFile("xl/_rels/workbook.xml.rels", strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length));
+  addFixedFile("xl/styles.xml", strToU8(STYLES_XML));
+
+  // Sheets: stream header -> each fragment -> footer.
+  const tail = encoder.encode(SHEET_FOOTER_XML);
+  for (let i = 0; i < SHEETS_IN_ORDER.length; i++) {
+    const sheet = SHEETS_IN_ORDER[i];
     const head = encoder.encode(sheetHeaderXml(sheet.headers));
-    const tail = encoder.encode(SHEET_FOOTER_XML);
+    const entry = new ZipPassThrough(`xl/worksheets/sheet${i + 1}.xml`);
+    zip.add(entry);
+    entry.push(head, false);
+    checkErr();
+
     const fragPaths = await listFragments(supabase, `${job.storage_prefix}/parts/${sheet.stage}`);
-    const bodies: Uint8Array[] = [];
-    let totalBody = 0;
     for (const p of fragPaths) {
       const b = await downloadFragment(supabase, p);
-      bodies.push(b);
-      totalBody += b.length;
+      entry.push(b, false);
+      checkErr();
+      // drop reference; loop scope replaces b on next iter
     }
-    const out = new Uint8Array(head.length + totalBody + tail.length);
-    out.set(head, 0);
-    let off = head.length;
-    for (const b of bodies) { out.set(b, off); off += b.length; }
-    out.set(tail, off);
-    sheetXmls.push(out);
+    entry.push(tail, true);
+    checkErr();
   }
 
-  const zipInput: Record<string, Uint8Array> = {};
-  zipInput["[Content_Types].xml"] = strToU8(buildContentTypes(SHEETS_IN_ORDER.length));
-  zipInput["_rels/.rels"] = strToU8(ROOT_RELS);
-  zipInput["xl/workbook.xml"] = strToU8(buildWorkbookXml(SHEETS_IN_ORDER.map(s => s.name)));
-  zipInput["xl/_rels/workbook.xml.rels"] = strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length));
-  zipInput["xl/styles.xml"] = strToU8(STYLES_XML);
-  sheetXmls.forEach((x, i) => { zipInput[`xl/worksheets/sheet${i+1}.xml`] = x; });
-  const xlsxBytes = zipSync(zipInput, { level: 6 });
+  zip.end();
+  checkErr();
+
+  // The fflate Zip callback is synchronous; zipDone should already be true here,
+  // but guard with a microtask spin just in case.
+  let spins = 0;
+  while (!zipDone && spins < 1000) {
+    await new Promise((r) => setTimeout(r, 0));
+    spins++;
+  }
+  checkErr();
+
+  // Concatenate compressed chunks into final xlsx buffer (small vs raw XML).
+  let total = 0;
+  for (const c of zipChunks) total += c.length;
+  const xlsxBytes = new Uint8Array(total);
+  let off = 0;
+  for (const c of zipChunks) { xlsxBytes.set(c, off); off += c.length; }
+  // Free chunk refs.
+  zipChunks.length = 0;
 
   const date = new Date().toISOString().split("T")[0];
   const finalPath = `${job.user_id}/youtube_full_report_${date}_${job.id.slice(0, 8)}.xlsx`;
