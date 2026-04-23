@@ -242,6 +242,42 @@ export type Database = {
         }
         Relationships: []
       }
+      export_jobs: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          error: string | null
+          file_size_bytes: number | null
+          id: string
+          progress_message: string | null
+          status: string
+          storage_path: string | null
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          error?: string | null
+          file_size_bytes?: number | null
+          id?: string
+          progress_message?: string | null
+          status?: string
+          storage_path?: string | null
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          error?: string | null
+          file_size_bytes?: number | null
+          id?: string
+          progress_message?: string | null
+          status?: string
+          storage_path?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       fetch_jobs: {
         Row: {
           attempt_count: number
