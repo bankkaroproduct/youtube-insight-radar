@@ -1,128 +1,58 @@
 
-Root cause
 
-The export is no longer dying on the old `xlsx` browser error. It is now stalling because the current backend job still tries to do the entire export in one edge-function lifetime:
-- the job sits at `Fetching data (parallel)...` in the UI
-- the client then fails on its own 10-minute timeout
-- the backend still does large paginated reads and keeps too much state in a single invocation
+## Stage 3 — Fix the finalize OOM crash
 
-The Stage 1 patch helped Sheet 2 memory, but it did not make the export durable. The real fix is to turn the export into a resumable multi-invocation job.
+### Root cause
 
-What to build
+The job runs end-to-end through stages s1→s6 successfully. It dies in `finalize` at `supabase/functions/export-full-report/index.ts:892-921` with `Array buffer allocation failed`. Three compounding allocations:
 
-1. Expand `export_jobs` into a real state machine
-- Add columns for:
-  - `stage` text
-  - `cursor` jsonb
-  - `heartbeat_at` timestamptz
-  - `lease_expires_at` timestamptz
-  - `attempt_count` integer
-  - `storage_prefix` text
-  - `result_path` text
-  - `metadata` jsonb
-- Keep existing `status`, `progress_message`, `error`, `file_size_bytes`, `completed_at`.
-- Continue letting users only read their own jobs; worker writes stay service-only.
+1. `bodies: Uint8Array[]` holds every fragment for every sheet in RAM at once
+2. `out = new Uint8Array(head + totalBody + tail)` allocates one contiguous buffer per sheet (Sheet 2 alone ≈ hundreds of MB of XML)
+3. `zipSync(zipInput)` then allocates the entire compressed `.xlsx` output buffer on top of that
 
-2. Rewrite `supabase/functions/export-full-report/index.ts` as a chunk worker
-Keep one function with three behaviors:
-- `action=start` (or empty body): create/queue a job and return `job_id`
-- `action=status`: return job row + signed download URL when complete
-- worker execution: claim the job lease, do exactly one chunk, update stage/cursor, then self-invoke again if more work remains
+Combined heap easily exceeds the ~256MB Edge Function limit. No data, schema, or output change is needed — only how finalize streams bytes.
 
-3. Make the worker durable instead of “one giant background task”
-Replace the current `EdgeRuntime.waitUntil(backgroundTask)` whole-job pattern with:
-- claim job if not leased or lease expired
-- process one bounded chunk
-- persist progress immediately
-- release/extend lease
-- self-call the function for the next chunk
+### Fix: stream finalize through fflate's async `Zip` + `ZipPassThrough`
 
-Also make `status` opportunistically re-kick a stalled job when `lease_expires_at` is old, so recovery does not depend on a cron from day one.
+Replace `runStageFinalize` so it never holds a full sheet — or the full xlsx — in memory:
 
-4. Chunk by sheet and by page, not by whole dataset
-Use the same workbook output, but generate it in stages:
+1. Use `Zip` (async streaming) + `ZipPassThrough` from `fflate` instead of `zipSync`. Pipe each file's bytes through as they arrive; collect zip output chunks into an array of small `Uint8Array`s.
+2. For the small fixed files (`[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/_rels/workbook.xml.rels`, `xl/styles.xml`) — push directly into a `ZipPassThrough` and `end()` it.
+3. For each sheet:
+   - Open a `ZipPassThrough` for `xl/worksheets/sheetN.xml`
+   - Push the header XML chunk
+   - List fragments via `listFragments` (already chunked at 100/page)
+   - For each fragment path: download → push the bytes into the passthrough → drop the reference → continue. Never accumulate all fragments. Never build a single giant `out` buffer.
+   - Push the footer XML, then `end()` the passthrough
+4. After all entries are pushed, call `zip.end()` to flush the central directory.
+5. Concatenate the collected zip output chunks into one buffer **only at upload time**, then upload to storage. The compressed `.xlsx` is far smaller than the raw XML (XLSX zip ratio is typically 10–20x for repetitive data), so the final concatenated buffer fits comfortably.
+6. Switch the import line at the top of the file from `import { zipSync, strToU8 } from "https://esm.sh/fflate@0.8.2"` to also include `Zip, ZipPassThrough`.
 
-```text
-queued
-  -> s1
-  -> s2
-  -> s3
-  -> s4
-  -> s5
-  -> s6
-  -> finalize
-  -> completed
-```
+If even the final concatenated zip exceeds memory at very large scales (it won't at 80k videos / 394k links, but as a guard): write each emitted zip chunk to `Deno.makeTempFile()` via append mode, then stream the tmp file directly to `supabase.storage.from("exports").upload()` using a `ReadableStream` from `Deno.open(...).readable`. This is a one-line change inside the chunk handler and doesn't affect anything else.
 
-Stage details
-- `s1`: build once from keywords + `get_keyword_stats()` instead of loading all `video_keywords` just to count
-- `s2`: page videos in batches; for each batch fetch only matching `video_keywords`, `video_links`, and referenced keywords; write numbered XML row fragments
-- `s3` / `s4`: page only “last 50 scraped” videos / no-keyword videos in chunks and write fragments
-- `s5` / `s6`: page channels in chunks; fetch Instagram rows only for current channel chunk; run `ensureChannelLinksScraped` only for channels in the current chunk before building their rows
-- `finalize`: stitch stored XML fragments into worksheet XML files and zip the workbook
+### What does NOT change
 
-5. Store numbered XML fragments in the existing private `exports` bucket
-Since append mode is not available, write fragments like:
+- All 6 sheets, sheet order, sheet names, headers
+- Row inclusion rules for every sheet
+- Styles (bold/red/blue/italic), frozen header
+- `export_jobs` schema
+- Stage machinery (s1…s6 already work — logs confirm 343 successful self-invocations before the crash)
+- Client polling in `src/services/excelExportService.ts`
+- Filename pattern, storage bucket, signed-URL flow
+- Toast UX in `src/pages/Videos.tsx`
 
-```text
-exports/{user_id}/{job_id}/parts/s2/000001.xml
-exports/{user_id}/{job_id}/parts/s2/000002.xml
-...
-exports/{user_id}/{job_id}/parts/s5/000001.xml
-```
+### Files changed
 
-Also store small manifest JSON in the same prefix with:
-- current stage
-- next cursor
-- fragment counts
-- total row counts per sheet
+- `supabase/functions/export-full-report/index.ts` — only `runStageFinalize` (lines ~892–941) plus the `fflate` import line at the top. ~60 lines touched. Nothing else.
 
-6. Finalize without rebuilding everything in memory
-During `finalize`:
-- read the fragment lists in order
-- wrap them with worksheet header/footer XML
-- generate the final `.xlsx`
-- upload final file to `exports/{user_id}/youtube_full_report_YYYY-MM-DD_<job>.xlsx`
-- mark job `completed`
+### Verification
 
-Use `fflate`’s non-`zipSync` zip flow for final assembly so finalization does not reintroduce one large memory spike.
+1. Trigger export from `/videos`. Watch progress reach `Stitching workbook...`, then `Done`.
+2. Check `export_jobs`: latest row should land on `status=completed`, `stage=completed`, `file_size_bytes` populated, `result_path` set.
+3. Download the signed URL. Open the `.xlsx` in Excel. Confirm:
+   - All 6 sheets present in correct order with correct names
+   - Row counts match prior partial exports / DB counts
+   - Header row bold + frozen
+   - "Excluded" cells red, social cells blue, placeholder cells gray italic
+4. If finalize still throws OOM (it shouldn't), apply the `Deno.makeTempFile` spill fallback described above — same function, ~10 extra lines.
 
-7. Update the thin client poller so it no longer false-fails at 10 minutes
-`src/services/excelExportService.ts` should keep the same UX, but:
-- stop using the hard 200-poll / 10-minute cutoff
-- poll until terminal status (`completed` / `failed`) or a much larger ceiling
-- continue surfacing `progress_message`
-- download from signed URL once ready
-
-`src/pages/Videos.tsx` can stay functionally the same.
-
-8. Preserve output parity
-Do not change:
-- sheet names/order
-- headers
-- row inclusion rules
-- styling rules
-- filename pattern
-- storage bucket
-- toast-based UX
-
-Technical details
-
-Files to change
-- `supabase/migrations/<new>.sql` — expand `export_jobs` for stage/cursor/lease metadata
-- `supabase/functions/export-full-report/index.ts` — full worker rewrite
-- `src/services/excelExportService.ts` — remove the 10-minute client timeout and keep polling terminal job state
-
-Implementation notes
-- Query in ID/page chunks instead of `fetchAll()` across whole tables
-- Persist heartbeat/progress after every chunk
-- Keep chunk size small and explicit (for example 500–2000 videos or 100–250 channels per invocation)
-- Add guardrails so duplicate worker invocations cannot process the same cursor twice
-- Fail job with exact stage/cursor context when an invocation errors
-
-Verification
-- Start export from `/videos`
-- Confirm progress moves past `Fetching data...` into sheet-specific stages
-- Confirm `export_jobs` shows advancing `stage`, `cursor`, and fresh `heartbeat_at`
-- Confirm final job reaches `completed` and signed URL downloads successfully
-- Open workbook and verify all 6 sheets, row counts, frozen header row, and existing color/italic styling
