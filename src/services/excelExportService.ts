@@ -576,7 +576,7 @@ function addSheetToWorkbook(
     width: colWidths?.[i] ?? Math.max(12, Math.min(50, h.length + 4)),
   }));
 
-  // Header row
+  // Header row — commit immediately so the streaming writer flushes it.
   const headerRow = ws.addRow(headers);
   for (let c = 1; c <= headers.length; c++) {
     const cell = headerRow.getCell(c);
@@ -584,8 +584,9 @@ function addSheetToWorkbook(
     cell.fill = ejsHeaderStyle.fill;
     cell.alignment = ejsHeaderStyle.alignment;
   }
+  headerRow.commit();
 
-  // Data rows — apply only conditional cell styles to keep memory low.
+  // Data rows — apply only conditional cell styles, commit each row to free memory.
   for (let r = 0; r < rows.length; r++) {
     const row = ws.addRow(rows[r]);
     for (let c = 0; c < headers.length; c++) {
@@ -599,7 +600,10 @@ function addSheetToWorkbook(
         row.getCell(c + 1).font = ejsPlaceholderFont;
       }
     }
+    row.commit();
   }
+
+  ws.commit();
 }
 
 // ===== Main entry =====
@@ -719,7 +723,36 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
 
   onProgress?.("Formatting workbook...");
   const ExcelJS = (await import("exceljs")).default;
-  const wb = new ExcelJS.Workbook();
+
+  // Collect streamed zip chunks into a Blob — true streaming writer, no giant
+  // intermediate string and no shared-strings table that can corrupt at scale.
+  const chunks: Uint8Array[] = [];
+  const writableStream = new WritableStream<Uint8Array>({
+    write(chunk) {
+      chunks.push(chunk);
+    },
+  });
+  // ExcelJS expects a Node-style writable; adapt the WHATWG WritableStream.
+  const writer = writableStream.getWriter();
+  const nodeLikeStream = {
+    write(chunk: any, _enc?: any, cb?: (err?: any) => void) {
+      const buf = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+      writer.write(buf).then(() => cb?.(), (e) => cb?.(e));
+      return true;
+    },
+    end(cb?: () => void) {
+      writer.close().then(() => cb?.(), () => cb?.());
+    },
+    on() { /* no-op */ },
+    once() { /* no-op */ },
+    emit() { /* no-op */ },
+  };
+
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({
+    stream: nodeLikeStream as any,
+    useStyles: true,
+    useSharedStrings: false,
+  });
 
   // Sheet 2: 22 cols → Social=20, Excluded=21 (added Search Rank at idx 4)
   // Sheet 3: 17 cols → Social=15, Excluded=16 (unchanged)
@@ -732,11 +765,12 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   addSheetToWorkbook(wb, "S6 - Contact Info", s6, null, null);
 
   onProgress?.("Downloading file...");
+  await wb.commit();
+  // Ensure the underlying writer is closed before assembling the Blob.
+  try { await writer.closed; } catch { /* already closed */ }
+
   const date = new Date().toISOString().split("T")[0];
-  // ExcelJS writeBuffer streams XML through JSZip — no single-string serialization,
-  // so it bypasses the V8 ~512 MB string-length ceiling that broke xlsx-js-style.
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
+  const blob = new Blob(chunks, {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
   const url = URL.createObjectURL(blob);
