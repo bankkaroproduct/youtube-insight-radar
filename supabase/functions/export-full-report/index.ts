@@ -209,49 +209,113 @@ function buildSheet1(keywords: any[], videoCountByKeyword: Map<string, number>) 
   return { headers, rows };
 }
 
-function buildSheet2(videos: any[], vkMap: Map<string, any[]>, keywordsById: Map<string, any>, linksByVideo: Map<string, any[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
-  const headers = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
-  const rows: any[][] = [];
-  for (const v of videos) {
-    const entries = vkMap.get(v.id);
-    if (!entries || entries.length === 0) continue;
-    const links = linksByVideo.get(v.id) || [];
-    const description = v.description?.trim() ? v.description : "No Description";
-    const totalLinks = links.length;
-    for (const entry of entries) {
-      const kw = keywordsById.get(entry.keyword_id);
-      if (!kw) continue;
-      const rank = entry.search_rank != null ? entry.search_rank : "N/A";
-      const baseRow = [
-        kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A",
-        typeof rank === "string" ? styled(rank, styleForPlaceholder(rank)) : rank,
-        kw.status || "N/A",
-        `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
-        v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
-        styled(description, styleForPlaceholder(description)), totalLinks,
-      ];
-      if (links.length === 0) {
-        rows.push([...baseRow,
-          styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
-          styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
-        ]);
-      } else {
-        links.forEach((link, idx) => {
-          const unshort = link.unshortened_url || "N/A";
-          const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
-          const social = getSocialPlatform(domain);
-          const retailer = resolveRetailerDisplay(link, retailerByDomain);
-          const excluded = computeExcluded(link, social, affiliateCounts);
-          rows.push([...baseRow,
-            `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
-            domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
-            styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
-          ]);
-        });
+const S2_HEADERS = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+
+// Streams S2 sheet XML directly to a tmpfile to avoid holding ~394k row arrays
+// + their styled-cell objects in JS heap simultaneously. Returns the tmpfile path
+// plus row count; the file contents are spliced into the final zip later.
+async function buildSheet2ToFile(
+  videos: any[],
+  vkMap: Map<string, any[]>,
+  keywordsById: Map<string, any>,
+  linksByVideo: Map<string, any[]>,
+  retailerByDomain: Map<string, string>,
+  affiliateCounts: Map<string, number>,
+): Promise<{ tmpPath: string; rowCount: number; headers: string[] }> {
+  const headers = S2_HEADERS;
+  const colCount = headers.length;
+  const tmpPath = await Deno.makeTempFile({ suffix: ".xml" });
+  const file = await Deno.open(tmpPath, { write: true, truncate: true });
+  const encoder = new TextEncoder();
+  const CHUNK_TARGET = 256 * 1024;
+  let buf = "";
+  let rowCount = 0;
+  let xlsxRowIdx = 1; // 0 is reserved for the header row written during zip assembly
+
+  const flush = async (force = false) => {
+    if (buf.length === 0) return;
+    if (!force && buf.length < CHUNK_TARGET) return;
+    await file.write(encoder.encode(buf));
+    buf = "";
+  };
+
+  try {
+    for (const v of videos) {
+      const entries = vkMap.get(v.id);
+      if (!entries || entries.length === 0) continue;
+      const vlinks = linksByVideo.get(v.id) || [];
+      const description = v.description?.trim() ? v.description : "No Description";
+      const totalLinks = vlinks.length;
+      for (const entry of entries) {
+        const kw = keywordsById.get(entry.keyword_id);
+        if (!kw) continue;
+        const rank = entry.search_rank != null ? entry.search_rank : "N/A";
+        const baseRow: any[] = [
+          kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A",
+          typeof rank === "string" ? styled(rank, styleForPlaceholder(rank)) : rank,
+          kw.status || "N/A",
+          `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
+          v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
+          styled(description, styleForPlaceholder(description)), totalLinks,
+        ];
+        if (vlinks.length === 0) {
+          const row = [...baseRow,
+            styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
+            styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
+          ];
+          buf += rowXml(row, xlsxRowIdx++, colCount);
+          rowCount++;
+          await flush();
+        } else {
+          for (let idx = 0; idx < vlinks.length; idx++) {
+            const link = vlinks[idx];
+            const unshort = link.unshortened_url || "N/A";
+            const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
+            const social = getSocialPlatform(domain);
+            const retailer = resolveRetailerDisplay(link, retailerByDomain);
+            const excluded = computeExcluded(link, social, affiliateCounts);
+            const row = [...baseRow,
+              `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
+              domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
+              styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
+            ];
+            buf += rowXml(row, xlsxRowIdx++, colCount);
+            rowCount++;
+            await flush();
+          }
+        }
       }
     }
+    await flush(true);
+  } finally {
+    file.close();
   }
-  return { headers, rows };
+  return { tmpPath, rowCount, headers };
+}
+
+// Wraps a pre-built row-XML body (from buildSheet2ToFile) into a complete sheet XML.
+function buildSheet2XmlFromBody(headers: string[], rowsBody: Uint8Array): Uint8Array {
+  const colCount = headers.length;
+  const head: string[] = [];
+  head.push('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>');
+  head.push('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">');
+  head.push('<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen" activePane="bottomLeft"/></sheetView></sheetViews>');
+  head.push('<cols>');
+  headers.forEach((h, i) => {
+    const width = Math.max(12, Math.min(50, h.length + 4));
+    head.push(`<col min="${i+1}" max="${i+1}" width="${width}" customWidth="1"/>`);
+  });
+  head.push('</cols>');
+  head.push('<sheetData>');
+  head.push(`<row r="1">${headers.map((h, c) => cellXml(h, 0, c, STYLE_HEADER)).join("")}</row>`);
+  const tail = '</sheetData></worksheet>';
+  const headBytes = strToU8(head.join(""));
+  const tailBytes = strToU8(tail);
+  const out = new Uint8Array(headBytes.length + rowsBody.length + tailBytes.length);
+  out.set(headBytes, 0);
+  out.set(rowsBody, headBytes.length);
+  out.set(tailBytes, headBytes.length + rowsBody.length);
+  return out;
 }
 
 function buildSheet3(videos: any[], vkMap: Map<string, any[]>, linksByVideo: Map<string, any[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
@@ -511,7 +575,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </cellXfs>
 </styleSheet>`;
 
-function buildXlsxBuffer(sheetsInOrder: { name: string; data: { headers: string[]; rows: any[][] } }[]): Uint8Array {
+function buildXlsxBuffer(sheetsInOrder: { name: string; data?: { headers: string[]; rows: any[][] }; prebuilt?: Uint8Array }[]): Uint8Array {
   const zipInput: Record<string, Uint8Array> = {};
   zipInput["[Content_Types].xml"] = strToU8(buildContentTypes(sheetsInOrder.length));
   zipInput["_rels/.rels"] = strToU8(ROOT_RELS);
@@ -519,7 +583,7 @@ function buildXlsxBuffer(sheetsInOrder: { name: string; data: { headers: string[
   zipInput["xl/_rels/workbook.xml.rels"] = strToU8(buildWorkbookRels(sheetsInOrder.length));
   zipInput["xl/styles.xml"] = strToU8(STYLES_XML);
   sheetsInOrder.forEach((s, i) => {
-    zipInput[`xl/worksheets/sheet${i+1}.xml`] = strToU8(buildSheetXml(s.data));
+    zipInput[`xl/worksheets/sheet${i+1}.xml`] = s.prebuilt ?? strToU8(buildSheetXml(s.data!));
   });
   return zipSync(zipInput, { level: 6 });
 }
@@ -584,28 +648,23 @@ Deno.serve(async (req) => {
   const updateMsg = (m: string) => updateJob({ progress_message: m });
 
   const backgroundTask = (async () => {
+    let s2TmpPath: string | null = null;
     try {
-      await updateMsg("Fetching videos...");
-      const videos = await fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at");
-
-      await updateMsg("Fetching links...");
-      const links = await fetchAll<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification");
-
-      await updateMsg("Fetching keywords...");
-      const vks = await fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank");
-      const keywordsAll = await fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
-
-      await updateMsg("Fetching channels...");
-      let channels = await fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos");
+      await updateMsg("Fetching all data in parallel...");
+      const [videos, links, vks, keywordsAll, channelsInitial, igs, patterns] = await Promise.all([
+        fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at"),
+        fetchAll<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification"),
+        fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank"),
+        fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at"),
+        fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos"),
+        fetchAll<any>(supabase, "instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category"),
+        fetchAll<any>(supabase, "affiliate_patterns", "pattern,name,type,is_confirmed"),
+      ]);
 
       // Scrape channel link headers for any channels missing them (mirrors client).
-      channels = await ensureChannelLinksScraped(supabase, channels, updateMsg);
+      // Sequential because it depends on `channels` and may re-fetch them.
+      const channels = await ensureChannelLinksScraped(supabase, channelsInitial, updateMsg);
 
-      await updateMsg("Fetching Instagram...");
-      const igs = await fetchAll<any>(supabase, "instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category");
-
-      await updateMsg("Fetching patterns...");
-      const patterns = await fetchAll<any>(supabase, "affiliate_patterns", "pattern,name,type,is_confirmed");
       const retailerByDomain = new Map<string, string>();
       const affiliateByDomain = new Map<string, string>();
       for (const p of patterns) {
@@ -651,8 +710,11 @@ Deno.serve(async (req) => {
 
       await updateMsg("Building S1...");
       const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
-      await updateMsg("Building S2 (largest)...");
-      const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
+
+      await updateMsg("Building S2 (largest, streaming to disk)...");
+      const s2Stream = await buildSheet2ToFile(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
+      s2TmpPath = s2Stream.tmpPath;
+
       await updateMsg("Building S3...");
       const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
       await updateMsg("Building S4...");
@@ -662,10 +724,14 @@ Deno.serve(async (req) => {
       await updateMsg("Building S6...");
       const s6 = buildSheet6(channels, igByChannelId);
 
+      await updateMsg("Reading S2 from disk and assembling XLSX...");
+      const s2RowsBody = await Deno.readFile(s2Stream.tmpPath);
+      const s2SheetXml = buildSheet2XmlFromBody(s2Stream.headers, s2RowsBody);
+
       await updateMsg("Zipping XLSX...");
       const xlsxBytes = buildXlsxBuffer([
         { name: "S1 - Keyword Summary", data: s1 },
-        { name: "S2 - Video Deep Data", data: s2 },
+        { name: "S2 - Video Deep Data", prebuilt: s2SheetXml },
         { name: "S3 - Last 50 Deep Data", data: s3 },
         { name: "S4 - Last 50 Channel Map", data: s4 },
         { name: "S5 - Channel Deep Data", data: s5 },
@@ -690,6 +756,10 @@ Deno.serve(async (req) => {
       });
     } catch (e: any) {
       await updateJob({ status: "failed", error: e?.message || String(e), completed_at: new Date().toISOString() });
+    } finally {
+      if (s2TmpPath) {
+        await Deno.remove(s2TmpPath).catch(() => {});
+      }
     }
   })();
 
