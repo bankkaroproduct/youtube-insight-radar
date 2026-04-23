@@ -645,25 +645,22 @@ Deno.serve(async (req) => {
   const updateMsg = (m: string) => updateJob({ progress_message: m });
 
   const backgroundTask = (async () => {
+    let s2TmpPath: string | null = null;
     try {
-      await updateMsg("Fetching videos...");
-      const videos = await fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at");
+      await updateMsg("Fetching data (parallel)...");
+      // Fire all six independent table fetches concurrently — these are the bulk
+      // of pre-build wall-clock time and have no inter-dependencies.
+      const [videos, links, vks, keywordsAll, channelsInitial, igs] = await Promise.all([
+        fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at"),
+        fetchAll<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification"),
+        fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank"),
+        fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at"),
+        fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos"),
+        fetchAll<any>(supabase, "instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category"),
+      ]);
 
-      await updateMsg("Fetching links...");
-      const links = await fetchAll<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification");
-
-      await updateMsg("Fetching keywords...");
-      const vks = await fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank");
-      const keywordsAll = await fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at");
-
-      await updateMsg("Fetching channels...");
-      let channels = await fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos");
-
-      // Scrape channel link headers for any channels missing them (mirrors client).
-      channels = await ensureChannelLinksScraped(supabase, channels, updateMsg);
-
-      await updateMsg("Fetching Instagram...");
-      const igs = await fetchAll<any>(supabase, "instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category");
+      // Channel-link scrape depends on channels, so it runs after.
+      let channels = await ensureChannelLinksScraped(supabase, channelsInitial, updateMsg);
 
       await updateMsg("Fetching patterns...");
       const patterns = await fetchAll<any>(supabase, "affiliate_patterns", "pattern,name,type,is_confirmed");
@@ -712,8 +709,12 @@ Deno.serve(async (req) => {
 
       await updateMsg("Building S1...");
       const s1 = buildSheet1(keywordsAll, videoCountByKeyword);
-      await updateMsg("Building S2 (largest)...");
-      const s2 = buildSheet2(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
+
+      // S2 streamed to disk first so its row objects never coexist with anything else.
+      await updateMsg("Building S2 (streaming to disk)...");
+      const s2Info = await buildSheet2XmlToFile(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
+      s2TmpPath = s2Info.tmpPath;
+
       await updateMsg("Building S3...");
       const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
       await updateMsg("Building S4...");
@@ -723,10 +724,13 @@ Deno.serve(async (req) => {
       await updateMsg("Building S6...");
       const s6 = buildSheet6(channels, igByChannelId);
 
+      await updateMsg("Assembling S2 XML...");
+      const s2Xml = await buildSheet2XmlFromFile(s2Info.headers, s2Info.tmpPath);
+
       await updateMsg("Zipping XLSX...");
       const xlsxBytes = buildXlsxBuffer([
         { name: "S1 - Keyword Summary", data: s1 },
-        { name: "S2 - Video Deep Data", data: s2 },
+        { name: "S2 - Video Deep Data", xml: s2Xml },
         { name: "S3 - Last 50 Deep Data", data: s3 },
         { name: "S4 - Last 50 Channel Map", data: s4 },
         { name: "S5 - Channel Deep Data", data: s5 },
