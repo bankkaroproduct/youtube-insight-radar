@@ -768,7 +768,11 @@ Deno.serve(async (req) => {
 
       await updateMsg("Uploading...");
       const date = new Date().toISOString().split("T")[0];
-      const path = `${user.id}/youtube_full_report_${date}_${jobRow.id.slice(0, 8)}.xlsx`;
+      const scopeKw = keywordIds.length > 0 ? `_${keywordIds.length}kw` : "";
+      const scopeCh = channelIds.length > 0 ? `_${channelIds.length}ch` : "";
+      const range = fromDate || toDate ? `_${fromDate || "any"}_to_${toDate || "now"}` : "";
+      const noBackfill = !includeBackfill ? "_nobackfill" : "";
+      const path = `${user.id}/youtube_full_report_${date}${range}${scopeKw}${scopeCh}${noBackfill}_${jobRow.id.slice(0, 8)}.xlsx`;
       const { error: upErr } = await supabase.storage.from("exports").upload(path, xlsxBytes, {
         contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         upsert: true,
