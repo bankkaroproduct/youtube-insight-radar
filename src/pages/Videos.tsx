@@ -13,7 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
 import { SortableHeader, useSort } from "@/components/ui/SortableHeader";
 import { ExpandableText } from "@/components/ui/ExpandableText";
-import { exportFullReport } from "@/services/excelExportService";
+import { exportFullReport, type ExportFilters } from "@/services/excelExportService";
+import { ExportFilterPanel } from "@/components/export/ExportFilterPanel";
 import { toast } from "sonner";
 
 function formatNumber(n: number): string {
@@ -379,41 +380,42 @@ export default function Videos() {
           }}>
             <Download className="h-4 w-4 mr-2" /> {isDownloading ? "Exporting..." : "Download CSV"}
           </Button>
-          <Button variant="default" size="sm" disabled={isExporting} onClick={async () => {
-            // Freshness pre-check: warn if backfill / stats / link-scrape still pending
-            const tCheck = toast.loading("Checking data freshness...");
-            try {
-              const [under50, neverAnalyzed, noLinks] = await Promise.all([
-                supabase.from("channels").select("channel_id", { count: "exact", head: true }).lt("total_videos_fetched", 50),
-                supabase.from("channels").select("channel_id", { count: "exact", head: true }).is("last_analyzed_at", null),
-                supabase.from("channels").select("channel_id", { count: "exact", head: true }).is("custom_links_scraped_at", null),
-              ]);
-              toast.dismiss(tCheck);
-              const issues: string[] = [];
-              if ((under50.count || 0) > 0) issues.push(`${under50.count} channels have fewer than 50 videos fetched`);
-              if ((neverAnalyzed.count || 0) > 0) issues.push(`${neverAnalyzed.count} channels have no computed stats yet`);
-              if ((noLinks.count || 0) > 0) issues.push(`${noLinks.count} channels still need 'More info' links scraped`);
-              if (issues.length > 0) {
-                const ok = window.confirm(
-                  `Some data is still being processed:\n\n• ${issues.join("\n• ")}\n\nThe export may be incomplete. Continue anyway?`
-                );
-                if (!ok) return;
+          <ExportFilterPanel
+            isExporting={isExporting}
+            onExport={async (filters: ExportFilters) => {
+              // Freshness pre-check: warn if backfill / stats / link-scrape still pending
+              const tCheck = toast.loading("Checking data freshness...");
+              try {
+                const [under50, neverAnalyzed, noLinks] = await Promise.all([
+                  supabase.from("channels").select("channel_id", { count: "exact", head: true }).lt("total_videos_fetched", 50),
+                  supabase.from("channels").select("channel_id", { count: "exact", head: true }).is("last_analyzed_at", null),
+                  supabase.from("channels").select("channel_id", { count: "exact", head: true }).is("custom_links_scraped_at", null),
+                ]);
+                toast.dismiss(tCheck);
+                const issues: string[] = [];
+                if ((under50.count || 0) > 0) issues.push(`${under50.count} channels have fewer than 50 videos fetched`);
+                if ((neverAnalyzed.count || 0) > 0) issues.push(`${neverAnalyzed.count} channels have no computed stats yet`);
+                if ((noLinks.count || 0) > 0) issues.push(`${noLinks.count} channels still need 'More info' links scraped`);
+                if (issues.length > 0) {
+                  const ok = window.confirm(
+                    `Some data is still being processed:\n\n• ${issues.join("\n• ")}\n\nThe export may be incomplete. Continue anyway?`
+                  );
+                  if (!ok) return;
+                }
+              } catch {
+                toast.dismiss(tCheck);
               }
-            } catch {
-              toast.dismiss(tCheck);
-            }
-            setIsExporting(true);
-            const tId = toast.loading("Preparing export...");
-            try {
-              await exportFullReport((msg) => toast.loading(msg, { id: tId }));
-              toast.success("Excel report downloaded", { id: tId });
-            } catch (e: any) {
-              toast.error("Export failed: " + (e?.message || "Unknown error"), { id: tId });
-            }
-            setIsExporting(false);
-          }}>
-            <FileSpreadsheet className="h-4 w-4 mr-2" /> {isExporting ? "Exporting..." : "Export Full Report"}
-          </Button>
+              setIsExporting(true);
+              const tId = toast.loading("Preparing export...");
+              try {
+                await exportFullReport(filters, (msg) => toast.loading(msg, { id: tId }));
+                toast.success("Excel report downloaded", { id: tId });
+              } catch (e: any) {
+                toast.error("Export failed: " + (e?.message || "Unknown error"), { id: tId });
+              }
+              setIsExporting(false);
+            }}
+          />
           <Button variant="outline" size="sm" onClick={refresh}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>

@@ -169,12 +169,15 @@ function styled(value: any, ...styles: CellStyle[]): Cell {
 }
 
 // ========== Data fetch ==========
-async function fetchAll<T>(supabase: any, table: string, select = "*"): Promise<T[]> {
+async function fetchAll<T>(supabase: any, table: string, select = "*", modify?: (q: any) => any): Promise<T[]> {
   const BATCH = 1000;
   let all: T[] = [];
   let from = 0;
   while (true) {
-    const { data, error } = await supabase.from(table).select(select).range(from, from + BATCH - 1);
+    let q: any = supabase.from(table).select(select);
+    if (modify) q = modify(q);
+    q = q.range(from, from + BATCH - 1);
+    const { data, error } = await q;
     if (error) throw error;
     const rows = (data ?? []) as T[];
     all = all.concat(rows);
@@ -636,7 +639,14 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ ...data, signed_url: signedUrl }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 
-  // Endpoint 2: start a new job
+  // Endpoint 2: start a new job — accept optional filters from body
+  const fromDate: string | null = typeof body.fromDate === "string" && body.fromDate ? body.fromDate : null;
+  const toDate: string | null = typeof body.toDate === "string" && body.toDate ? body.toDate : null;
+  const keywordIds: string[] = Array.isArray(body.keywordIds) ? body.keywordIds.filter((x: any) => typeof x === "string") : [];
+  const channelIds: string[] = Array.isArray(body.channelIds) ? body.channelIds.filter((x: any) => typeof x === "string") : [];
+  const includeBackfill: boolean = body.includeBackfill !== false; // default true
+  const hasFilters = !!(fromDate || toDate || keywordIds.length || channelIds.length || body.includeBackfill === false);
+
   const { data: jobRow, error: insErr } = await supabase.from("export_jobs").insert({
     user_id: user.id, status: "running", progress_message: "Starting...",
   }).select().single();
@@ -650,13 +660,22 @@ Deno.serve(async (req) => {
   const backgroundTask = (async () => {
     let s2TmpPath: string | null = null;
     try {
-      await updateMsg("Fetching all data in parallel...");
+      await updateMsg(hasFilters ? "Fetching filtered data in parallel..." : "Fetching all data in parallel...");
       const [videos, links, vks, keywordsAll, channelsInitial, igs, patterns] = await Promise.all([
-        fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at"),
+        fetchAll<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,published_at,created_at",
+          (q: any) => {
+            if (fromDate) q = q.gte("created_at", fromDate);
+            if (toDate) q = q.lte("created_at", toDate);
+            if (channelIds.length > 0) q = q.in("channel_id", channelIds);
+            return q;
+          }),
         fetchAll<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer,classification"),
-        fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank"),
-        fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at"),
-        fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos"),
+        fetchAll<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank",
+          (q: any) => keywordIds.length > 0 ? q.in("keyword_id", keywordIds) : q),
+        fetchAll<any>(supabase, "keywords_search_runs", "id,keyword,category,business_aim,priority,status,estimated_volume,last_priority_fetch_at",
+          (q: any) => keywordIds.length > 0 ? q.in("id", keywordIds) : q),
+        fetchAll<any>(supabase, "channels", "id,channel_id,channel_name,channel_url,description,subscriber_count,median_views,median_likes,median_comments,contact_email,instagram_url,country,youtube_category,affiliate_status,custom_links,custom_links_scraped_at,total_videos_fetched,youtube_total_videos",
+          (q: any) => channelIds.length > 0 ? q.in("channel_id", channelIds) : q),
         fetchAll<any>(supabase, "instagram_profiles", "channel_id,instagram_username,follower_count,bio,business_category"),
         fetchAll<any>(supabase, "affiliate_patterns", "pattern,name,type,is_confirmed"),
       ]);
@@ -715,10 +734,19 @@ Deno.serve(async (req) => {
       const s2Stream = await buildSheet2ToFile(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
       s2TmpPath = s2Stream.tmpPath;
 
-      await updateMsg("Building S3...");
-      const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
+      const S3_HEADERS = ["Keyword", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+      let s3: { headers: string[]; rows: any[][] };
+      if (includeBackfill) {
+        await updateMsg("Building S3...");
+        s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
+      } else {
+        await updateMsg("Skipping S3 (backfill excluded)...");
+        s3 = { headers: S3_HEADERS, rows: [] };
+      }
       await updateMsg("Building S4...");
-      const s4 = buildSheet4(videos, vkMap, channelsByYTId);
+      const s4 = includeBackfill
+        ? buildSheet4(videos, vkMap, channelsByYTId)
+        : { headers: ["Keyword", "Video Name", "Video Link", "Channel Name", "Channel Link", "Total Videos From Channel"], rows: [] };
       await updateMsg("Building S5...");
       const s5 = buildSheet5(channels, channelBestRank, retailerByDomain, affiliateByDomain);
       await updateMsg("Building S6...");
@@ -740,7 +768,11 @@ Deno.serve(async (req) => {
 
       await updateMsg("Uploading...");
       const date = new Date().toISOString().split("T")[0];
-      const path = `${user.id}/youtube_full_report_${date}_${jobRow.id.slice(0, 8)}.xlsx`;
+      const scopeKw = keywordIds.length > 0 ? `_${keywordIds.length}kw` : "";
+      const scopeCh = channelIds.length > 0 ? `_${channelIds.length}ch` : "";
+      const range = fromDate || toDate ? `_${fromDate || "any"}_to_${toDate || "now"}` : "";
+      const noBackfill = !includeBackfill ? "_nobackfill" : "";
+      const path = `${user.id}/youtube_full_report_${date}${range}${scopeKw}${scopeCh}${noBackfill}_${jobRow.id.slice(0, 8)}.xlsx`;
       const { error: upErr } = await supabase.storage.from("exports").upload(path, xlsxBytes, {
         contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         upsert: true,
