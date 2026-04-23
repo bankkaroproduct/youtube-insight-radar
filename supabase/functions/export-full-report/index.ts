@@ -1049,8 +1049,8 @@ async function runOneChunk(supabase: any, jobId: string) {
 
     if (job.stage === "queued") {
       await patchJob(supabase, jobId, { stage: "s1", cursor: {} });
-      await selfInvoke(jobId);
-      return;
+      job.stage = "s1";
+      job.cursor = {};
     }
 
     if (job.stage === "s1") {
