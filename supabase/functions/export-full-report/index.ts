@@ -639,7 +639,14 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ ...data, signed_url: signedUrl }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 
-  // Endpoint 2: start a new job
+  // Endpoint 2: start a new job — accept optional filters from body
+  const fromDate: string | null = typeof body.fromDate === "string" && body.fromDate ? body.fromDate : null;
+  const toDate: string | null = typeof body.toDate === "string" && body.toDate ? body.toDate : null;
+  const keywordIds: string[] = Array.isArray(body.keywordIds) ? body.keywordIds.filter((x: any) => typeof x === "string") : [];
+  const channelIds: string[] = Array.isArray(body.channelIds) ? body.channelIds.filter((x: any) => typeof x === "string") : [];
+  const includeBackfill: boolean = body.includeBackfill !== false; // default true
+  const hasFilters = !!(fromDate || toDate || keywordIds.length || channelIds.length || body.includeBackfill === false);
+
   const { data: jobRow, error: insErr } = await supabase.from("export_jobs").insert({
     user_id: user.id, status: "running", progress_message: "Starting...",
   }).select().single();
