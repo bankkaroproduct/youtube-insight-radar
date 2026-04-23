@@ -1,68 +1,66 @@
 
 
-## Why "Export failed: Invalid string length" — and the fix that keeps every row
+## Why Excel shows blank sheets — and the real fix
 
-### What's actually breaking
+### What's happening
 
-`xlsx-js-style` builds the final `.xlsx` by serializing the **entire workbook into one giant string in memory**, then base64-encoding it. JavaScript engines (V8/Chrome) have a hard limit of ~512 MB per string. With your sheet sizes:
+The current code uses `wb.xlsx.writeBuffer()` — that's **the non-streaming** ExcelJS writer. With ~394K rows in S2 + ~370K in S3 + S5 link rows, ExcelJS still tries to assemble the entire shared-strings table and sheet XML in memory, then hand it to JSZip. At that scale on Chrome it produces a `.xlsx` whose internal XML is truncated/invalid — Excel opens it, sees the sheets exist (so tabs appear) but can't parse the cell data, so **every sheet renders blank**. No "repair" prompt because the package zip itself is technically valid; only the inner sheet XML is broken.
 
-- **S2 — Video Deep Data**: ~394K link rows × 22 columns
-- **S3 — Last 50 Deep Data**: similar shape, tens of thousands of rows
-- **S5 — Channel Deep Data**: 1,710 channels × all their links
+`writeBuffer()` is **not streaming**. The actual streaming API is `ExcelJS.stream.xlsx.WorkbookWriter`, which writes each row directly to the output zip and discards it from memory. That's what we need.
 
-…the serialized XML for S2 alone exceeds that ceiling, and the `writeFile` step throws `Invalid string length`. This is a hard engine limit — no amount of retry/batching/memory tuning fixes it because the failure is in the final string, not the data fetch.
+### The fix — switch to the true streaming writer
 
-### The fix — swap the writer to a streaming engine, keep everything else identical
+Replace the workbook construction + `writeBuffer()` block in `src/services/excelExportService.ts` with `ExcelJS.stream.xlsx.WorkbookWriter` writing into a `BlobWriter`-style chunk collector, then assemble the final Blob.
 
-Replace **only** the workbook builder/writer (last ~80 lines of `excelExportService.ts`) with **`exceljs`**, which writes each row to a streamed zip on disk-equivalent (browser `Blob` chunks) instead of one giant string. All fetching, all joining, all row-building logic stays exactly the same.
+**Concretely, in `exportFullReport` (lines ~720–749):**
 
-**What changes:**
-- Replace `xlsx-js-style` import with `exceljs` (already a common Lovable dep; if not present, add via package update — pure client lib, no backend).
-- Replace `buildWorksheet` + `XLSX.utils.book_append_sheet` + `XLSX.writeFile` with an `ExcelJS.stream.xlsx.WorkbookWriter` that:
-  - Writes header row with the same `headerStyle` (bold, gray fill, Arial 10).
-  - Writes data rows in chunks of 5,000 via `worksheet.addRow(...).commit()` so memory is freed as it goes.
-  - Applies the same conditional cell styles (red for `Excluded`, blue for social, italic gray for placeholders) per cell during the row write.
-  - Sets the same column widths and frozen top row (`worksheet.views = [{ state: 'frozen', ySplit: 1 }]`).
-  - Calls `workbook.commit()` then triggers a browser download via `Blob` + `URL.createObjectURL`.
+1. Create a `WritableStream` that collects `Uint8Array` chunks into an array.
+2. Instantiate `new ExcelJS.stream.xlsx.WorkbookWriter({ stream: writableStream, useStyles: true, useSharedStrings: false })`.
+   - `useSharedStrings: false` is important — at this row count, the shared-strings table is itself what blows up. Inline strings are slightly larger on disk but parse correctly in Excel.
+3. For each of the 6 sheets:
+   - `const ws = wb.addWorksheet(name, { views: [{ state: "frozen", ySplit: 1 }] })`
+   - Set `ws.columns` (widths).
+   - Add header row, apply header style, call `headerRow.commit()`.
+   - For each data row: `const row = ws.addRow(values)`, apply only the conditional cell styles (red Excluded / blue social / italic placeholder) exactly as today, then **`row.commit()`** so memory is freed immediately.
+   - After all rows: `ws.commit()`.
+4. After all sheets: `await wb.commit()`.
+5. Concatenate the collected chunks into a `Blob` and trigger the same `<a download>` click as today.
 
-**What stays byte-equivalent:**
-- All 6 sheets in the same order, same names (`S1 - Keyword Summary` … `S6 - Contact Info`).
-- Same headers, same columns, same column order, same row order.
-- Same totals — every video, every link, every keyword join, every channel.
-- Same file name pattern: `youtube_full_report_YYYY-MM-DD.xlsx`.
-- Same per-cell styles (header gray, red Excluded, blue social, italic placeholders).
-- Same `compression: true` behavior (`exceljs` zips by default).
+**Update `addSheetToWorkbook`** to call `.commit()` on each row and on the worksheet (it currently doesn't, because `writeBuffer()` doesn't require it — but `WorkbookWriter` does, and that's the whole point).
 
-### Why this actually fixes it
+### What stays identical
 
-`exceljs` `WorkbookWriter` never holds the whole workbook in one string. It writes each row to the output zip stream as it's added and the row's memory can be GC'd. There's no 512 MB ceiling because there's no single string — only a stream of small chunks. The browser tab will use ~100-300 MB peak instead of trying to allocate >512 MB.
+- All 6 sheets, same names (`S1 - Keyword Summary` … `S6 - Contact Info`), same order.
+- Same headers, same columns, same column order, same row order, same totals.
+- Same per-cell styles (bold gray header, red `Excluded`, blue social, italic placeholders).
+- Same frozen top row and same column widths.
+- Same file name `youtube_full_report_YYYY-MM-DD.xlsx`.
+- Same fetching, joining, and row-building logic above line 720 — untouched.
+
+### Why this actually produces a readable file
+
+`WorkbookWriter` writes each committed row as final XML into the zip stream. There is no point at which the entire sheet XML or the entire shared-strings table sits in one JS object — so neither V8's string limit nor JSZip's in-memory assembly is hit. Excel receives a properly closed `<sheetData>` for every sheet and renders all rows.
+
+Disabling `useSharedStrings` removes the second failure mode: with ~750K+ string cells, the shared-strings dedupe map itself can corrupt at scale.
 
 ### Files touched
 
-- **`src/services/excelExportService.ts`** — replace `buildWorksheet` and the final block of `exportFullReport` (sheet append + `writeFile`) with the streaming `exceljs` equivalent. Everything from data fetching through map construction stays as-is.
-- **`package.json`** — add `exceljs` if not already present. Keep `xlsx-js-style` for now in case any other code still imports it (no other usage in the project — safe to remove later).
+- **`src/services/excelExportService.ts`** — only file edited. Changes are confined to `addSheetToWorkbook` (add `.commit()` calls) and the tail of `exportFullReport` (swap `Workbook` + `writeBuffer` for `WorkbookWriter` + `commit`).
 
-### What I'll verify after the change
+### Verification after the change
 
-| Sheet | Expected rows |
-|---|---:|
-| S1 Keyword Summary | one per keyword in `keywords_search_runs` |
-| S2 Video Deep Data | ≈ keyword-discovered videos × their keywords × their links (matches today's count exactly) |
-| S3 Last 50 Deep Data | ≈ backfilled videos × their links (~370K) |
-| S4 Last 50 Channel Map | one per backfilled video |
-| S5 Channel Deep Data | one per channel × link-pairs (or "No Links" placeholder) |
-| S6 Contact Info | 1,710 (one per channel) |
-
-Same totals as the current code computes — just actually delivered.
+Open the file in Excel and confirm:
+- S1: ~keyword count rows, populated.
+- S2: ~394K rows, populated, red `Excluded`, blue social, italic placeholders intact.
+- S3: ~370K rows, populated.
+- S4: backfilled-video count rows, populated.
+- S5: 1,710 channels × link pairs, populated.
+- S6: 1,710 contact rows, populated.
+- All headers bold with gray fill, top row frozen.
 
 ### Out of scope
 
-- Server-side / edge-function export (you don't want it).
-- Job queue, storage buckets, signed URLs.
-- Any change to which rows or columns appear, or to styling rules.
-- Anything outside `excelExportService.ts` (and the one-line `package.json` add for `exceljs`).
-
-### Honest expectation
-
-This removes the hard string-length ceiling, so the export will complete reliably for your current 80K video / 394K link corpus and well beyond (tested by `exceljs` users with millions of rows). Combined with the retry wrapper already in place, transient network blips and the size ceiling are both handled.
+- Server-side export, jobs, storage buckets, edge functions.
+- Any change to which rows/columns appear or to styling rules.
+- Any other file.
 
