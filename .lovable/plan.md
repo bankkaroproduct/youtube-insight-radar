@@ -1,79 +1,77 @@
 
-Root cause
 
-The export worker is no longer failing for the original reason only. The current chunked rewrite changed the dataset shape for Sheets 3 and 4 and is still doing much more work than the original export:
+## Fix the finalize stall + Sheet 2 memory pressure
 
-- `s3` and `s4` page through the entire `videos` table, then filter “videos without keywords”.
-- Your database currently has about `80,213` videos, with about `76,688` having no keyword rows.
-- The latest job is already at `s3 page 53` with `rowIdx 201,452`, which proves Sheet 3 is not exporting a “last 50” dataset anymore.
-- `s4` also contains an explicit approximation comment and no longer matches the original logic for “Total Videos From Channel”.
+### Root cause
 
-So the export is failing because the worker is generating a much larger workbook than intended, and doing far more chunk invocations than necessary. That is both a logic regression and a scale problem.
+Two compounding problems in `runStageFinalize` (lines 900–1015):
 
-What to build
+1. **Bounded busy-wait drops the zip**: the `while (!zipDone && spins < 1000)` loop on line 982 exits after 1000 microtask ticks. With 127 MB of raw XML (Sheet 2 alone is 118 MB / 7 fragments), fflate's async DEFLATE produces far more than 1000 internal chunks. The loop falls through with `zipDone === false`, then the code uploads a half-built buffer and the job sits in `running/finalize` forever (heartbeats keep firing because the worker is technically alive, but no progress is ever recorded).
+2. **fflate `Zip` + 118 MB of input inside a 256 MB Edge Function**: pure-JS DEFLATE keeps the sliding window + output buffer in heap. Logs already show one `Memory limit exceeded` event during this stage.
 
-1. Restore exact legacy dataset scope for S3 and S4
-- Stop scanning the whole `videos` table for these sheets.
-- Build the exact “last 50 scraped” source set once per job and cache its ids in `job.metadata`.
-- Reuse that same cached 50-video source set for both:
-  - `S3 - Last 50 Deep Data`
-  - `S4 - Last 50 Channel Map`
-- Keep the original row order and inclusion rules exactly as before.
-- After this fix, `s3` and `s4` should each finish in a single chunk, not dozens of pages.
+Evidence: latest job `49acd42a…` has been at `stage=finalize / Stitching workbook...` for ~1h41m, heartbeating but never completing. Fragment sizes confirmed via storage: s1=109KB, **s2=118MB/7frags**, s3=770KB, s4=28KB, s5=6.6MB, s6=1.9MB.
 
-2. Remove the S4 approximation and restore exact counts
-- Replace the current `s4ChannelCounts` approximation with the real legacy calculation.
-- The code comment currently says it is approximating prior behavior; that must be removed.
-- Compute `Total Videos From Channel` from the same intended dataset the original export used, not from all videos in the database.
+### Fix
 
-3. Tighten S2 to page only relevant videos
-- `s2` should not page the full `videos` table and skip most rows.
-- Seed `s2` from distinct `video_keywords.video_id` values, cache that id list or page through that source deterministically, then fetch only those video rows.
-- This keeps the dataset unchanged while cutting the current ~90+ page scan down to only the videos that actually belong in Sheet 2.
+**A. Replace the bounded busy-wait with a real completion signal.**
 
-4. Keep the current durable job architecture
-- Do not change the client flow, schema, sheet names, headers, styles, bucket, or signed-url behavior.
-- Keep the resumable stage machine and chunked storage-fragment approach already in place.
-- Only fix the worker’s source selection and per-sheet row generation so the workbook matches the original export again.
+Wrap the `Zip` callback in a Promise that resolves when `final === true` is received, and `await` that promise after `zip.end()`. No `spins` counter, no `setTimeout(0)` loop.
 
-5. Add one final safety guard in finalize
-- Keep the streaming `Zip` / `ZipPassThrough` finalize path.
-- Add a spill-to-temp-file fallback if compressed zip output grows beyond a safe memory threshold before upload.
-- This is only a safety net; the main fix is restoring the intended smaller dataset.
+```ts
+let resolveDone!: () => void;
+let rejectDone!: (e: Error) => void;
+const donePromise = new Promise<void>((res, rej) => { resolveDone = res; rejectDone = rej; });
 
-Files to change
+const zip = new Zip((err, dat, final) => {
+  if (err) { rejectDone(err as Error); return; }
+  if (dat?.length) { totalBytes += dat.length; /* push to chunks or tmpFile */ }
+  if (final) resolveDone();
+});
+// ...
+zip.end();
+await donePromise;
+await Promise.all(pendingWrites);
+```
 
-- `supabase/functions/export-full-report/index.ts`
-  - fix `runStageS2`
-  - fix `runStageS3`
-  - fix `runStageS4`
-  - add small helper(s) to compute/cache the correct source video ids
-  - add compressed-output spill guard in `runStageFinalize`
+This alone unblocks the current stuck job class — the zip will actually complete instead of being abandoned at spin #1000.
 
-What will not change
+**B. Stream Sheet 2 to disk from the start (don't keep zip output in memory).**
 
-- No client changes
-- No schema changes
-- No sheet structure changes
-- No column/header/order changes
-- No styling changes
-- No bucket/path naming changes
-- No data logic changes beyond restoring the original intended dataset
+Sheet 2's compressed output will still be ~10–20 MB, but the *uncompressed* working set during DEFLATE is the danger. Switch finalize to **always spill to a tmp file** rather than gating on an 80 MB threshold. This removes the in-memory `zipChunks` array entirely and avoids the OOM seen in logs:
 
-Verification
+- Open `Deno.makeTempFile()` before calling `addFixedFile`.
+- In the `Zip` callback, push every emitted chunk straight to `tmpFile.write(dat)` (track the promise in `pendingWrites`).
+- After `await donePromise` and `await Promise.all(pendingWrites)`, close the file, then upload via `Deno.open(tmpPath).readable` as a `ReadableStream` body to `supabase.storage.from("exports").upload()` (the supabase-js v2 client accepts a stream).
+- If the storage SDK in this Deno runtime rejects a stream body, fall back to `await Deno.readFile(tmpPath)` and upload the buffer (compressed xlsx is small enough to fit even at this scale).
 
-1. Start a new export.
-2. Confirm stage progression looks sane:
-   - `S2` should finish in a small number of pages tied to keyword-linked videos, not all 80k videos.
-   - `S3` should not reach page 53 again; it should finish from the true last-50 source set.
-   - `S4` should also complete from that same last-50 source set.
-3. Check `export_jobs`:
-   - latest job reaches `status=completed`
-   - `stage=completed`
-   - `result_path` populated
-   - `file_size_bytes` populated
-4. Open the workbook and verify:
-   - all 6 sheets exist
-   - Sheets 3 and 4 contain the proper “last 50” dataset only
-   - row counts and channel totals match legacy expectations
-   - no header/style regressions
+**C. Garbage-collect fragment buffers between pushes.**
+
+After `entry.push(b, false)`, drop the reference (`b = null as any`) and `await new Promise(r => setTimeout(r, 0))` once per fragment to let the runtime reclaim the 16–20 MB chunk before downloading the next one. Currently the loop on line 967 holds the previous fragment alive until the next iteration's `downloadFragment` resolves.
+
+**D. (Optional safety) Re-chunk Sheet 2 fragments smaller next run.**
+
+S2's fragments average ~17 MB each. If memory remains tight after A–C, halve `CHUNK_VIDEO_PAGE` (or whatever S2's page size constant is named) so each fragment is ~8 MB. This only affects *new* exports; the current stuck job's fragments stay as-is.
+
+### What does NOT change
+
+- Sheet count / order / names / headers / styles
+- Row inclusion rules (S2 still contains all keyword-linked videos; S3/S4 still bounded to last 50)
+- `export_jobs` schema, stage machine, client polling, signed-URL flow
+- Storage bucket / path layout
+
+### Files changed
+
+- `supabase/functions/export-full-report/index.ts` — only `runStageFinalize` (~lines 900–1015). ~40 lines touched. Nothing else.
+
+### Cleanup before retry
+
+The 4 stuck jobs (`49acd42a`, `1f73c31d`, `21dfa0be`, `f6b0c0f4`) need to be marked failed so a new export can start cleanly. The new fix will mark `status='failed'` with `error='superseded'` for any job stuck in `finalize` with `heartbeat_at < now() - interval '15 minutes'` on the next worker tick.
+
+### Verification
+
+1. Mark the 4 stuck jobs failed (one-time SQL during deploy).
+2. Trigger a fresh export from `/links` or `/videos`.
+3. Watch `export_jobs`: progress should advance through s1→s6, then `Stitching workbook...` should complete in **<60 seconds** and land at `status=completed` with `file_size_bytes` populated.
+4. Download the signed URL; open in Excel; confirm all 6 sheets render with correct row counts, frozen header, and cell styles.
+5. Watch edge function logs for the absence of `Memory limit exceeded` during finalize.
+
