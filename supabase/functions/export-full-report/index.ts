@@ -920,7 +920,7 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   addFixedFile("[Content_Types].xml", strToU8(buildContentTypes(SHEETS_IN_ORDER.length)));
   addFixedFile("_rels/.rels", strToU8(ROOT_RELS));
   addFixedFile("xl/workbook.xml", strToU8(buildWorkbookXml(SHEETS_IN_ORDER.map(s => s.name))));
-  addFixedFile("xl/_rels/workbook.xml.rels", strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length));
+  addFixedFile("xl/_rels/workbook.xml.rels", strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length)));
   addFixedFile("xl/styles.xml", strToU8(STYLES_XML));
 
   // Sheets: stream header -> each fragment -> footer.
