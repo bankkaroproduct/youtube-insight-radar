@@ -895,55 +895,42 @@ async function runStageS6(supabase: any, job: JobRow): Promise<{ done: boolean; 
     : { done: true, nextStage: "finalize", nextCursor: {} };
 }
 
-// Stitch fragments + zip + upload final. Streams via fflate async Zip to keep memory low.
-// Includes a spill-to-tempfile fallback if the compressed zip grows past a safe in-memory threshold.
+// Stitch fragments + zip + upload final. Always streams compressed output to a
+// temp file on disk so we never hold the full zip in heap, and uses a real
+// Promise-based completion signal for the async fflate Zip (no busy-wait).
 async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   const encoder = new TextEncoder();
-  const SPILL_THRESHOLD = 80 * 1024 * 1024; // 80 MB compressed before spilling to disk
 
-  // Either accumulate compressed chunks in memory, or spill them to a tmp file.
-  let zipChunks: Uint8Array[] | null = [];
-  let inMemorySize = 0;
-  let tmpPath: string | null = null;
-  let tmpFile: Deno.FsFile | null = null;
+  // Always spill to disk — Sheet 2 alone can be 100+ MB of raw XML which OOMs
+  // a 256 MB Edge Function if buffered. The compressed xlsx is small enough
+  // to upload in one shot afterwards.
+  const tmpPath = await Deno.makeTempFile({ prefix: "xlsx_", suffix: ".zip" });
+  const tmpFile = await Deno.open(tmpPath, { write: true, create: true, truncate: true });
   let totalBytes = 0;
-  let zipDone = false;
-  let zipError: Error | null = null;
-  const pendingWrites: Promise<void>[] = [];
+  const pendingWrites: Promise<unknown>[] = [];
 
-  const spillIfNeeded = async () => {
-    if (tmpPath || !zipChunks) return;
-    if (inMemorySize < SPILL_THRESHOLD) return;
-    tmpPath = await Deno.makeTempFile({ prefix: "xlsx_", suffix: ".zip" });
-    tmpFile = await Deno.open(tmpPath, { write: true, create: true, truncate: true });
-    for (const c of zipChunks) {
-      await tmpFile.write(c);
-    }
-    zipChunks = null; // free memory
-  };
+  // Real completion signal: resolve when fflate emits final === true; reject
+  // immediately on error. Replaces the old bounded busy-wait that would
+  // abandon the zip after 1000 microtask ticks on big inputs.
+  let resolveDone!: () => void;
+  let rejectDone!: (e: Error) => void;
+  const donePromise = new Promise<void>((res, rej) => { resolveDone = res; rejectDone = rej; });
+  let settled = false;
 
   const zip = new Zip((err, dat, final) => {
-    if (err) { zipError = err as Error; return; }
+    if (settled) return;
+    if (err) { settled = true; rejectDone(err as Error); return; }
     if (dat && dat.length > 0) {
       totalBytes += dat.length;
-      if (zipChunks) {
-        zipChunks.push(dat);
-        inMemorySize += dat.length;
-      } else if (tmpFile) {
-        // schedule async write; tracked so we await before reading the file back
-        pendingWrites.push(tmpFile.write(dat).then(() => {}));
-      }
+      pendingWrites.push(tmpFile.write(dat));
     }
-    if (final) zipDone = true;
+    if (final) { settled = true; resolveDone(); }
   });
-
-  const checkErr = () => { if (zipError) throw zipError; };
 
   const addFixedFile = (name: string, bytes: Uint8Array) => {
     const f = new ZipPassThrough(name);
     zip.add(f);
     f.push(bytes, true);
-    checkErr();
   };
 
   // Fixed workbook parts.
@@ -953,7 +940,9 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   addFixedFile("xl/_rels/workbook.xml.rels", strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length)));
   addFixedFile("xl/styles.xml", strToU8(STYLES_XML));
 
-  // Sheets: stream header -> each fragment -> footer.
+  // Sheets: stream header -> each fragment -> footer. Drop fragment buffer
+  // refs and yield to the runtime between fragments so the previous ~17 MB
+  // chunk can be GC'd before we download the next one.
   const tail = encoder.encode(SHEET_FOOTER_XML);
   for (let i = 0; i < SHEETS_IN_ORDER.length; i++) {
     const sheet = SHEETS_IN_ORDER[i];
@@ -961,49 +950,32 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
     const entry = new ZipPassThrough(`xl/worksheets/sheet${i + 1}.xml`);
     zip.add(entry);
     entry.push(head, false);
-    checkErr();
 
     const fragPaths = await listFragments(supabase, `${job.storage_prefix}/parts/${sheet.stage}`);
     for (const p of fragPaths) {
-      const b = await downloadFragment(supabase, p);
+      let b: Uint8Array | null = await downloadFragment(supabase, p);
       entry.push(b, false);
-      checkErr();
-      await spillIfNeeded();
+      b = null; // drop ref so GC can reclaim before next fragment
+      // Yield so pending tmpFile.write promises can drain and the runtime
+      // can reclaim the fragment buffer before the next download.
+      await new Promise((r) => setTimeout(r, 0));
     }
     entry.push(tail, true);
-    checkErr();
-    await spillIfNeeded();
+    await new Promise((r) => setTimeout(r, 0));
   }
 
   zip.end();
-  checkErr();
-
-  let spins = 0;
-  while (!zipDone && spins < 1000) {
-    await new Promise((r) => setTimeout(r, 0));
-    spins++;
-  }
-  checkErr();
+  await donePromise;
   await Promise.all(pendingWrites);
+  try { tmpFile.close(); } catch { /* ignore */ }
 
   const date = new Date().toISOString().split("T")[0];
   const finalPath = `${job.user_id}/youtube_full_report_${date}_${job.id.slice(0, 8)}.xlsx`;
 
-  let uploadBody: Uint8Array | Blob;
-  if (zipChunks) {
-    // In-memory path: concatenate the chunks.
-    const xlsxBytes = new Uint8Array(totalBytes);
-    let off = 0;
-    for (const c of zipChunks) { xlsxBytes.set(c, off); off += c.length; }
-    zipChunks.length = 0;
-    uploadBody = xlsxBytes;
-  } else {
-    // Spilled path: read the tmp file back as a Blob (still one buffer at upload time,
-    // but compressed XLSX is far smaller than raw XML).
-    if (tmpFile) { try { tmpFile.close(); } catch { /* ignore */ } }
-    const fileBytes = await Deno.readFile(tmpPath!);
-    uploadBody = new Blob([fileBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  }
+  // Read the compressed xlsx back as one buffer (compressed size is small —
+  // typically <30 MB even for 100+ MB of raw XML) and upload.
+  const fileBytes = await Deno.readFile(tmpPath);
+  const uploadBody = new Blob([fileBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
   const { error: upErr } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
     contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1011,7 +983,7 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   });
   if (upErr) throw upErr;
 
-  if (tmpPath) { try { await Deno.remove(tmpPath); } catch { /* ignore */ } }
+  try { await Deno.remove(tmpPath); } catch { /* ignore */ }
 
   await patchJob(supabase, job.id, {
     status: "completed",
