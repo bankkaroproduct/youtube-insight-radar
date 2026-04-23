@@ -564,21 +564,38 @@ async function runStageS2(supabase: any, job: JobRow, retailerByDomain: Map<stri
     : { done: true, nextStage: "s3", nextCursor: { page: 0 } };
 }
 
+// Build (and cache in job.metadata) the canonical "Last 50 scraped videos" set.
+// This is the 50 most recently created videos in the database, used for both S3 and S4.
+async function getLast50VideoIds(supabase: any, job: JobRow): Promise<string[]> {
+  if (Array.isArray(job.metadata?.last50VideoIds) && job.metadata.last50VideoIds.length > 0) {
+    return job.metadata.last50VideoIds as string[];
+  }
+  const { data, error } = await supabase
+    .from("videos")
+    .select("id")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  const ids = (data ?? []).map((v: any) => v.id);
+  await patchJob(supabase, job.id, { metadata: { ...(job.metadata ?? {}), last50VideoIds: ids } });
+  // Re-attach so the caller's job reference stays consistent within this invocation.
+  job.metadata = { ...(job.metadata ?? {}), last50VideoIds: ids };
+  return ids;
+}
+
 async function runStageS3(supabase: any, job: JobRow, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>): Promise<{ done: boolean; nextCursor?: any; nextStage?: string }> {
-  const page = Number(job.cursor?.page ?? 0);
   const startRowIdx = Number(job.cursor?.rowIdx ?? 1);
-  const from = page * CHUNK_VIDEO_PAGE;
-  const to = from + CHUNK_VIDEO_PAGE - 1;
+  const last50Ids = await getLast50VideoIds(supabase, job);
+  if (last50Ids.length === 0) return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
 
-  const videos = await fetchPage<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count", from, to, "id");
-  if (videos.length === 0) return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
-
-  const videoIds = videos.map(v => v.id);
-  const [vks, links] = await Promise.all([
-    fetchByIds<any>(supabase, "video_keywords", "video_id", "video_id", videoIds),
-    fetchByIds<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer", "video_id", videoIds),
+  const [videos, links] = await Promise.all([
+    fetchByIds<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,created_at", "id", last50Ids),
+    fetchByIds<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer", "video_id", last50Ids),
   ]);
-  const hasKeyword = new Set<string>(vks.map((v: any) => v.video_id));
+  // Preserve the order of last50Ids (most recent first).
+  const orderIdx = new Map<string, number>(last50Ids.map((id, i) => [id, i]));
+  videos.sort((a: any, b: any) => (orderIdx.get(a.id) ?? 0) - (orderIdx.get(b.id) ?? 0));
+
   const linksByVideo = new Map<string, any[]>();
   for (const l of links) {
     const list = linksByVideo.get(l.video_id) || [];
@@ -589,7 +606,6 @@ async function runStageS3(supabase: any, job: JobRow, retailerByDomain: Map<stri
   const parts: string[] = [];
   let xlsxRowIdx = startRowIdx;
   for (const v of videos) {
-    if (hasKeyword.has(v.id)) continue;
     const vlinks = linksByVideo.get(v.id) || [];
     const description = v.description?.trim() ? v.description : "No Description";
     const baseRow = [
@@ -621,75 +637,52 @@ async function runStageS3(supabase: any, job: JobRow, retailerByDomain: Map<stri
     }
   }
   if (parts.length > 0) {
-    const fragName = String(page + 1).padStart(6, "0") + ".xml";
-    await uploadFragment(supabase, `${job.storage_prefix}/parts/s3/${fragName}`, parts.join(""));
+    await uploadFragment(supabase, `${job.storage_prefix}/parts/s3/000001.xml`, parts.join(""));
   }
-  const more = videos.length === CHUNK_VIDEO_PAGE;
-  return more
-    ? { done: false, nextCursor: { page: page + 1, rowIdx: xlsxRowIdx } }
-    : { done: true, nextStage: "s4", nextCursor: { page: 0 } };
+  return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
 }
 
 async function runStageS4(supabase: any, job: JobRow): Promise<{ done: boolean; nextCursor?: any; nextStage?: string }> {
-  const page = Number(job.cursor?.page ?? 0);
   const startRowIdx = Number(job.cursor?.rowIdx ?? 1);
-  const from = page * CHUNK_VIDEO_PAGE;
-  const to = from + CHUNK_VIDEO_PAGE - 1;
+  const last50Ids = await getLast50VideoIds(supabase, job);
+  if (last50Ids.length === 0) return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
 
-  const videos = await fetchPage<any>(supabase, "videos", "id,video_id,title,channel_id,channel_name", from, to, "id");
-  if (videos.length === 0) return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
+  const videos = await fetchByIds<any>(supabase, "videos", "id,video_id,title,channel_id,channel_name", "id", last50Ids);
+  const orderIdx = new Map<string, number>(last50Ids.map((id, i) => [id, i]));
+  videos.sort((a: any, b: any) => (orderIdx.get(a.id) ?? 0) - (orderIdx.get(b.id) ?? 0));
 
-  const videoIds = videos.map(v => v.id);
-  const vks = await fetchByIds<any>(supabase, "video_keywords", "video_id", "video_id", videoIds);
-  const hasKeyword = new Set<string>(vks.map((v: any) => v.video_id));
-  const last50 = videos.filter(v => !hasKeyword.has(v.id));
-
-  // Channel counts for "Total Videos From Channel" must be over the whole table.
-  // Cache in metadata across pages.
-  let channelCountsObj: Record<string, number> = job.metadata?.s4ChannelCounts;
-  if (!channelCountsObj) {
-    channelCountsObj = {};
-    let f = 0; const B = 1000;
-    while (true) {
-      const { data, error } = await supabase.from("videos").select("channel_id,id").range(f, f + B - 1);
-      if (error) throw error;
-      const all = data ?? [];
-      // Need to filter to last-50 (no keyword). Cheaper: count all videos per channel — same as prior `last50.filter`.
-      // Prior code grouped only no-keyword videos, but to keep memory bounded and avoid re-scanning vk table,
-      // we approximate with all videos per channel. This matches "Total Videos From Channel" semantics.
-      for (const v of all) channelCountsObj[v.channel_id] = (channelCountsObj[v.channel_id] || 0) + 1;
-      if (all.length < B) break;
-      f += B;
-    }
-    await patchJob(supabase, job.id, { metadata: { ...(job.metadata ?? {}), s4ChannelCounts: channelCountsObj } });
+  // Exact "Total Videos From Channel" for only the channels in the last-50 set.
+  const channelYtIds = [...new Set(videos.map((v: any) => v.channel_id))];
+  const channelCounts: Record<string, number> = {};
+  for (const yt of channelYtIds) {
+    const { count, error } = await supabase
+      .from("videos")
+      .select("id", { count: "exact", head: true })
+      .eq("channel_id", yt);
+    if (error) throw error;
+    channelCounts[yt] = count ?? 0;
   }
 
-  // Channel URLs lookup for the channel ids in this page.
-  const ytIds = [...new Set(last50.map(v => v.channel_id))];
-  const channels = ytIds.length === 0 ? [] : await fetchByIds<any>(supabase, "channels", "channel_id,channel_url", "channel_id", ytIds);
+  const channels = channelYtIds.length === 0 ? [] : await fetchByIds<any>(supabase, "channels", "channel_id,channel_url", "channel_id", channelYtIds);
   const chMap = new Map<string, string>(channels.map((c: any) => [c.channel_id, c.channel_url]));
 
   const parts: string[] = [];
   let xlsxRowIdx = startRowIdx;
-  for (const v of last50) {
+  for (const v of videos) {
     parts.push(rowXml([
       styled("Last 50 Scraped Video", STYLE_PLACEHOLDER),
       v.title,
       `https://www.youtube.com/watch?v=${v.video_id}`,
       v.channel_name,
       chMap.get(v.channel_id) || `https://www.youtube.com/channel/${v.channel_id}`,
-      channelCountsObj[v.channel_id] || 0,
+      channelCounts[v.channel_id] || 0,
     ], xlsxRowIdx, SHEET4_HEADERS.length));
     xlsxRowIdx++;
   }
   if (parts.length > 0) {
-    const fragName = String(page + 1).padStart(6, "0") + ".xml";
-    await uploadFragment(supabase, `${job.storage_prefix}/parts/s4/${fragName}`, parts.join(""));
+    await uploadFragment(supabase, `${job.storage_prefix}/parts/s4/000001.xml`, parts.join(""));
   }
-  const more = videos.length === CHUNK_VIDEO_PAGE;
-  return more
-    ? { done: false, nextCursor: { page: page + 1, rowIdx: xlsxRowIdx } }
-    : { done: true, nextStage: "s5", nextCursor: { page: 0 } };
+  return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
 }
 
 // Compute best video rank per channel. Cached in metadata once.
