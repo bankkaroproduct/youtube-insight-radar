@@ -558,7 +558,7 @@ async function runStageS2(supabase: any, job: JobRow, retailerByDomain: Map<stri
     await uploadFragment(supabase, `${job.storage_prefix}/parts/s2/${fragName}`, parts.join(""));
   }
   const nextPage = page + 1;
-  const more = videos.length === CHUNK_VIDEO_PAGE;
+  const more = vks.length === CHUNK_VIDEO_PAGE;
   return more
     ? { done: false, nextCursor: { page: nextPage, rowIdx: xlsxRowIdx } }
     : { done: true, nextStage: "s3", nextCursor: { page: 0 } };
