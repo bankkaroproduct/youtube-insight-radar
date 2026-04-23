@@ -346,8 +346,9 @@ async function tryClaim(supabase: any, jobId: string): Promise<JobRow | null> {
 
 async function selfInvoke(jobId: string) {
   const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/export-full-report`;
-  // Fire-and-forget; don't await body. Use service-role to bypass user auth on self-call.
-  fetch(url, {
+  // Await the handoff so the next worker tick is actually dispatched before this
+  // invocation exits; otherwise jobs can get stranded mid-stage.
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -355,7 +356,12 @@ async function selfInvoke(jobId: string) {
       "x-internal-worker": "1",
     },
     body: JSON.stringify({ action: "work", job_id: jobId }),
-  }).catch(() => {});
+  });
+
+  const bodyText = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(`Failed to dispatch worker (${response.status}): ${bodyText || response.statusText}`);
+  }
 }
 
 // ========== Pattern + affiliate-counts cache (per chunk run) ==========
