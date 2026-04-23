@@ -575,7 +575,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </cellXfs>
 </styleSheet>`;
 
-function buildXlsxBuffer(sheetsInOrder: { name: string; data: { headers: string[]; rows: any[][] } }[]): Uint8Array {
+function buildXlsxBuffer(sheetsInOrder: { name: string; data?: { headers: string[]; rows: any[][] }; prebuilt?: Uint8Array }[]): Uint8Array {
   const zipInput: Record<string, Uint8Array> = {};
   zipInput["[Content_Types].xml"] = strToU8(buildContentTypes(sheetsInOrder.length));
   zipInput["_rels/.rels"] = strToU8(ROOT_RELS);
@@ -583,7 +583,7 @@ function buildXlsxBuffer(sheetsInOrder: { name: string; data: { headers: string[
   zipInput["xl/_rels/workbook.xml.rels"] = strToU8(buildWorkbookRels(sheetsInOrder.length));
   zipInput["xl/styles.xml"] = strToU8(STYLES_XML);
   sheetsInOrder.forEach((s, i) => {
-    zipInput[`xl/worksheets/sheet${i+1}.xml`] = strToU8(buildSheetXml(s.data));
+    zipInput[`xl/worksheets/sheet${i+1}.xml`] = s.prebuilt ?? strToU8(buildSheetXml(s.data!));
   });
   return zipSync(zipInput, { level: 6 });
 }
