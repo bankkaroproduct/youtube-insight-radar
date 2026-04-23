@@ -734,10 +734,19 @@ Deno.serve(async (req) => {
       const s2Stream = await buildSheet2ToFile(videos, vkMap, keywordsById, linksByVideo, retailerByDomain, affiliateCounts);
       s2TmpPath = s2Stream.tmpPath;
 
-      await updateMsg("Building S3...");
-      const s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
+      const S3_HEADERS = ["Keyword", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+      let s3: { headers: string[]; rows: any[][] };
+      if (includeBackfill) {
+        await updateMsg("Building S3...");
+        s3 = buildSheet3(videos, vkMap, linksByVideo, retailerByDomain, affiliateCounts);
+      } else {
+        await updateMsg("Skipping S3 (backfill excluded)...");
+        s3 = { headers: S3_HEADERS, rows: [] };
+      }
       await updateMsg("Building S4...");
-      const s4 = buildSheet4(videos, vkMap, channelsByYTId);
+      const s4 = includeBackfill
+        ? buildSheet4(videos, vkMap, channelsByYTId)
+        : { headers: ["Keyword", "Video Name", "Video Link", "Channel Name", "Channel Link", "Total Videos From Channel"], rows: [] };
       await updateMsg("Building S5...");
       const s5 = buildSheet5(channels, channelBestRank, retailerByDomain, affiliateByDomain);
       await updateMsg("Building S6...");
