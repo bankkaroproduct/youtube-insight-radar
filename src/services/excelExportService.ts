@@ -770,7 +770,7 @@ export async function exportFullReport(onProgress?: (msg: string) => void) {
   try { await writer.closed; } catch { /* already closed */ }
 
   const date = new Date().toISOString().split("T")[0];
-  const blob = new Blob(chunks, {
+  const blob = new Blob(chunks as BlobPart[], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
   const url = URL.createObjectURL(blob);
