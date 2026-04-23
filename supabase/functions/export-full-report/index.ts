@@ -209,49 +209,113 @@ function buildSheet1(keywords: any[], videoCountByKeyword: Map<string, number>) 
   return { headers, rows };
 }
 
-function buildSheet2(videos: any[], vkMap: Map<string, any[]>, keywordsById: Map<string, any>, linksByVideo: Map<string, any[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
-  const headers = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
-  const rows: any[][] = [];
-  for (const v of videos) {
-    const entries = vkMap.get(v.id);
-    if (!entries || entries.length === 0) continue;
-    const links = linksByVideo.get(v.id) || [];
-    const description = v.description?.trim() ? v.description : "No Description";
-    const totalLinks = links.length;
-    for (const entry of entries) {
-      const kw = keywordsById.get(entry.keyword_id);
-      if (!kw) continue;
-      const rank = entry.search_rank != null ? entry.search_rank : "N/A";
-      const baseRow = [
-        kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A",
-        typeof rank === "string" ? styled(rank, styleForPlaceholder(rank)) : rank,
-        kw.status || "N/A",
-        `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
-        v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
-        styled(description, styleForPlaceholder(description)), totalLinks,
-      ];
-      if (links.length === 0) {
-        rows.push([...baseRow,
-          styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
-          styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
-        ]);
-      } else {
-        links.forEach((link, idx) => {
-          const unshort = link.unshortened_url || "N/A";
-          const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
-          const social = getSocialPlatform(domain);
-          const retailer = resolveRetailerDisplay(link, retailerByDomain);
-          const excluded = computeExcluded(link, social, affiliateCounts);
-          rows.push([...baseRow,
-            `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
-            domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
-            styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
-          ]);
-        });
+const S2_HEADERS = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+
+// Streams S2 sheet XML directly to a tmpfile to avoid holding ~394k row arrays
+// + their styled-cell objects in JS heap simultaneously. Returns the tmpfile path
+// plus row count; the file contents are spliced into the final zip later.
+async function buildSheet2ToFile(
+  videos: any[],
+  vkMap: Map<string, any[]>,
+  keywordsById: Map<string, any>,
+  linksByVideo: Map<string, any[]>,
+  retailerByDomain: Map<string, string>,
+  affiliateCounts: Map<string, number>,
+): Promise<{ tmpPath: string; rowCount: number; headers: string[] }> {
+  const headers = S2_HEADERS;
+  const colCount = headers.length;
+  const tmpPath = await Deno.makeTempFile({ suffix: ".xml" });
+  const file = await Deno.open(tmpPath, { write: true, truncate: true });
+  const encoder = new TextEncoder();
+  const CHUNK_TARGET = 256 * 1024;
+  let buf = "";
+  let rowCount = 0;
+  let xlsxRowIdx = 1; // 0 is reserved for the header row written during zip assembly
+
+  const flush = async (force = false) => {
+    if (buf.length === 0) return;
+    if (!force && buf.length < CHUNK_TARGET) return;
+    await file.write(encoder.encode(buf));
+    buf = "";
+  };
+
+  try {
+    for (const v of videos) {
+      const entries = vkMap.get(v.id);
+      if (!entries || entries.length === 0) continue;
+      const vlinks = linksByVideo.get(v.id) || [];
+      const description = v.description?.trim() ? v.description : "No Description";
+      const totalLinks = vlinks.length;
+      for (const entry of entries) {
+        const kw = keywordsById.get(entry.keyword_id);
+        if (!kw) continue;
+        const rank = entry.search_rank != null ? entry.search_rank : "N/A";
+        const baseRow: any[] = [
+          kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A",
+          typeof rank === "string" ? styled(rank, styleForPlaceholder(rank)) : rank,
+          kw.status || "N/A",
+          `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
+          v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
+          styled(description, styleForPlaceholder(description)), totalLinks,
+        ];
+        if (vlinks.length === 0) {
+          const row = [...baseRow,
+            styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
+            styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
+          ];
+          buf += rowXml(row, xlsxRowIdx++, colCount);
+          rowCount++;
+          await flush();
+        } else {
+          for (let idx = 0; idx < vlinks.length; idx++) {
+            const link = vlinks[idx];
+            const unshort = link.unshortened_url || "N/A";
+            const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
+            const social = getSocialPlatform(domain);
+            const retailer = resolveRetailerDisplay(link, retailerByDomain);
+            const excluded = computeExcluded(link, social, affiliateCounts);
+            const row = [...baseRow,
+              `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
+              domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
+              styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
+            ];
+            buf += rowXml(row, xlsxRowIdx++, colCount);
+            rowCount++;
+            await flush();
+          }
+        }
       }
     }
+    await flush(true);
+  } finally {
+    file.close();
   }
-  return { headers, rows };
+  return { tmpPath, rowCount, headers };
+}
+
+// Wraps a pre-built row-XML body (from buildSheet2ToFile) into a complete sheet XML.
+function buildSheet2XmlFromBody(headers: string[], rowsBody: Uint8Array): Uint8Array {
+  const colCount = headers.length;
+  const head: string[] = [];
+  head.push('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>');
+  head.push('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">');
+  head.push('<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen" activePane="bottomLeft"/></sheetView></sheetViews>');
+  head.push('<cols>');
+  headers.forEach((h, i) => {
+    const width = Math.max(12, Math.min(50, h.length + 4));
+    head.push(`<col min="${i+1}" max="${i+1}" width="${width}" customWidth="1"/>`);
+  });
+  head.push('</cols>');
+  head.push('<sheetData>');
+  head.push(`<row r="1">${headers.map((h, c) => cellXml(h, 0, c, STYLE_HEADER)).join("")}</row>`);
+  const tail = '</sheetData></worksheet>';
+  const headBytes = strToU8(head.join(""));
+  const tailBytes = strToU8(tail);
+  const out = new Uint8Array(headBytes.length + rowsBody.length + tailBytes.length);
+  out.set(headBytes, 0);
+  out.set(rowsBody, headBytes.length);
+  out.set(tailBytes, headBytes.length + rowsBody.length);
+  return out;
 }
 
 function buildSheet3(videos: any[], vkMap: Map<string, any[]>, linksByVideo: Map<string, any[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
