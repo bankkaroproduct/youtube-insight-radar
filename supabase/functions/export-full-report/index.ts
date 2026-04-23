@@ -890,26 +890,49 @@ async function runStageS6(supabase: any, job: JobRow): Promise<{ done: boolean; 
 }
 
 // Stitch fragments + zip + upload final. Streams via fflate async Zip to keep memory low.
+// Includes a spill-to-tempfile fallback if the compressed zip grows past a safe in-memory threshold.
 async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   const encoder = new TextEncoder();
+  const SPILL_THRESHOLD = 80 * 1024 * 1024; // 80 MB compressed before spilling to disk
 
-  // Collected compressed zip output chunks (these are small relative to raw XML).
-  const zipChunks: Uint8Array[] = [];
+  // Either accumulate compressed chunks in memory, or spill them to a tmp file.
+  let zipChunks: Uint8Array[] | null = [];
+  let inMemorySize = 0;
+  let tmpPath: string | null = null;
+  let tmpFile: Deno.FsFile | null = null;
+  let totalBytes = 0;
   let zipDone = false;
   let zipError: Error | null = null;
+  const pendingWrites: Promise<void>[] = [];
+
+  const spillIfNeeded = async () => {
+    if (tmpPath || !zipChunks) return;
+    if (inMemorySize < SPILL_THRESHOLD) return;
+    tmpPath = await Deno.makeTempFile({ prefix: "xlsx_", suffix: ".zip" });
+    tmpFile = await Deno.open(tmpPath, { write: true, create: true, truncate: true });
+    for (const c of zipChunks) {
+      await tmpFile.write(c);
+    }
+    zipChunks = null; // free memory
+  };
 
   const zip = new Zip((err, dat, final) => {
-    if (err) {
-      zipError = err as Error;
-      return;
+    if (err) { zipError = err as Error; return; }
+    if (dat && dat.length > 0) {
+      totalBytes += dat.length;
+      if (zipChunks) {
+        zipChunks.push(dat);
+        inMemorySize += dat.length;
+      } else if (tmpFile) {
+        // schedule async write; tracked so we await before reading the file back
+        pendingWrites.push(tmpFile.write(dat).then(() => {}));
+      }
     }
-    if (dat && dat.length > 0) zipChunks.push(dat);
     if (final) zipDone = true;
   });
 
   const checkErr = () => { if (zipError) throw zipError; };
 
-  // Helper: push a small fixed file as a single ZipPassThrough entry.
   const addFixedFile = (name: string, bytes: Uint8Array) => {
     const f = new ZipPassThrough(name);
     zip.add(f);
@@ -939,47 +962,57 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       const b = await downloadFragment(supabase, p);
       entry.push(b, false);
       checkErr();
-      // drop reference; loop scope replaces b on next iter
+      await spillIfNeeded();
     }
     entry.push(tail, true);
     checkErr();
+    await spillIfNeeded();
   }
 
   zip.end();
   checkErr();
 
-  // The fflate Zip callback is synchronous; zipDone should already be true here,
-  // but guard with a microtask spin just in case.
   let spins = 0;
   while (!zipDone && spins < 1000) {
     await new Promise((r) => setTimeout(r, 0));
     spins++;
   }
   checkErr();
-
-  // Concatenate compressed chunks into final xlsx buffer (small vs raw XML).
-  let total = 0;
-  for (const c of zipChunks) total += c.length;
-  const xlsxBytes = new Uint8Array(total);
-  let off = 0;
-  for (const c of zipChunks) { xlsxBytes.set(c, off); off += c.length; }
-  // Free chunk refs.
-  zipChunks.length = 0;
+  await Promise.all(pendingWrites);
 
   const date = new Date().toISOString().split("T")[0];
   const finalPath = `${job.user_id}/youtube_full_report_${date}_${job.id.slice(0, 8)}.xlsx`;
-  const { error: upErr } = await supabase.storage.from("exports").upload(finalPath, xlsxBytes, {
+
+  let uploadBody: Uint8Array | Blob;
+  if (zipChunks) {
+    // In-memory path: concatenate the chunks.
+    const xlsxBytes = new Uint8Array(totalBytes);
+    let off = 0;
+    for (const c of zipChunks) { xlsxBytes.set(c, off); off += c.length; }
+    zipChunks.length = 0;
+    uploadBody = xlsxBytes;
+  } else {
+    // Spilled path: read the tmp file back as a Blob (still one buffer at upload time,
+    // but compressed XLSX is far smaller than raw XML).
+    if (tmpFile) { try { tmpFile.close(); } catch { /* ignore */ } }
+    const fileBytes = await Deno.readFile(tmpPath!);
+    uploadBody = new Blob([fileBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
+
+  const { error: upErr } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
     contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     upsert: true,
   });
   if (upErr) throw upErr;
+
+  if (tmpPath) { try { await Deno.remove(tmpPath); } catch { /* ignore */ } }
 
   await patchJob(supabase, job.id, {
     status: "completed",
     stage: "completed",
     storage_path: finalPath,
     result_path: finalPath,
-    file_size_bytes: xlsxBytes.byteLength,
+    file_size_bytes: totalBytes,
     progress_message: "Done",
     completed_at: nowIso(),
     lease_expires_at: null,
