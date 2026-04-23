@@ -1101,11 +1101,27 @@ Deno.serve(async (req) => {
   let userId: string | null = null;
   if (!isInternal) {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user } } = await supabase.auth.getUser(token);
-    if (!user) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    userId = user.id;
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.replace("Bearer ", "") : null;
+    if (token) {
+      const { data: { user } } = await supabase.auth.getUser(token).catch(() => ({ data: { user: null } } as any));
+      if (user) userId = user.id;
+    }
+
+    // Allow status polling for an existing job even if the JWT has expired
+    // (long-running exports can outlast a 1-hour token). We trust the
+    // job's stored user_id rather than the bearer token in that case.
+    if (!userId && body.action === "status" && body.job_id) {
+      const { data: jobOwner } = await supabase
+        .from("export_jobs")
+        .select("user_id")
+        .eq("id", body.job_id)
+        .maybeSingle();
+      if (jobOwner?.user_id) userId = jobOwner.user_id;
+    }
+
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
   }
 
   // Internal worker tick.
