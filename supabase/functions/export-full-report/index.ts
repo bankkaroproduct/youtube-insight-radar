@@ -475,14 +475,22 @@ async function runStageS2(supabase: any, job: JobRow, retailerByDomain: Map<stri
   const from = page * CHUNK_VIDEO_PAGE;
   const to = from + CHUNK_VIDEO_PAGE - 1;
 
-  // Fetch one page of videos that have keywords. Order by id for stable pagination.
-  const videos = await fetchPage<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count", from, to, "id");
-  if (videos.length === 0) {
+  // Page only through videos that have at least one keyword association.
+  // Pull a slice of distinct video_ids from video_keywords ordered by video_id.
+  // (Stable across paging; one row per (video, keyword) but we de-dup below.)
+  const { data: vkPage, error: vkErr } = await supabase
+    .from("video_keywords")
+    .select("video_id,keyword_id,search_rank")
+    .order("video_id", { ascending: true })
+    .range(from, to);
+  if (vkErr) throw vkErr;
+  const vks = vkPage ?? [];
+  if (vks.length === 0) {
     return { done: true, nextStage: "s3", nextCursor: { page: 0 } };
   }
-  const videoIds = videos.map(v => v.id);
-  const [vks, links] = await Promise.all([
-    fetchByIds<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank", "video_id", videoIds),
+  const videoIds = [...new Set(vks.map((v: any) => v.video_id))];
+  const [videos, links] = await Promise.all([
+    fetchByIds<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count", "id", videoIds),
     fetchByIds<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer", "video_id", videoIds),
   ]);
   const vkMap = new Map<string, any[]>();
@@ -550,27 +558,44 @@ async function runStageS2(supabase: any, job: JobRow, retailerByDomain: Map<stri
     await uploadFragment(supabase, `${job.storage_prefix}/parts/s2/${fragName}`, parts.join(""));
   }
   const nextPage = page + 1;
-  const more = videos.length === CHUNK_VIDEO_PAGE;
+  const more = vks.length === CHUNK_VIDEO_PAGE;
   return more
     ? { done: false, nextCursor: { page: nextPage, rowIdx: xlsxRowIdx } }
     : { done: true, nextStage: "s3", nextCursor: { page: 0 } };
 }
 
+// Build (and cache in job.metadata) the canonical "Last 50 scraped videos" set.
+// This is the 50 most recently created videos in the database, used for both S3 and S4.
+async function getLast50VideoIds(supabase: any, job: JobRow): Promise<string[]> {
+  if (Array.isArray(job.metadata?.last50VideoIds) && job.metadata.last50VideoIds.length > 0) {
+    return job.metadata.last50VideoIds as string[];
+  }
+  const { data, error } = await supabase
+    .from("videos")
+    .select("id")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  const ids = (data ?? []).map((v: any) => v.id);
+  await patchJob(supabase, job.id, { metadata: { ...(job.metadata ?? {}), last50VideoIds: ids } });
+  // Re-attach so the caller's job reference stays consistent within this invocation.
+  job.metadata = { ...(job.metadata ?? {}), last50VideoIds: ids };
+  return ids;
+}
+
 async function runStageS3(supabase: any, job: JobRow, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>): Promise<{ done: boolean; nextCursor?: any; nextStage?: string }> {
-  const page = Number(job.cursor?.page ?? 0);
   const startRowIdx = Number(job.cursor?.rowIdx ?? 1);
-  const from = page * CHUNK_VIDEO_PAGE;
-  const to = from + CHUNK_VIDEO_PAGE - 1;
+  const last50Ids = await getLast50VideoIds(supabase, job);
+  if (last50Ids.length === 0) return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
 
-  const videos = await fetchPage<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count", from, to, "id");
-  if (videos.length === 0) return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
-
-  const videoIds = videos.map(v => v.id);
-  const [vks, links] = await Promise.all([
-    fetchByIds<any>(supabase, "video_keywords", "video_id", "video_id", videoIds),
-    fetchByIds<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer", "video_id", videoIds),
+  const [videos, links] = await Promise.all([
+    fetchByIds<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,created_at", "id", last50Ids),
+    fetchByIds<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer", "video_id", last50Ids),
   ]);
-  const hasKeyword = new Set<string>(vks.map((v: any) => v.video_id));
+  // Preserve the order of last50Ids (most recent first).
+  const orderIdx = new Map<string, number>(last50Ids.map((id, i) => [id, i]));
+  videos.sort((a: any, b: any) => (orderIdx.get(a.id) ?? 0) - (orderIdx.get(b.id) ?? 0));
+
   const linksByVideo = new Map<string, any[]>();
   for (const l of links) {
     const list = linksByVideo.get(l.video_id) || [];
@@ -581,7 +606,6 @@ async function runStageS3(supabase: any, job: JobRow, retailerByDomain: Map<stri
   const parts: string[] = [];
   let xlsxRowIdx = startRowIdx;
   for (const v of videos) {
-    if (hasKeyword.has(v.id)) continue;
     const vlinks = linksByVideo.get(v.id) || [];
     const description = v.description?.trim() ? v.description : "No Description";
     const baseRow = [
@@ -613,75 +637,52 @@ async function runStageS3(supabase: any, job: JobRow, retailerByDomain: Map<stri
     }
   }
   if (parts.length > 0) {
-    const fragName = String(page + 1).padStart(6, "0") + ".xml";
-    await uploadFragment(supabase, `${job.storage_prefix}/parts/s3/${fragName}`, parts.join(""));
+    await uploadFragment(supabase, `${job.storage_prefix}/parts/s3/000001.xml`, parts.join(""));
   }
-  const more = videos.length === CHUNK_VIDEO_PAGE;
-  return more
-    ? { done: false, nextCursor: { page: page + 1, rowIdx: xlsxRowIdx } }
-    : { done: true, nextStage: "s4", nextCursor: { page: 0 } };
+  return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
 }
 
 async function runStageS4(supabase: any, job: JobRow): Promise<{ done: boolean; nextCursor?: any; nextStage?: string }> {
-  const page = Number(job.cursor?.page ?? 0);
   const startRowIdx = Number(job.cursor?.rowIdx ?? 1);
-  const from = page * CHUNK_VIDEO_PAGE;
-  const to = from + CHUNK_VIDEO_PAGE - 1;
+  const last50Ids = await getLast50VideoIds(supabase, job);
+  if (last50Ids.length === 0) return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
 
-  const videos = await fetchPage<any>(supabase, "videos", "id,video_id,title,channel_id,channel_name", from, to, "id");
-  if (videos.length === 0) return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
+  const videos = await fetchByIds<any>(supabase, "videos", "id,video_id,title,channel_id,channel_name", "id", last50Ids);
+  const orderIdx = new Map<string, number>(last50Ids.map((id, i) => [id, i]));
+  videos.sort((a: any, b: any) => (orderIdx.get(a.id) ?? 0) - (orderIdx.get(b.id) ?? 0));
 
-  const videoIds = videos.map(v => v.id);
-  const vks = await fetchByIds<any>(supabase, "video_keywords", "video_id", "video_id", videoIds);
-  const hasKeyword = new Set<string>(vks.map((v: any) => v.video_id));
-  const last50 = videos.filter(v => !hasKeyword.has(v.id));
-
-  // Channel counts for "Total Videos From Channel" must be over the whole table.
-  // Cache in metadata across pages.
-  let channelCountsObj: Record<string, number> = job.metadata?.s4ChannelCounts;
-  if (!channelCountsObj) {
-    channelCountsObj = {};
-    let f = 0; const B = 1000;
-    while (true) {
-      const { data, error } = await supabase.from("videos").select("channel_id,id").range(f, f + B - 1);
-      if (error) throw error;
-      const all = data ?? [];
-      // Need to filter to last-50 (no keyword). Cheaper: count all videos per channel — same as prior `last50.filter`.
-      // Prior code grouped only no-keyword videos, but to keep memory bounded and avoid re-scanning vk table,
-      // we approximate with all videos per channel. This matches "Total Videos From Channel" semantics.
-      for (const v of all) channelCountsObj[v.channel_id] = (channelCountsObj[v.channel_id] || 0) + 1;
-      if (all.length < B) break;
-      f += B;
-    }
-    await patchJob(supabase, job.id, { metadata: { ...(job.metadata ?? {}), s4ChannelCounts: channelCountsObj } });
+  // Exact "Total Videos From Channel" for only the channels in the last-50 set.
+  const channelYtIds = [...new Set(videos.map((v: any) => v.channel_id))];
+  const channelCounts: Record<string, number> = {};
+  for (const yt of channelYtIds) {
+    const { count, error } = await supabase
+      .from("videos")
+      .select("id", { count: "exact", head: true })
+      .eq("channel_id", yt);
+    if (error) throw error;
+    channelCounts[yt] = count ?? 0;
   }
 
-  // Channel URLs lookup for the channel ids in this page.
-  const ytIds = [...new Set(last50.map(v => v.channel_id))];
-  const channels = ytIds.length === 0 ? [] : await fetchByIds<any>(supabase, "channels", "channel_id,channel_url", "channel_id", ytIds);
+  const channels = channelYtIds.length === 0 ? [] : await fetchByIds<any>(supabase, "channels", "channel_id,channel_url", "channel_id", channelYtIds);
   const chMap = new Map<string, string>(channels.map((c: any) => [c.channel_id, c.channel_url]));
 
   const parts: string[] = [];
   let xlsxRowIdx = startRowIdx;
-  for (const v of last50) {
+  for (const v of videos) {
     parts.push(rowXml([
       styled("Last 50 Scraped Video", STYLE_PLACEHOLDER),
       v.title,
       `https://www.youtube.com/watch?v=${v.video_id}`,
       v.channel_name,
       chMap.get(v.channel_id) || `https://www.youtube.com/channel/${v.channel_id}`,
-      channelCountsObj[v.channel_id] || 0,
+      channelCounts[v.channel_id] || 0,
     ], xlsxRowIdx, SHEET4_HEADERS.length));
     xlsxRowIdx++;
   }
   if (parts.length > 0) {
-    const fragName = String(page + 1).padStart(6, "0") + ".xml";
-    await uploadFragment(supabase, `${job.storage_prefix}/parts/s4/${fragName}`, parts.join(""));
+    await uploadFragment(supabase, `${job.storage_prefix}/parts/s4/000001.xml`, parts.join(""));
   }
-  const more = videos.length === CHUNK_VIDEO_PAGE;
-  return more
-    ? { done: false, nextCursor: { page: page + 1, rowIdx: xlsxRowIdx } }
-    : { done: true, nextStage: "s5", nextCursor: { page: 0 } };
+  return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
 }
 
 // Compute best video rank per channel. Cached in metadata once.
@@ -889,26 +890,49 @@ async function runStageS6(supabase: any, job: JobRow): Promise<{ done: boolean; 
 }
 
 // Stitch fragments + zip + upload final. Streams via fflate async Zip to keep memory low.
+// Includes a spill-to-tempfile fallback if the compressed zip grows past a safe in-memory threshold.
 async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   const encoder = new TextEncoder();
+  const SPILL_THRESHOLD = 80 * 1024 * 1024; // 80 MB compressed before spilling to disk
 
-  // Collected compressed zip output chunks (these are small relative to raw XML).
-  const zipChunks: Uint8Array[] = [];
+  // Either accumulate compressed chunks in memory, or spill them to a tmp file.
+  let zipChunks: Uint8Array[] | null = [];
+  let inMemorySize = 0;
+  let tmpPath: string | null = null;
+  let tmpFile: Deno.FsFile | null = null;
+  let totalBytes = 0;
   let zipDone = false;
   let zipError: Error | null = null;
+  const pendingWrites: Promise<void>[] = [];
+
+  const spillIfNeeded = async () => {
+    if (tmpPath || !zipChunks) return;
+    if (inMemorySize < SPILL_THRESHOLD) return;
+    tmpPath = await Deno.makeTempFile({ prefix: "xlsx_", suffix: ".zip" });
+    tmpFile = await Deno.open(tmpPath, { write: true, create: true, truncate: true });
+    for (const c of zipChunks) {
+      await tmpFile.write(c);
+    }
+    zipChunks = null; // free memory
+  };
 
   const zip = new Zip((err, dat, final) => {
-    if (err) {
-      zipError = err as Error;
-      return;
+    if (err) { zipError = err as Error; return; }
+    if (dat && dat.length > 0) {
+      totalBytes += dat.length;
+      if (zipChunks) {
+        zipChunks.push(dat);
+        inMemorySize += dat.length;
+      } else if (tmpFile) {
+        // schedule async write; tracked so we await before reading the file back
+        pendingWrites.push(tmpFile.write(dat).then(() => {}));
+      }
     }
-    if (dat && dat.length > 0) zipChunks.push(dat);
     if (final) zipDone = true;
   });
 
   const checkErr = () => { if (zipError) throw zipError; };
 
-  // Helper: push a small fixed file as a single ZipPassThrough entry.
   const addFixedFile = (name: string, bytes: Uint8Array) => {
     const f = new ZipPassThrough(name);
     zip.add(f);
@@ -938,47 +962,57 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       const b = await downloadFragment(supabase, p);
       entry.push(b, false);
       checkErr();
-      // drop reference; loop scope replaces b on next iter
+      await spillIfNeeded();
     }
     entry.push(tail, true);
     checkErr();
+    await spillIfNeeded();
   }
 
   zip.end();
   checkErr();
 
-  // The fflate Zip callback is synchronous; zipDone should already be true here,
-  // but guard with a microtask spin just in case.
   let spins = 0;
   while (!zipDone && spins < 1000) {
     await new Promise((r) => setTimeout(r, 0));
     spins++;
   }
   checkErr();
-
-  // Concatenate compressed chunks into final xlsx buffer (small vs raw XML).
-  let total = 0;
-  for (const c of zipChunks) total += c.length;
-  const xlsxBytes = new Uint8Array(total);
-  let off = 0;
-  for (const c of zipChunks) { xlsxBytes.set(c, off); off += c.length; }
-  // Free chunk refs.
-  zipChunks.length = 0;
+  await Promise.all(pendingWrites);
 
   const date = new Date().toISOString().split("T")[0];
   const finalPath = `${job.user_id}/youtube_full_report_${date}_${job.id.slice(0, 8)}.xlsx`;
-  const { error: upErr } = await supabase.storage.from("exports").upload(finalPath, xlsxBytes, {
+
+  let uploadBody: Uint8Array | Blob;
+  if (zipChunks) {
+    // In-memory path: concatenate the chunks.
+    const xlsxBytes = new Uint8Array(totalBytes);
+    let off = 0;
+    for (const c of zipChunks) { xlsxBytes.set(c, off); off += c.length; }
+    zipChunks.length = 0;
+    uploadBody = xlsxBytes;
+  } else {
+    // Spilled path: read the tmp file back as a Blob (still one buffer at upload time,
+    // but compressed XLSX is far smaller than raw XML).
+    if (tmpFile) { try { tmpFile.close(); } catch { /* ignore */ } }
+    const fileBytes = await Deno.readFile(tmpPath!);
+    uploadBody = new Blob([fileBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
+
+  const { error: upErr } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
     contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     upsert: true,
   });
   if (upErr) throw upErr;
+
+  if (tmpPath) { try { await Deno.remove(tmpPath); } catch { /* ignore */ } }
 
   await patchJob(supabase, job.id, {
     status: "completed",
     stage: "completed",
     storage_path: finalPath,
     result_path: finalPath,
-    file_size_bytes: xlsxBytes.byteLength,
+    file_size_bytes: totalBytes,
     progress_message: "Done",
     completed_at: nowIso(),
     lease_expires_at: null,
