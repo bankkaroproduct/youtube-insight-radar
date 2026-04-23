@@ -169,12 +169,15 @@ function styled(value: any, ...styles: CellStyle[]): Cell {
 }
 
 // ========== Data fetch ==========
-async function fetchAll<T>(supabase: any, table: string, select = "*"): Promise<T[]> {
+async function fetchAll<T>(supabase: any, table: string, select = "*", modify?: (q: any) => any): Promise<T[]> {
   const BATCH = 1000;
   let all: T[] = [];
   let from = 0;
   while (true) {
-    const { data, error } = await supabase.from(table).select(select).range(from, from + BATCH - 1);
+    let q: any = supabase.from(table).select(select);
+    if (modify) q = modify(q);
+    q = q.range(from, from + BATCH - 1);
+    const { data, error } = await q;
     if (error) throw error;
     const rows = (data ?? []) as T[];
     all = all.concat(rows);
