@@ -475,14 +475,22 @@ async function runStageS2(supabase: any, job: JobRow, retailerByDomain: Map<stri
   const from = page * CHUNK_VIDEO_PAGE;
   const to = from + CHUNK_VIDEO_PAGE - 1;
 
-  // Fetch one page of videos that have keywords. Order by id for stable pagination.
-  const videos = await fetchPage<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count", from, to, "id");
-  if (videos.length === 0) {
+  // Page only through videos that have at least one keyword association.
+  // Pull a slice of distinct video_ids from video_keywords ordered by video_id.
+  // (Stable across paging; one row per (video, keyword) but we de-dup below.)
+  const { data: vkPage, error: vkErr } = await supabase
+    .from("video_keywords")
+    .select("video_id,keyword_id,search_rank")
+    .order("video_id", { ascending: true })
+    .range(from, to);
+  if (vkErr) throw vkErr;
+  const vks = vkPage ?? [];
+  if (vks.length === 0) {
     return { done: true, nextStage: "s3", nextCursor: { page: 0 } };
   }
-  const videoIds = videos.map(v => v.id);
-  const [vks, links] = await Promise.all([
-    fetchByIds<any>(supabase, "video_keywords", "video_id,keyword_id,search_rank", "video_id", videoIds),
+  const videoIds = [...new Set(vks.map((v: any) => v.video_id))];
+  const [videos, links] = await Promise.all([
+    fetchByIds<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count", "id", videoIds),
     fetchByIds<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer", "video_id", videoIds),
   ]);
   const vkMap = new Map<string, any[]>();
