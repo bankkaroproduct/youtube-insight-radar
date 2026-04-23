@@ -209,49 +209,77 @@ function buildSheet1(keywords: any[], videoCountByKeyword: Map<string, number>) 
   return { headers, rows };
 }
 
-function buildSheet2(videos: any[], vkMap: Map<string, any[]>, keywordsById: Map<string, any>, linksByVideo: Map<string, any[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
-  const headers = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
-  const rows: any[][] = [];
-  for (const v of videos) {
-    const entries = vkMap.get(v.id);
-    if (!entries || entries.length === 0) continue;
-    const links = linksByVideo.get(v.id) || [];
-    const description = v.description?.trim() ? v.description : "No Description";
-    const totalLinks = links.length;
-    for (const entry of entries) {
-      const kw = keywordsById.get(entry.keyword_id);
-      if (!kw) continue;
-      const rank = entry.search_rank != null ? entry.search_rank : "N/A";
-      const baseRow = [
-        kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A",
-        typeof rank === "string" ? styled(rank, styleForPlaceholder(rank)) : rank,
-        kw.status || "N/A",
-        `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
-        v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
-        styled(description, styleForPlaceholder(description)), totalLinks,
-      ];
-      if (links.length === 0) {
-        rows.push([...baseRow,
-          styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
-          styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
-        ]);
-      } else {
-        links.forEach((link, idx) => {
-          const unshort = link.unshortened_url || "N/A";
-          const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
-          const social = getSocialPlatform(domain);
-          const retailer = resolveRetailerDisplay(link, retailerByDomain);
-          const excluded = computeExcluded(link, social, affiliateCounts);
-          rows.push([...baseRow,
-            `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
-            domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
-            styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
-          ]);
-        });
+const SHEET2_HEADERS = ["Keyword", "Category", "Business Aim", "Priority", "Search Rank", "KW Status", "Video Link", "Video Name", "Channel Name", "Video Views", "Video Likes", "Video Comments", "Video Description", "Total Links in Description", "Link #", "Link", "Unshortened Link", "Domain", "Affiliate Used", "Retailer", "Social Platform", "Excluded"];
+
+// Streams S2 rows directly as serialized <row> XML to a tmpfile, so the full
+// ~394k-row array never sits in memory simultaneously.
+async function buildSheet2XmlToFile(
+  videos: any[], vkMap: Map<string, any[]>, keywordsById: Map<string, any>,
+  linksByVideo: Map<string, any[]>, retailerByDomain: Map<string, string>,
+  affiliateCounts: Map<string, number>,
+): Promise<{ tmpPath: string; rowCount: number; headers: string[] }> {
+  const headers = SHEET2_HEADERS;
+  const colCount = headers.length;
+  const tmpPath = await Deno.makeTempFile({ suffix: ".xml" });
+  const file = await Deno.open(tmpPath, { write: true, truncate: true });
+  const encoder = new TextEncoder();
+  let rowCount = 0;
+  // Excel rows are 1-based; header is row 1, data starts at row 2.
+  let xlsxRowIdx = 1;
+
+  try {
+    for (const v of videos) {
+      const entries = vkMap.get(v.id);
+      if (!entries || entries.length === 0) continue;
+      const links = linksByVideo.get(v.id) || [];
+      const description = v.description?.trim() ? v.description : "No Description";
+      const totalLinks = links.length;
+      for (const entry of entries) {
+        const kw = keywordsById.get(entry.keyword_id);
+        if (!kw) continue;
+        const rank = entry.search_rank != null ? entry.search_rank : "N/A";
+        const baseRow = [
+          kw.keyword, kw.category || "N/A", kw.business_aim || "N/A", kw.priority || "N/A",
+          typeof rank === "string" ? styled(rank, styleForPlaceholder(rank)) : rank,
+          kw.status || "N/A",
+          `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
+          v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
+          styled(description, styleForPlaceholder(description)), totalLinks,
+        ];
+        let row: any[];
+        if (links.length === 0) {
+          row = [...baseRow,
+            styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
+            styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
+          ];
+          await file.write(encoder.encode(rowXml(row, xlsxRowIdx, colCount)));
+          xlsxRowIdx++;
+          rowCount++;
+        } else {
+          for (let idx = 0; idx < links.length; idx++) {
+            const link = links[idx];
+            const unshort = link.unshortened_url || "N/A";
+            const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
+            const social = getSocialPlatform(domain);
+            const retailer = resolveRetailerDisplay(link, retailerByDomain);
+            const excluded = computeExcluded(link, social, affiliateCounts);
+            row = [...baseRow,
+              `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
+              domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
+              styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
+            ];
+            await file.write(encoder.encode(rowXml(row, xlsxRowIdx, colCount)));
+            xlsxRowIdx++;
+            rowCount++;
+          }
+        }
       }
     }
+  } finally {
+    file.close();
   }
-  return { headers, rows };
+
+  return { tmpPath, rowCount, headers };
 }
 
 function buildSheet3(videos: any[], vkMap: Map<string, any[]>, linksByVideo: Map<string, any[]>, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>) {
