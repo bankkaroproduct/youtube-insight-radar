@@ -244,36 +244,60 @@ export type Database = {
       }
       export_jobs: {
         Row: {
+          attempt_count: number
           completed_at: string | null
           created_at: string
+          cursor: Json
           error: string | null
           file_size_bytes: number | null
+          heartbeat_at: string | null
           id: string
+          lease_expires_at: string | null
+          metadata: Json
           progress_message: string | null
+          result_path: string | null
+          stage: string
           status: string
           storage_path: string | null
+          storage_prefix: string | null
           user_id: string
         }
         Insert: {
+          attempt_count?: number
           completed_at?: string | null
           created_at?: string
+          cursor?: Json
           error?: string | null
           file_size_bytes?: number | null
+          heartbeat_at?: string | null
           id?: string
+          lease_expires_at?: string | null
+          metadata?: Json
           progress_message?: string | null
+          result_path?: string | null
+          stage?: string
           status?: string
           storage_path?: string | null
+          storage_prefix?: string | null
           user_id: string
         }
         Update: {
+          attempt_count?: number
           completed_at?: string | null
           created_at?: string
+          cursor?: Json
           error?: string | null
           file_size_bytes?: number | null
+          heartbeat_at?: string | null
           id?: string
+          lease_expires_at?: string | null
+          metadata?: Json
           progress_message?: string | null
+          result_path?: string | null
+          stage?: string
           status?: string
           storage_path?: string | null
+          storage_prefix?: string | null
           user_id?: string
         }
         Relationships: []
