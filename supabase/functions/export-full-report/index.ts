@@ -1,12 +1,14 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { deflate, strToU8 } from "https://esm.sh/fflate@0.8.2";
+import { deflateSync, strToU8 } from "https://esm.sh/fflate@0.8.2";
 
 // esm.sh's fflate@0.8.2 bundle does not re-export the sync `deflateRaw`.
 // Derive raw DEFLATE bytes by stripping the 2-byte zlib header and 4-byte
-// adler32 trailer from `deflate`'s zlib-wrapped output. CRC32 is computed
+// adler32 trailer from `deflateSync`'s zlib-wrapped output. CRC32 is computed
 // separately for the zip central directory, so dropping the adler32 is fine.
+// IMPORTANT: must be `deflateSync` (sync). The plain `deflate` export is the
+// callback-based async API and throws "no callback" when called like this.
 function deflateRaw(buf: Uint8Array, opts?: { level?: number }): Uint8Array {
-  const z = deflate(buf, opts);
+  const z = deflateSync(buf, opts);
   return z.subarray(2, z.length - 4);
 }
 
