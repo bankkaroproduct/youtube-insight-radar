@@ -1501,9 +1501,18 @@ async function runOneChunk(supabase: any, jobId: string) {
     await patchJob(supabase, jobId, patch);
     await selfInvoke(jobId);
   } catch (e: any) {
+    const msg = e?.message || String(e);
+    // Dispatch failures (transient edge-runtime 503/429) should NOT mark the job
+    // as failed. The current tick's state has already been patched; the stalled-
+    // job re-kick path on the next status poll will resume the run.
+    if (msg.startsWith("Failed to dispatch worker")) {
+      console.warn(`[worker] dispatch failure for job ${jobId}, leaving for re-kick: ${msg}`);
+      await patchJob(supabase, jobId, { heartbeat_at: nowIso(), lease_expires_at: null }).catch(() => {});
+      return;
+    }
     await patchJob(supabase, jobId, {
       status: "failed",
-      error: `[${job.stage}] ${e?.message || String(e)}`,
+      error: `[${job.stage}] ${msg}`,
       completed_at: nowIso(),
       lease_expires_at: null,
     });
