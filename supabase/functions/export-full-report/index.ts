@@ -1198,7 +1198,12 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
 
         // Write the sheet header XML as the first compressed unit.
         const headXml = encoder.encode(sheetHeaderXml(sheet.headers));
-        const headDef = deflateRaw(headXml, { level: 1 });
+        let headDef: Uint8Array;
+        try {
+          headDef = deflateRaw(headXml, { level: 1 });
+        } catch (e: any) {
+          throw new Error(`finalize/sheet-header s${fz.sheetIdx + 1}: ${e?.message || e}`);
+        }
         await appendToTmp(fz.tmpPath, headDef);
         fz.openEntry.crc = crc32Update(fz.openEntry.crc, headXml);
         fz.openEntry.uncompSize += headXml.length;
