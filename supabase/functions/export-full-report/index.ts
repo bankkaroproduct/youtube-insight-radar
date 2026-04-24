@@ -1325,19 +1325,23 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
 
   // ---- Phase: central_dir + EOCD (one tick) ----
   if (fz.phase === "central_dir") {
-    const cdOffset = fz.totalBytes;
-    const cdParts: Uint8Array[] = [];
-    for (const e of fz.entries) {
-      cdParts.push(buildCentralDirEntry(e.name, e.crc, e.compSize, e.uncompSize, e.offset));
+    try {
+      const cdOffset = fz.totalBytes;
+      const cdParts: Uint8Array[] = [];
+      for (const e of fz.entries) {
+        cdParts.push(buildCentralDirEntry(e.name, e.crc, e.compSize, e.uncompSize, e.offset));
+      }
+      const cd = concatU8(cdParts);
+      await appendToTmp(fz.tmpPath, cd);
+      fz.totalBytes += cd.length;
+      const eocd = buildEOCD(fz.entries.length, cd.length, cdOffset);
+      await appendToTmp(fz.tmpPath, eocd);
+      fz.totalBytes += eocd.length;
+      fz.phase = "upload";
+      console.log(`[finalize] tick phase=central_dir entries=${fz.entries.length} cdSize=${cd.length} totalBytes=${fz.totalBytes}`);
+    } catch (e: any) {
+      throw new Error(`finalize/central-dir: ${e?.message || e}`);
     }
-    const cd = concatU8(cdParts);
-    await appendToTmp(fz.tmpPath, cd);
-    fz.totalBytes += cd.length;
-    const eocd = buildEOCD(fz.entries.length, cd.length, cdOffset);
-    await appendToTmp(fz.tmpPath, eocd);
-    fz.totalBytes += eocd.length;
-    fz.phase = "upload";
-    console.log(`[finalize] tick phase=central_dir entries=${fz.entries.length} cdSize=${cd.length} totalBytes=${fz.totalBytes}`);
     await patchJob(supabase, job.id, {
       cursor: { ...(job.cursor || {}), fz },
       heartbeat_at: nowIso(),
