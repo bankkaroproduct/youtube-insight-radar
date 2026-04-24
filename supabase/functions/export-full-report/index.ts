@@ -1,5 +1,14 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { deflateRaw, strToU8 } from "https://esm.sh/fflate@0.8.2";
+import { deflate, strToU8 } from "https://esm.sh/fflate@0.8.2";
+
+// esm.sh's fflate@0.8.2 bundle does not re-export the sync `deflateRaw`.
+// Derive raw DEFLATE bytes by stripping the 2-byte zlib header and 4-byte
+// adler32 trailer from `deflate`'s zlib-wrapped output. CRC32 is computed
+// separately for the zip central directory, so dropping the adler32 is fine.
+function deflateRaw(buf: Uint8Array, opts?: { level?: number }): Uint8Array {
+  const z = deflate(buf, opts);
+  return z.subarray(2, z.length - 4);
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
