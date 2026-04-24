@@ -1,73 +1,100 @@
 
 
-## Reshape Sheets 2, 3, 4 — full coverage with per-keyword duplication
+## Make finalize resumable across invocations (fix `Stitching workbook…` hang on big sheets)
 
-Sheets 1, 5, 6 unchanged. Sheets 2, 3, 4 rewritten as below. No schema, polling, styling, or header-format changes.
+The current finalize stage stitches all 6 sheets in a single edge-function invocation. Sheet 3 (~76,688 backfill videos) and Sheet 4 (per-link rows across all channels) blow the per-invocation **CPU budget** — logs showed Sheet 3 dying after 101 fragments. `setTimeout(0)` yields wall-clock but not CPU, so it doesn't help.
 
-### Current gap
+Fix: split finalize into many short, self-invoking ticks that each compress a small batch of fragments and append to a single zip file on disk. Same pattern S2/S3/S4 already use successfully.
 
-- DB has 80,213 videos, 394,339 links, 1,710 channels.
-- S2 today only emits 3,525 keyword-mapped videos and emits each video once (collapses multi-keyword videos).
-- S3/S4 today are capped at 50 most-recent rows.
+### What changes
 
-### Target shape
+All in `supabase/functions/export-full-report/index.ts`. No schema, client, sheet content, header, styling, or row-rule changes.
 
-**S2 — Video Deep Dive (keyword-mapped videos, per-keyword rows)**
-One row per `(video_keyword, video_link)`. If a video is mapped to N keywords, it appears N times — once per keyword, with the same link rows repeated under each keyword. Headers unchanged:
-`Keyword | Category | Business Aim | Priority | Search Rank | KW Status | Video Link | Video Name | Channel Name | Video Views | Video Likes | Video Comments | Video Description | Total Links in Description | Link # | Link | Unshortened Link | Domain | Affiliate Used | Retailer | Social Platform | Excluded`
+1. **Switch from `fflate` streaming `Zip` to manual zip-entry writing.**
+   - `Zip` is in-memory and stateful — cannot survive across invocations.
+   - For each sheet, write one zip "entry" composed of: local file header → DEFLATE-compressed body chunks → data descriptor.
+   - Compress each fragment in-memory with sync `deflateRaw(buf, { level: 1 })` from `fflate@0.8.2`.
+   - Maintain a running CRC32 + uncompressedSize + compressedSize per entry — these are the only cross-tick state for the open entry, ~12 bytes each, persisted on `cursor.fz`.
+   - When all fragments for a sheet are emitted, write the data descriptor for that entry, push entry metadata onto `cursor.fz.entries` (name, offset, sizes, crc), close it.
+   - After sheet 6 + boilerplate entries (rels, styles, sharedStrings, contentTypes, workbook.xml — small, written all at once in a final tick), write the central directory + EOCD using `cursor.fz.entries`.
 
-**S3 — Backfill Video Deep Dive (videos with NO keyword mapping)**
-One row per `(video, video_link)` for every video that does not appear in `video_keywords` (~76,688 videos). `Keyword` column literal = `"last 50"`. Same column order as S2 but the keyword-side cells (Category / Business Aim / Priority / Search Rank / KW Status) are blank.
+2. **Append to a stable temp file across ticks.**
+   - First tick: `Deno.open(tmpPath, { create: true, write: true, truncate: true })`.
+   - Subsequent ticks: `Deno.open(tmpPath, { write: true, append: true })`.
+   - `cursor.fz.tmpPath` persists the path. Each tick opens, writes its batch, closes.
 
-**S4 — Channel Map (every video link across every channel)**
-One row per `(channel, video, video_link)` across all 1,710 channels and all 80,213 videos. Rows grouped/sorted by channel. Channel Name + Channel Link + Total Videos From Channel repeat across each channel block. `Keyword` cell = the keyword name when the video came through a keyword search (one row per mapped keyword, just like S2), or `"last 50"` when it came from channel backfill. Headers exactly:
-`Keyword | Video Name | Video Link | Channel Name | Channel Link | Total Videos From Channel`
+3. **Per-tick work budget.**
+   - Constant `FZ_FRAGMENTS_PER_TICK = 25` (conservative — Sheet 3 hit ~101 fragments per sheet, so this gives ~4-5 ticks per heavy sheet, well under the CPU ceiling).
+   - After processing the budget, flush, persist `cursor.fz`, call `selfInvoke(jobId)`, return.
 
-**S1, S5, S6** — untouched.
+4. **Finalize cursor shape on `export_jobs.cursor`.**
+   ```json
+   {
+     "stage": "finalize",
+     "fz": {
+       "tmpPath": "/tmp/export-<jobid>.xlsx",
+       "phase": "sheets" | "boilerplate" | "central_dir" | "upload" | "done",
+       "sheetIdx": 3,
+       "fragIdx": 47,
+       "openEntry": { "name": "xl/worksheets/sheet3.xml", "offset": 1234567, "crc": 12345, "uncompSize": 99999, "compSize": 88888, "headerWritten": true },
+       "entries": [ { "name": "...", "offset": 0, "crc": ..., "uncompSize": ..., "compSize": ... }, ... ],
+       "totalBytes": 12345678
+     }
+   }
+   ```
 
-### Implementation outline
+5. **Streaming upload stays the same.**
+   - Once `phase === "upload"`, open `tmpPath` read-only and stream `.readable` to Supabase Storage `exports` bucket (existing buffered-fallback already in place).
+   - On success: set `status=completed`, `stage=completed`, `result_path`, `file_size_bytes`, sign URL (existing `exportFullReport` client polls and downloads — no client change).
 
-All changes confined to `supabase/functions/export-full-report/index.ts`.
+6. **Logging per tick.**
+   ```
+   [finalize] tick phase=sheets sheetIdx=3 fragIdx=25..49 bytesSoFar=...
+   [finalize] sheet=3 entry-closed compSize=... uncompSize=... crc=...
+   [finalize] tick phase=boilerplate
+   [finalize] tick phase=central_dir entries=10 cdSize=...
+   [finalize] tick phase=upload bytes=...
+   [finalize] upload success path=exports/<file>.xlsx
+   ```
 
-1. **`runStageS2`** — change paging source from `video_keywords` join to: page through `video_keywords` directly (size `CHUNK_VIDEO_PAGE = 800`), then for each row hydrate `videos`, `video_links`, `keywords_search_runs`. Emit one block of link rows per `video_keyword` row. A video mapped to 3 keywords ⇒ 3 row-blocks, identical link content under each.
+7. **Stuck-job cleanup migration.**
+   ```sql
+   UPDATE public.export_jobs
+   SET status = 'failed',
+       error = 'superseded: chunked finalize',
+       completed_at = now(),
+       lease_expires_at = NULL
+   WHERE status IN ('running', 'queued')
+     AND stage IN ('finalize', 's3', 's4')
+     AND created_at > now() - interval '6 hours'
+     AND error IS DISTINCT FROM 'superseded: chunked finalize';
+   ```
 
-2. **`runStageS3`** — page through `videos` (size 800) excluding any `id` present in `video_keywords` (anti-join via batched `not in (...)` lookup against an in-memory `Set` of keyword-mapped video ids loaded once at stage start and cached on `cursor.kwVideoIds` for subsequent invocations). Emit one row per (video, link) with `Keyword = "last 50"`.
+### Why this works
 
-3. **`runStageS4`** — page through `channels` (size `CHUNK_CHANNEL_PAGE = 100`). For each channel batch:
-   - fetch `videos.channel_id IN (...)`
-   - fetch `video_links` for those videos
-   - fetch `video_keywords` + `keywords_search_runs` for those videos
-   - emit one row per `(channel, video_keyword OR "last 50", link)`. Multi-keyword videos repeat per keyword. Channel cells repeat across the block.
-
-4. **Finalize stage** — no change. Existing sync `ZipDeflate` + serialized `writeChain` + temp-file disk spill + streamed upload already handle the larger output.
-
-5. **Stuck-job cleanup migration** — mark only currently-running jobs in any stage from the last 6 hours as failed with reason `"superseded: sheets 2/3/4 reshape"` so the next export starts clean.
-
-### Size and runtime expectations
-
-- S2: ~3,525 videos × ~1.x keywords avg × link rows ⇒ moderate growth vs today.
-- S3: ~76,688 backfill videos × link rows ⇒ likely 200–400k rows (largest sheet).
-- S4: per-link rows across all videos with per-keyword duplication ⇒ 300k+ rows.
-- Compressed `.xlsx` estimate: 30–80 MB. Finalize already streams to disk + compresses, memory stays bounded.
-- Per stage stays under 60 s edge-function budget by chunked self-invocation already in place.
+- Each tick does ~25 sync `deflateRaw` calls — bounded CPU, well under the ~150–400 CPU-second edge ceiling.
+- DEFLATE state never crosses ticks (each fragment is its own raw deflate block) — the only cross-tick state is the running CRC + sizes, which are tiny and JSON-serializable on `cursor`.
+- Memory stays bounded: load fragment → compress → append to file → drop reference.
+- Output is a valid `.xlsx` (ZIP with stored `deflate` entries + standard CRC/sizes/central dir/EOCD), byte-compatible with what `fflate.Zip` produced before.
 
 ### What does NOT change
 
-- Sheet 1, 5, 6 unchanged
-- Sheet ordering and names preserved
-- Headers, styles, frozen rows, column widths preserved
-- `export_jobs` schema, client polling, signed URL flow unchanged
-- No DB schema changes
+- Sheet content, headers, styles, frozen rows, sheet order, row rules — all unchanged
+- `export_jobs` schema unchanged
+- Client polling (`exportFullReport`) unchanged — it already polls 3s and follows the signed URL
+- Sheets 1, 2, 5, 6 untouched
+- Sheet 3 / Sheet 4 logic from the previous plan stays exactly as just shipped
 
 ### Verification
 
-1. Trigger Export Full Report from `/links` or `/videos`.
-2. Stages advance `s1 → s2 → s3 → s4 → s5 → s6 → finalize → completed`.
-3. `export_jobs` row reaches `status=completed`, `result_path` populated, `file_size_bytes` populated.
-4. Download workbook, confirm in Excel:
-   - S2: a video mapped to 2 keywords appears as 2 separate row-blocks with identical link rows.
-   - S3: every row's Keyword cell = `"last 50"`, total ≈ all-link-rows for the ~76,688 backfill videos.
-   - S4: rows grouped by channel, Keyword cell shows keyword name or `"last 50"`, Channel Name repeats correctly across the block.
-   - S1, S5, S6 unchanged.
-5. Finalize logs show sheet-by-sheet progress and successful streamed upload.
+1. Cleanup migration marks the dead jobs failed.
+2. Trigger Export Full Report from `/videos`.
+3. Edge function logs show finalize ticking forward over many invocations, each finishing in seconds.
+4. `export_jobs` row reaches `status=completed`, `stage=completed`, `result_path` set, `file_size_bytes` populated.
+5. Download workbook → opens cleanly in Excel → all 6 sheets present with the per-keyword duplication and full backfill coverage from the previous plan.
+
+### Files
+
+- `supabase/functions/export-full-report/index.ts` — replace `runStageFinalize` body and helpers; switch import from `Zip, ZipDeflate` to plain `deflateRaw` + manual zip writer.
+- New migration: stuck-job cleanup (one statement).
 
