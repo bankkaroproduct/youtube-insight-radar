@@ -1,109 +1,72 @@
 
-Fix the export so “Stitching workbook...” completes reliably without changing any sheet logic, dataset scope, headers, styles, or row rules.
 
-## Root cause
+## Fix `[finalize] Worker is not defined` — switch to sync ZipDeflate
 
-The current finalize code still has three implementation problems in `supabase/functions/export-full-report/index.ts`:
+### Root cause
 
-1. It uses `ZipPassThrough` for the worksheet XML entries, which stores Sheet 2 almost uncompressed instead of deflating it. With your current fragment sizes, that makes the final `.xlsx` close to the raw XML size instead of a compact workbook.
-2. After writing to a temp file, it does `Deno.readFile(tmpPath)` and wraps the whole workbook in a `Blob`, which pulls the entire stitched file back into memory at once and defeats the disk-spill protection.
-3. It queues multiple `tmpFile.write(dat)` calls in parallel on the same file handle. Those writes should be serialized, otherwise the finalize step can become unstable or produce a corrupted/incomplete workbook under load.
+Line 2 imports `AsyncZipDeflate` from `fflate@0.8.2`, and line 956 uses it for every worksheet entry. `AsyncZipDeflate` internally instantiates a Web Worker to run DEFLATE off-thread. **Supabase Edge Runtime (Deno) does not support the `Worker` global**, so the very first `new AsyncZipDeflate(...)` call throws `ReferenceError: Worker is not defined`. Our promise wrapper catches it and the export surfaces:
 
-The database confirms finalize is still not finishing:
-- recent jobs are stuck in `status=running`, `stage=finalize`
-- `progress_message = "Stitching workbook..."`
-- `file_size_bytes` is still null
-- attempts keep increasing, which means finalize is being retried instead of completing once
+> Export failed: [finalize] Worker is not defined
 
-## What to change
+That is why `Stitching workbook…` never finishes — finalize crashes on the first sheet entry, before any zip output is ever emitted.
 
-### 1. Make worksheet entries actually compress
-Update `runStageFinalize` so the large worksheet files use a deflating zip entry instead of `ZipPassThrough`.
+### Fix (single-file, minimal)
 
-- Keep tiny static XML files as pass-through if desired
-- Change sheet entries (`xl/worksheets/sheet*.xml`) to a compressed zip entry
-- Use a low compression level for speed if needed, but do not store sheets raw
+In `supabase/functions/export-full-report/index.ts`:
 
-This keeps Sheet 2 from ballooning the final workbook size and reduces both upload cost and memory pressure.
+1. **Swap the import** on line 2:
+   - Replace `AsyncZipDeflate` with `ZipDeflate` (the synchronous variant — no Worker, same compressed output, fully supported in Deno).
 
-### 2. Keep finalize fully streamed end-to-end
-Do not read the completed temp file back into memory.
+2. **Swap the worksheet entry constructor** on line 956:
+   - `new AsyncZipDeflate(name, { level: 1 })` → `new ZipDeflate(name, { level: 1 })`
+   - Everything else (`zip.add`, `entry.push(head, false)`, `entry.push(b, false)`, `entry.push(tail, true)`) is identical for `ZipDeflate`.
 
-Replace:
-- `const fileBytes = await Deno.readFile(tmpPath)`
-- `new Blob([fileBytes])`
+3. **Keep everything else as-is**:
+   - Disk-spill via `tmpFile` ✅
+   - Serialized `writeChain` ✅
+   - Promise-based `donePromise` / `resolveDone` ✅
+   - `setTimeout(0)` yields between fragments ✅
+   - Streamed upload from `Deno.open(tmpPath).readable` with buffered fallback ✅
+   - All `[finalize]` logging ✅
 
-With:
-- open the temp file for reading
-- upload its readable stream directly to storage
+### Why this is safe
 
-If the storage client in this runtime rejects a stream body, use a guarded fallback only when the file is below a safe threshold. The primary path should remain stream-based.
+- `ZipDeflate` produces an identical-format zip stream to `AsyncZipDeflate`; the resulting `.xlsx` is byte-compatible.
+- Compression still happens (level 1, fast). Sheet 2's ~118 MB raw XML still compresses to ~10–20 MB.
+- Memory profile stays the same because we already drain each fragment via `setTimeout(0)` and stream to disk — sync DEFLATE just runs the deflate step inline between yields instead of in a worker.
+- No schema, no client, no dataset, no styling, no row-rule changes.
 
-### 3. Serialize temp-file writes
-Change the zip callback write flow so chunks are written to disk in order, not as concurrent promises on the same file descriptor.
+### Cleanup
 
-Implementation direction:
-- keep a single `writeChain` promise
-- append each new chunk write onto that chain
-- await the final chain after `donePromise`
+Mark the latest jobs that died with this `Worker is not defined` error as failed so a fresh export starts clean. Filter narrowly:
 
-This removes write-order races during finalize.
+```sql
+UPDATE public.export_jobs
+SET status = 'failed',
+    error = 'superseded: AsyncZipDeflate Worker unsupported in edge runtime',
+    completed_at = now(),
+    lease_expires_at = NULL
+WHERE status IN ('running', 'failed')
+  AND stage = 'finalize'
+  AND error IS DISTINCT FROM 'superseded: AsyncZipDeflate Worker unsupported in edge runtime'
+  AND created_at > now() - interval '6 hours';
+```
 
-### 4. Keep the existing Promise-based zip completion
-Retain the current `donePromise` approach that waits for `final === true`. That part is correct and should stay.
+### Files changed
 
-### 5. Add targeted finalize instrumentation
-Add a few lightweight logs around finalize only:
+- `supabase/functions/export-full-report/index.ts` — 2 lines (import + constructor)
+- one-line cleanup migration
 
-- when each sheet starts stitching
-- fragment count per sheet
-- bytes emitted so far
-- temp file size before upload
-- upload start / upload success
+### Verification
 
-This makes the next failure diagnosable instead of leaving silent `running/finalize` jobs.
+1. Deploy + cleanup migration runs.
+2. Trigger Export Full Report from `/videos`.
+3. Edge function logs show:
+   - `[finalize] start job=…`
+   - `[finalize] sheet=1 stage=s1 fragments=… bytesSoFar=…`
+   - … through sheet 6 …
+   - `[finalize] zip complete tmpSize=… emittedBytes=…`
+   - `[finalize] upload success path=…`
+4. `export_jobs` row reaches `status=completed`, `stage=completed`, `file_size_bytes` populated, `result_path` set.
+5. Download the signed URL, open in Excel, confirm 6 sheets with correct rows / headers / styles.
 
-### 6. Safely clean up stale finalize jobs
-Mark only stale jobs that are already stuck in `stage='finalize'` with expired heartbeats as failed before retrying.
-
-Do not use a broad migration that can fail unrelated running jobs in earlier stages.
-
-## Files to update
-
-- `supabase/functions/export-full-report/index.ts`
-  - change worksheet zip entry type
-  - stream upload from temp file
-  - serialize temp writes
-  - add finalize logs
-- optional small migration:
-  - only fail stale jobs in `stage='finalize'`
-
-## What will not change
-
-- No export dataset changes
-- No sheet order/name changes
-- No header changes
-- No style changes
-- No row logic changes
-- No client polling changes unless absolutely required
-- No schema redesign
-
-## Verification
-
-1. Start a fresh export.
-2. Confirm stage flow reaches `Stitching workbook...` only once near the end.
-3. Confirm the job finishes with:
-   - `status = completed`
-   - `stage = completed`
-   - `file_size_bytes` populated
-   - `result_path` populated
-4. Confirm `attempt_count` does not keep climbing during finalize.
-5. Download the workbook and verify:
-   - all 6 sheets exist
-   - same data shape as before
-   - no missing rows
-   - same headers, frozen header row, and styling
-6. Check finalize logs to confirm:
-   - sheets stitched in order
-   - upload succeeds
-   - no retry loop remains
