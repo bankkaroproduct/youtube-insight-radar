@@ -1,77 +1,109 @@
 
+Fix the export so “Stitching workbook...” completes reliably without changing any sheet logic, dataset scope, headers, styles, or row rules.
 
-## Fix the finalize stall + Sheet 2 memory pressure
+## Root cause
 
-### Root cause
+The current finalize code still has three implementation problems in `supabase/functions/export-full-report/index.ts`:
 
-Two compounding problems in `runStageFinalize` (lines 900–1015):
+1. It uses `ZipPassThrough` for the worksheet XML entries, which stores Sheet 2 almost uncompressed instead of deflating it. With your current fragment sizes, that makes the final `.xlsx` close to the raw XML size instead of a compact workbook.
+2. After writing to a temp file, it does `Deno.readFile(tmpPath)` and wraps the whole workbook in a `Blob`, which pulls the entire stitched file back into memory at once and defeats the disk-spill protection.
+3. It queues multiple `tmpFile.write(dat)` calls in parallel on the same file handle. Those writes should be serialized, otherwise the finalize step can become unstable or produce a corrupted/incomplete workbook under load.
 
-1. **Bounded busy-wait drops the zip**: the `while (!zipDone && spins < 1000)` loop on line 982 exits after 1000 microtask ticks. With 127 MB of raw XML (Sheet 2 alone is 118 MB / 7 fragments), fflate's async DEFLATE produces far more than 1000 internal chunks. The loop falls through with `zipDone === false`, then the code uploads a half-built buffer and the job sits in `running/finalize` forever (heartbeats keep firing because the worker is technically alive, but no progress is ever recorded).
-2. **fflate `Zip` + 118 MB of input inside a 256 MB Edge Function**: pure-JS DEFLATE keeps the sliding window + output buffer in heap. Logs already show one `Memory limit exceeded` event during this stage.
+The database confirms finalize is still not finishing:
+- recent jobs are stuck in `status=running`, `stage=finalize`
+- `progress_message = "Stitching workbook..."`
+- `file_size_bytes` is still null
+- attempts keep increasing, which means finalize is being retried instead of completing once
 
-Evidence: latest job `49acd42a…` has been at `stage=finalize / Stitching workbook...` for ~1h41m, heartbeating but never completing. Fragment sizes confirmed via storage: s1=109KB, **s2=118MB/7frags**, s3=770KB, s4=28KB, s5=6.6MB, s6=1.9MB.
+## What to change
 
-### Fix
+### 1. Make worksheet entries actually compress
+Update `runStageFinalize` so the large worksheet files use a deflating zip entry instead of `ZipPassThrough`.
 
-**A. Replace the bounded busy-wait with a real completion signal.**
+- Keep tiny static XML files as pass-through if desired
+- Change sheet entries (`xl/worksheets/sheet*.xml`) to a compressed zip entry
+- Use a low compression level for speed if needed, but do not store sheets raw
 
-Wrap the `Zip` callback in a Promise that resolves when `final === true` is received, and `await` that promise after `zip.end()`. No `spins` counter, no `setTimeout(0)` loop.
+This keeps Sheet 2 from ballooning the final workbook size and reduces both upload cost and memory pressure.
 
-```ts
-let resolveDone!: () => void;
-let rejectDone!: (e: Error) => void;
-const donePromise = new Promise<void>((res, rej) => { resolveDone = res; rejectDone = rej; });
+### 2. Keep finalize fully streamed end-to-end
+Do not read the completed temp file back into memory.
 
-const zip = new Zip((err, dat, final) => {
-  if (err) { rejectDone(err as Error); return; }
-  if (dat?.length) { totalBytes += dat.length; /* push to chunks or tmpFile */ }
-  if (final) resolveDone();
-});
-// ...
-zip.end();
-await donePromise;
-await Promise.all(pendingWrites);
-```
+Replace:
+- `const fileBytes = await Deno.readFile(tmpPath)`
+- `new Blob([fileBytes])`
 
-This alone unblocks the current stuck job class — the zip will actually complete instead of being abandoned at spin #1000.
+With:
+- open the temp file for reading
+- upload its readable stream directly to storage
 
-**B. Stream Sheet 2 to disk from the start (don't keep zip output in memory).**
+If the storage client in this runtime rejects a stream body, use a guarded fallback only when the file is below a safe threshold. The primary path should remain stream-based.
 
-Sheet 2's compressed output will still be ~10–20 MB, but the *uncompressed* working set during DEFLATE is the danger. Switch finalize to **always spill to a tmp file** rather than gating on an 80 MB threshold. This removes the in-memory `zipChunks` array entirely and avoids the OOM seen in logs:
+### 3. Serialize temp-file writes
+Change the zip callback write flow so chunks are written to disk in order, not as concurrent promises on the same file descriptor.
 
-- Open `Deno.makeTempFile()` before calling `addFixedFile`.
-- In the `Zip` callback, push every emitted chunk straight to `tmpFile.write(dat)` (track the promise in `pendingWrites`).
-- After `await donePromise` and `await Promise.all(pendingWrites)`, close the file, then upload via `Deno.open(tmpPath).readable` as a `ReadableStream` body to `supabase.storage.from("exports").upload()` (the supabase-js v2 client accepts a stream).
-- If the storage SDK in this Deno runtime rejects a stream body, fall back to `await Deno.readFile(tmpPath)` and upload the buffer (compressed xlsx is small enough to fit even at this scale).
+Implementation direction:
+- keep a single `writeChain` promise
+- append each new chunk write onto that chain
+- await the final chain after `donePromise`
 
-**C. Garbage-collect fragment buffers between pushes.**
+This removes write-order races during finalize.
 
-After `entry.push(b, false)`, drop the reference (`b = null as any`) and `await new Promise(r => setTimeout(r, 0))` once per fragment to let the runtime reclaim the 16–20 MB chunk before downloading the next one. Currently the loop on line 967 holds the previous fragment alive until the next iteration's `downloadFragment` resolves.
+### 4. Keep the existing Promise-based zip completion
+Retain the current `donePromise` approach that waits for `final === true`. That part is correct and should stay.
 
-**D. (Optional safety) Re-chunk Sheet 2 fragments smaller next run.**
+### 5. Add targeted finalize instrumentation
+Add a few lightweight logs around finalize only:
 
-S2's fragments average ~17 MB each. If memory remains tight after A–C, halve `CHUNK_VIDEO_PAGE` (or whatever S2's page size constant is named) so each fragment is ~8 MB. This only affects *new* exports; the current stuck job's fragments stay as-is.
+- when each sheet starts stitching
+- fragment count per sheet
+- bytes emitted so far
+- temp file size before upload
+- upload start / upload success
 
-### What does NOT change
+This makes the next failure diagnosable instead of leaving silent `running/finalize` jobs.
 
-- Sheet count / order / names / headers / styles
-- Row inclusion rules (S2 still contains all keyword-linked videos; S3/S4 still bounded to last 50)
-- `export_jobs` schema, stage machine, client polling, signed-URL flow
-- Storage bucket / path layout
+### 6. Safely clean up stale finalize jobs
+Mark only stale jobs that are already stuck in `stage='finalize'` with expired heartbeats as failed before retrying.
 
-### Files changed
+Do not use a broad migration that can fail unrelated running jobs in earlier stages.
 
-- `supabase/functions/export-full-report/index.ts` — only `runStageFinalize` (~lines 900–1015). ~40 lines touched. Nothing else.
+## Files to update
 
-### Cleanup before retry
+- `supabase/functions/export-full-report/index.ts`
+  - change worksheet zip entry type
+  - stream upload from temp file
+  - serialize temp writes
+  - add finalize logs
+- optional small migration:
+  - only fail stale jobs in `stage='finalize'`
 
-The 4 stuck jobs (`49acd42a`, `1f73c31d`, `21dfa0be`, `f6b0c0f4`) need to be marked failed so a new export can start cleanly. The new fix will mark `status='failed'` with `error='superseded'` for any job stuck in `finalize` with `heartbeat_at < now() - interval '15 minutes'` on the next worker tick.
+## What will not change
 
-### Verification
+- No export dataset changes
+- No sheet order/name changes
+- No header changes
+- No style changes
+- No row logic changes
+- No client polling changes unless absolutely required
+- No schema redesign
 
-1. Mark the 4 stuck jobs failed (one-time SQL during deploy).
-2. Trigger a fresh export from `/links` or `/videos`.
-3. Watch `export_jobs`: progress should advance through s1→s6, then `Stitching workbook...` should complete in **<60 seconds** and land at `status=completed` with `file_size_bytes` populated.
-4. Download the signed URL; open in Excel; confirm all 6 sheets render with correct row counts, frozen header, and cell styles.
-5. Watch edge function logs for the absence of `Memory limit exceeded` during finalize.
+## Verification
 
+1. Start a fresh export.
+2. Confirm stage flow reaches `Stitching workbook...` only once near the end.
+3. Confirm the job finishes with:
+   - `status = completed`
+   - `stage = completed`
+   - `file_size_bytes` populated
+   - `result_path` populated
+4. Confirm `attempt_count` does not keep climbing during finalize.
+5. Download the workbook and verify:
+   - all 6 sheets exist
+   - same data shape as before
+   - no missing rows
+   - same headers, frozen header row, and styling
+6. Check finalize logs to confirm:
+   - sheets stitched in order
+   - upload succeeds
+   - no retry loop remains
