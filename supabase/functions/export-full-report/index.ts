@@ -1378,15 +1378,19 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
     if (upErr) {
       console.warn(`[finalize] stream upload failed (${upErr?.message || upErr}), falling back to buffered upload`);
       if (stat.size > 80 * 1024 * 1024) {
-        throw new Error(`Stream upload failed and file too large for buffered fallback (${stat.size} bytes): ${upErr?.message || upErr}`);
+        throw new Error(`finalize/upload: stream upload failed and file too large for buffered fallback (${stat.size} bytes): ${upErr?.message || upErr}`);
       }
-      const fileBytes = await Deno.readFile(fz.tmpPath);
-      const uploadBody = new Blob([fileBytes], { type: contentType });
-      const { error: upErr2 } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
-        contentType,
-        upsert: true,
-      });
-      if (upErr2) throw upErr2;
+      try {
+        const fileBytes = await Deno.readFile(fz.tmpPath);
+        const uploadBody = new Blob([fileBytes], { type: contentType });
+        const { error: upErr2 } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
+          contentType,
+          upsert: true,
+        });
+        if (upErr2) throw upErr2;
+      } catch (e: any) {
+        throw new Error(`finalize/upload buffered: ${e?.message || e}`);
+      }
     }
     console.log(`[finalize] upload success path=${finalPath} size=${stat.size}`);
 
