@@ -1,12 +1,14 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { deflate, strToU8 } from "https://esm.sh/fflate@0.8.2";
+import { deflateSync, strToU8 } from "https://esm.sh/fflate@0.8.2";
 
 // esm.sh's fflate@0.8.2 bundle does not re-export the sync `deflateRaw`.
 // Derive raw DEFLATE bytes by stripping the 2-byte zlib header and 4-byte
-// adler32 trailer from `deflate`'s zlib-wrapped output. CRC32 is computed
+// adler32 trailer from `deflateSync`'s zlib-wrapped output. CRC32 is computed
 // separately for the zip central directory, so dropping the adler32 is fine.
+// IMPORTANT: must be `deflateSync` (sync). The plain `deflate` export is the
+// callback-based async API and throws "no callback" when called like this.
 function deflateRaw(buf: Uint8Array, opts?: { level?: number }): Uint8Array {
-  const z = deflate(buf, opts);
+  const z = deflateSync(buf, opts);
   return z.subarray(2, z.length - 4);
 }
 
@@ -1196,7 +1198,12 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
 
         // Write the sheet header XML as the first compressed unit.
         const headXml = encoder.encode(sheetHeaderXml(sheet.headers));
-        const headDef = deflateRaw(headXml, { level: 1 });
+        let headDef: Uint8Array;
+        try {
+          headDef = deflateRaw(headXml, { level: 1 });
+        } catch (e: any) {
+          throw new Error(`finalize/sheet-header s${fz.sheetIdx + 1}: ${e?.message || e}`);
+        }
         await appendToTmp(fz.tmpPath, headDef);
         fz.openEntry.crc = crc32Update(fz.openEntry.crc, headXml);
         fz.openEntry.uncompSize += headXml.length;
@@ -1209,10 +1216,15 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       while (fz.fragIdx < fz.fragPaths.length && workUnits < FZ_FRAGMENTS_PER_TICK) {
         const path = fz.fragPaths[fz.fragIdx];
         let buf: Uint8Array | null = await downloadFragment(supabase, path);
-        const def = deflateRaw(buf, { level: 1 });
+        let def: Uint8Array;
+        try {
+          def = deflateRaw(buf!, { level: 1 });
+        } catch (e: any) {
+          throw new Error(`finalize/sheet-frag s${fz.sheetIdx + 1}#${fz.fragIdx}: ${e?.message || e}`);
+        }
         await appendToTmp(fz.tmpPath, def);
-        fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, buf);
-        fz.openEntry!.uncompSize += buf.length;
+        fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, buf!);
+        fz.openEntry!.uncompSize += buf!.length;
         fz.openEntry!.compSize += def.length;
         fz.totalBytes += def.length;
         buf = null;
@@ -1224,7 +1236,12 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       if (fz.fragIdx >= fz.fragPaths.length) {
         // Footer XML.
         const tailXml = encoder.encode(SHEET_FOOTER_XML);
-        const tailDef = deflateRaw(tailXml, { level: 1 });
+        let tailDef: Uint8Array;
+        try {
+          tailDef = deflateRaw(tailXml, { level: 1 });
+        } catch (e: any) {
+          throw new Error(`finalize/sheet-tail s${fz.sheetIdx + 1}: ${e?.message || e}`);
+        }
         await appendToTmp(fz.tmpPath, tailDef);
         fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, tailXml);
         fz.openEntry!.uncompSize += tailXml.length;
@@ -1280,7 +1297,12 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       const header = buildLocalHeader(f.name);
       await appendToTmp(fz.tmpPath, header);
       fz.totalBytes += header.length;
-      const def = deflateRaw(f.bytes, { level: 1 });
+      let def: Uint8Array;
+      try {
+        def = deflateRaw(f.bytes, { level: 1 });
+      } catch (e: any) {
+        throw new Error(`finalize/boilerplate ${f.name}: ${e?.message || e}`);
+      }
       await appendToTmp(fz.tmpPath, def);
       const crc = crc32Update(0, f.bytes);
       fz.totalBytes += def.length;
@@ -1303,19 +1325,23 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
 
   // ---- Phase: central_dir + EOCD (one tick) ----
   if (fz.phase === "central_dir") {
-    const cdOffset = fz.totalBytes;
-    const cdParts: Uint8Array[] = [];
-    for (const e of fz.entries) {
-      cdParts.push(buildCentralDirEntry(e.name, e.crc, e.compSize, e.uncompSize, e.offset));
+    try {
+      const cdOffset = fz.totalBytes;
+      const cdParts: Uint8Array[] = [];
+      for (const e of fz.entries) {
+        cdParts.push(buildCentralDirEntry(e.name, e.crc, e.compSize, e.uncompSize, e.offset));
+      }
+      const cd = concatU8(cdParts);
+      await appendToTmp(fz.tmpPath, cd);
+      fz.totalBytes += cd.length;
+      const eocd = buildEOCD(fz.entries.length, cd.length, cdOffset);
+      await appendToTmp(fz.tmpPath, eocd);
+      fz.totalBytes += eocd.length;
+      fz.phase = "upload";
+      console.log(`[finalize] tick phase=central_dir entries=${fz.entries.length} cdSize=${cd.length} totalBytes=${fz.totalBytes}`);
+    } catch (e: any) {
+      throw new Error(`finalize/central-dir: ${e?.message || e}`);
     }
-    const cd = concatU8(cdParts);
-    await appendToTmp(fz.tmpPath, cd);
-    fz.totalBytes += cd.length;
-    const eocd = buildEOCD(fz.entries.length, cd.length, cdOffset);
-    await appendToTmp(fz.tmpPath, eocd);
-    fz.totalBytes += eocd.length;
-    fz.phase = "upload";
-    console.log(`[finalize] tick phase=central_dir entries=${fz.entries.length} cdSize=${cd.length} totalBytes=${fz.totalBytes}`);
     await patchJob(supabase, job.id, {
       cursor: { ...(job.cursor || {}), fz },
       heartbeat_at: nowIso(),
@@ -1352,15 +1378,19 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
     if (upErr) {
       console.warn(`[finalize] stream upload failed (${upErr?.message || upErr}), falling back to buffered upload`);
       if (stat.size > 80 * 1024 * 1024) {
-        throw new Error(`Stream upload failed and file too large for buffered fallback (${stat.size} bytes): ${upErr?.message || upErr}`);
+        throw new Error(`finalize/upload: stream upload failed and file too large for buffered fallback (${stat.size} bytes): ${upErr?.message || upErr}`);
       }
-      const fileBytes = await Deno.readFile(fz.tmpPath);
-      const uploadBody = new Blob([fileBytes], { type: contentType });
-      const { error: upErr2 } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
-        contentType,
-        upsert: true,
-      });
-      if (upErr2) throw upErr2;
+      try {
+        const fileBytes = await Deno.readFile(fz.tmpPath);
+        const uploadBody = new Blob([fileBytes], { type: contentType });
+        const { error: upErr2 } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
+          contentType,
+          upsert: true,
+        });
+        if (upErr2) throw upErr2;
+      } catch (e: any) {
+        throw new Error(`finalize/upload buffered: ${e?.message || e}`);
+      }
     }
     console.log(`[finalize] upload success path=${finalPath} size=${stat.size}`);
 
