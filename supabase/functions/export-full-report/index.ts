@@ -1216,10 +1216,15 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       while (fz.fragIdx < fz.fragPaths.length && workUnits < FZ_FRAGMENTS_PER_TICK) {
         const path = fz.fragPaths[fz.fragIdx];
         let buf: Uint8Array | null = await downloadFragment(supabase, path);
-        const def = deflateRaw(buf, { level: 1 });
+        let def: Uint8Array;
+        try {
+          def = deflateRaw(buf!, { level: 1 });
+        } catch (e: any) {
+          throw new Error(`finalize/sheet-frag s${fz.sheetIdx + 1}#${fz.fragIdx}: ${e?.message || e}`);
+        }
         await appendToTmp(fz.tmpPath, def);
-        fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, buf);
-        fz.openEntry!.uncompSize += buf.length;
+        fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, buf!);
+        fz.openEntry!.uncompSize += buf!.length;
         fz.openEntry!.compSize += def.length;
         fz.totalBytes += def.length;
         buf = null;
