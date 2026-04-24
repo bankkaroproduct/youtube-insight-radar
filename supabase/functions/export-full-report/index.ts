@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Zip, ZipPassThrough, AsyncZipDeflate, strToU8 } from "https://esm.sh/fflate@0.8.2";
+import { Zip, ZipPassThrough, ZipDeflate, strToU8 } from "https://esm.sh/fflate@0.8.2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -953,7 +953,7 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   for (let i = 0; i < SHEETS_IN_ORDER.length; i++) {
     const sheet = SHEETS_IN_ORDER[i];
     const head = encoder.encode(sheetHeaderXml(sheet.headers));
-    const entry = new AsyncZipDeflate(`xl/worksheets/sheet${i + 1}.xml`, { level: 1 });
+    const entry = new ZipDeflate(`xl/worksheets/sheet${i + 1}.xml`, { level: 1 });
     zip.add(entry);
     entry.push(head, false);
 
