@@ -359,20 +359,49 @@ async function selfInvoke(jobId: string) {
   const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/export-full-report`;
   // Await the handoff so the next worker tick is actually dispatched before this
   // invocation exits; otherwise jobs can get stranded mid-stage.
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-      "x-internal-worker": "1",
-    },
-    body: JSON.stringify({ action: "work", job_id: jobId }),
-  });
-
-  const bodyText = await response.text().catch(() => "");
-  if (!response.ok) {
-    throw new Error(`Failed to dispatch worker (${response.status}): ${bodyText || response.statusText}`);
+  // Edge runtime occasionally returns transient 503 SUPABASE_EDGE_RUNTIME_ERROR
+  // or 429 during worker dispatch. Retry up to 5 times with linear backoff so
+  // a transient blip doesn't kill an in-progress export.
+  const BACKOFFS_MS = [500, 1000, 2000, 4000, 8000];
+  let lastStatus = 0;
+  let lastBody = "";
+  let lastErr: any = null;
+  for (let attempt = 0; attempt < BACKOFFS_MS.length; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+          "x-internal-worker": "1",
+        },
+        body: JSON.stringify({ action: "work", job_id: jobId }),
+      });
+      if (response.ok) {
+        // Drain body so the connection is reusable.
+        await response.text().catch(() => "");
+        return;
+      }
+      lastStatus = response.status;
+      lastBody = await response.text().catch(() => "");
+      // Retry on 429 / 5xx; bail immediately on other 4xx.
+      if (response.status !== 429 && response.status < 500) {
+        throw new Error(`Failed to dispatch worker (${response.status}): ${lastBody || response.statusText}`);
+      }
+    } catch (e: any) {
+      // Network errors are also retryable.
+      lastErr = e;
+      if (e?.message?.startsWith?.("Failed to dispatch worker (4")) throw e;
+    }
+    if (attempt < BACKOFFS_MS.length - 1) {
+      await new Promise((r) => setTimeout(r, BACKOFFS_MS[attempt]));
+    }
   }
+  throw new Error(
+    `Failed to dispatch worker (${lastStatus || "network"}) after ${BACKOFFS_MS.length} attempts: ${
+      lastBody || lastErr?.message || "unknown"
+    }`,
+  );
 }
 
 // ========== Pattern + affiliate-counts cache (per chunk run) ==========
