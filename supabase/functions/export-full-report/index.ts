@@ -1206,7 +1206,8 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
 
   // ---- Phase: sheets ----
   if (fz.phase === "sheets") {
-    while (fz.sheetIdx < sheetCount && workUnits < FZ_FRAGMENTS_PER_TICK) {
+    const overBudget = () => (Date.now() - t0) >= FZ_TICK_CPU_BUDGET_MS;
+    while (fz.sheetIdx < sheetCount && workUnits < FZ_FRAGMENTS_PER_TICK && !overBudget()) {
       const sheet = SHEETS_IN_ORDER[fz.sheetIdx];
       const entryName = `xl/worksheets/sheet${fz.sheetIdx + 1}.xml`;
 
@@ -1246,8 +1247,9 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
         workUnits++;
       }
 
-      // Process up to budget fragments for this sheet.
-      while (fz.fragIdx < fz.fragPaths.length && workUnits < FZ_FRAGMENTS_PER_TICK) {
+      // Process fragments for this sheet, but stop as soon as the CPU budget
+      // for this tick is exhausted — large sheets MUST be split across ticks.
+      while (fz.fragIdx < fz.fragPaths.length && workUnits < FZ_FRAGMENTS_PER_TICK && !overBudget()) {
         const path = fz.fragPaths[fz.fragIdx];
         let buf: Uint8Array | null = await downloadFragment(supabase, path);
         let def: Uint8Array;
@@ -1267,6 +1269,7 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       }
 
       // If we've consumed all fragments for this sheet, close the entry.
+      // Otherwise, persist mid-sheet state and let the next tick continue.
       if (fz.fragIdx >= fz.fragPaths.length) {
         // Footer XML.
         const tailXml = encoder.encode(SHEET_FOOTER_XML);
@@ -1299,6 +1302,10 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
         fz.fragPaths = undefined;
         fz.fragIdx = 0;
         fz.sheetIdx++;
+      } else {
+        // Mid-sheet yield: keep openEntry + fragIdx + fragPaths so next tick resumes.
+        console.log(`[finalize] mid-sheet yield s${fz.sheetIdx + 1} fragIdx=${fz.fragIdx}/${fz.fragPaths.length} elapsedMs=${Date.now() - t0}`);
+        break;
       }
     }
 
