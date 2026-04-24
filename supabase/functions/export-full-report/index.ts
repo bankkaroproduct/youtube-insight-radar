@@ -570,125 +570,222 @@ async function runStageS2(supabase: any, job: JobRow, retailerByDomain: Map<stri
     : { done: true, nextStage: "s3", nextCursor: { page: 0 } };
 }
 
-// Build (and cache in job.metadata) the canonical "Last 50 scraped videos" set.
-// This is the 50 most recently created videos in the database, used for both S3 and S4.
-async function getLast50VideoIds(supabase: any, job: JobRow): Promise<string[]> {
-  if (Array.isArray(job.metadata?.last50VideoIds) && job.metadata.last50VideoIds.length > 0) {
-    return job.metadata.last50VideoIds as string[];
+// Build (and cache in job.metadata) the set of all video ids that have at least
+// one keyword association. Used by S3 to anti-join (videos NOT in this set are
+// "channel backfill" videos). Cached in job.metadata so subsequent S3 pages
+// don't re-scan video_keywords.
+async function getKeywordVideoIdSet(supabase: any, job: JobRow): Promise<Set<string>> {
+  if (Array.isArray(job.metadata?.kwVideoIds)) {
+    return new Set(job.metadata.kwVideoIds as string[]);
   }
-  const { data, error } = await supabase
-    .from("videos")
-    .select("id")
-    .order("created_at", { ascending: false })
-    .limit(50);
-  if (error) throw error;
-  const ids = (data ?? []).map((v: any) => v.id);
-  await patchJob(supabase, job.id, { metadata: { ...(job.metadata ?? {}), last50VideoIds: ids } });
-  // Re-attach so the caller's job reference stays consistent within this invocation.
-  job.metadata = { ...(job.metadata ?? {}), last50VideoIds: ids };
+  const ids = new Set<string>();
+  let from = 0;
+  const BATCH = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from("video_keywords")
+      .select("video_id")
+      .range(from, from + BATCH - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const r of rows) ids.add(r.video_id);
+    if (rows.length < BATCH) break;
+    from += BATCH;
+  }
+  const arr = [...ids];
+  await patchJob(supabase, job.id, { metadata: { ...(job.metadata ?? {}), kwVideoIds: arr } });
+  job.metadata = { ...(job.metadata ?? {}), kwVideoIds: arr };
   return ids;
 }
 
+// S3 — Backfill Video Deep Dive. One row per (video, link) for every video
+// that has NO keyword mapping. Pages through `videos` table directly.
 async function runStageS3(supabase: any, job: JobRow, retailerByDomain: Map<string, string>, affiliateCounts: Map<string, number>): Promise<{ done: boolean; nextCursor?: any; nextStage?: string }> {
+  const page = Number(job.cursor?.page ?? 0);
   const startRowIdx = Number(job.cursor?.rowIdx ?? 1);
-  const last50Ids = await getLast50VideoIds(supabase, job);
-  if (last50Ids.length === 0) return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
+  const from = page * CHUNK_VIDEO_PAGE;
+  const to = from + CHUNK_VIDEO_PAGE - 1;
 
-  const [videos, links] = await Promise.all([
-    fetchByIds<any>(supabase, "videos", "id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count,created_at", "id", last50Ids),
-    fetchByIds<any>(supabase, "video_links", "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer", "video_id", last50Ids),
+  const kwSet = await getKeywordVideoIdSet(supabase, job);
+
+  const { data: vidPage, error: vErr } = await supabase
+    .from("videos")
+    .select("id,video_id,title,description,channel_id,channel_name,view_count,like_count,comment_count")
+    .order("id", { ascending: true })
+    .range(from, to);
+  if (vErr) throw vErr;
+  const allVids = vidPage ?? [];
+  if (allVids.length === 0) {
+    return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
+  }
+  const backfillVids = allVids.filter((v: any) => !kwSet.has(v.id));
+
+  const parts: string[] = [];
+  let xlsxRowIdx = startRowIdx;
+  if (backfillVids.length > 0) {
+    const vidIds = backfillVids.map((v: any) => v.id);
+    const links = await fetchByIds<any>(
+      supabase,
+      "video_links",
+      "id,video_id,original_url,unshortened_url,domain,original_domain,affiliate_platform,resolved_retailer",
+      "video_id",
+      vidIds,
+    );
+    const linksByVideo = new Map<string, any[]>();
+    for (const l of links) {
+      const list = linksByVideo.get(l.video_id) || [];
+      list.push(l);
+      linksByVideo.set(l.video_id, list);
+    }
+    for (const v of backfillVids) {
+      const vlinks = linksByVideo.get(v.id) || [];
+      const description = v.description?.trim() ? v.description : "No Description";
+      const baseRow = [
+        "last 50",
+        `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
+        v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
+        styled(description, styleForPlaceholder(description)), vlinks.length,
+      ];
+      if (vlinks.length === 0) {
+        parts.push(rowXml([...baseRow,
+          styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
+          styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
+        ], xlsxRowIdx, SHEET3_HEADERS.length));
+        xlsxRowIdx++;
+      } else {
+        vlinks.forEach((link, idx) => {
+          const unshort = link.unshortened_url || "N/A";
+          const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
+          const social = getSocialPlatform(domain);
+          const retailer = resolveRetailerDisplay(link, retailerByDomain);
+          const excluded = computeExcluded(link, social, affiliateCounts);
+          parts.push(rowXml([...baseRow,
+            `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
+            domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
+            styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
+          ], xlsxRowIdx, SHEET3_HEADERS.length));
+          xlsxRowIdx++;
+        });
+      }
+    }
+  }
+  if (parts.length > 0) {
+    const fragName = String(page + 1).padStart(6, "0") + ".xml";
+    await uploadFragment(supabase, `${job.storage_prefix}/parts/s3/${fragName}`, parts.join(""));
+  }
+  const more = allVids.length === CHUNK_VIDEO_PAGE;
+  return more
+    ? { done: false, nextCursor: { page: page + 1, rowIdx: xlsxRowIdx } }
+    : { done: true, nextStage: "s4", nextCursor: { page: 0 } };
+}
+
+// S4 — Channel Map. One row per (channel, video, link). Multi-keyword videos
+// repeat once per keyword. Backfill videos use literal "last 50". Channels are
+// paged in CHUNK_CHANNEL_PAGE batches; channel name/link/total repeat across
+// each channel's rows.
+async function runStageS4(supabase: any, job: JobRow): Promise<{ done: boolean; nextCursor?: any; nextStage?: string }> {
+  const page = Number(job.cursor?.page ?? 0);
+  const startRowIdx = Number(job.cursor?.rowIdx ?? 1);
+  const from = page * CHUNK_CHANNEL_PAGE;
+  const to = from + CHUNK_CHANNEL_PAGE - 1;
+
+  const channels = await fetchPage<any>(supabase, "channels", "id,channel_id,channel_name,channel_url", from, to, "id");
+  if (channels.length === 0) return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
+
+  const channelYtIds = channels.map((c: any) => c.channel_id);
+
+  // All videos for this batch of channels.
+  const videos = await fetchByIds<any>(
+    supabase,
+    "videos",
+    "id,video_id,title,channel_id,channel_name",
+    "channel_id",
+    channelYtIds,
+  );
+  // Total videos per channel (count rows we have for this batch is enough since
+  // videos are partitioned by channel_id).
+  const totalByChannel = new Map<string, number>();
+  for (const v of videos) totalByChannel.set(v.channel_id, (totalByChannel.get(v.channel_id) ?? 0) + 1);
+
+  const videoIds = videos.map((v: any) => v.id);
+  const [links, vks] = await Promise.all([
+    fetchByIds<any>(supabase, "video_links", "id,video_id,original_url", "video_id", videoIds),
+    fetchByIds<any>(supabase, "video_keywords", "video_id,keyword_id", "video_id", videoIds),
   ]);
-  // Preserve the order of last50Ids (most recent first).
-  const orderIdx = new Map<string, number>(last50Ids.map((id, i) => [id, i]));
-  videos.sort((a: any, b: any) => (orderIdx.get(a.id) ?? 0) - (orderIdx.get(b.id) ?? 0));
 
+  const kwIds = [...new Set(vks.map((k: any) => k.keyword_id))];
+  const kwRows = await fetchByIds<any>(supabase, "keywords_search_runs", "id,keyword", "id", kwIds);
+  const kwById = new Map<string, string>(kwRows.map((k: any) => [k.id, k.keyword]));
+
+  const vksByVideo = new Map<string, any[]>();
+  for (const vk of vks) {
+    const list = vksByVideo.get(vk.video_id) || [];
+    list.push(vk);
+    vksByVideo.set(vk.video_id, list);
+  }
   const linksByVideo = new Map<string, any[]>();
   for (const l of links) {
     const list = linksByVideo.get(l.video_id) || [];
     list.push(l);
     linksByVideo.set(l.video_id, list);
   }
+  const videosByChannel = new Map<string, any[]>();
+  for (const v of videos) {
+    const list = videosByChannel.get(v.channel_id) || [];
+    list.push(v);
+    videosByChannel.set(v.channel_id, list);
+  }
 
   const parts: string[] = [];
   let xlsxRowIdx = startRowIdx;
-  for (const v of videos) {
-    const vlinks = linksByVideo.get(v.id) || [];
-    const description = v.description?.trim() ? v.description : "No Description";
-    const baseRow = [
-      styled("Last 50 Scraped Video", STYLE_PLACEHOLDER),
-      `https://www.youtube.com/watch?v=${v.video_id}`, v.title, v.channel_name,
-      v.view_count ?? 0, v.like_count ?? 0, v.comment_count ?? 0,
-      styled(description, styleForPlaceholder(description)), vlinks.length,
-    ];
-    if (vlinks.length === 0) {
-      parts.push(rowXml([...baseRow,
-        styled("No Links", STYLE_PLACEHOLDER), styled("No Links", STYLE_PLACEHOLDER),
-        styled("N/A", STYLE_PLACEHOLDER), styled("N/A", STYLE_PLACEHOLDER), "", "", "", "",
-      ], xlsxRowIdx, SHEET3_HEADERS.length));
-      xlsxRowIdx++;
-    } else {
-      vlinks.forEach((link, idx) => {
-        const unshort = link.unshortened_url || "N/A";
-        const domain = link.domain || link.original_domain || extractDomain(link.unshortened_url || link.original_url);
-        const social = getSocialPlatform(domain);
-        const retailer = resolveRetailerDisplay(link, retailerByDomain);
-        const excluded = computeExcluded(link, social, affiliateCounts);
-        parts.push(rowXml([...baseRow,
-          `L${idx + 1}`, link.original_url, styled(unshort, styleForPlaceholder(unshort)),
-          domain || styled("N/A", STYLE_PLACEHOLDER), link.affiliate_platform || "", retailer,
-          styled(social, styleForSocial(social)), styled(excluded, styleForExcluded(excluded)),
-        ], xlsxRowIdx, SHEET3_HEADERS.length));
-        xlsxRowIdx++;
-      });
+  for (const ch of channels) {
+    const chVids = videosByChannel.get(ch.channel_id) || [];
+    const chLink = ch.channel_url || `https://www.youtube.com/channel/${ch.channel_id}`;
+    const totalVids = totalByChannel.get(ch.channel_id) ?? 0;
+    for (const v of chVids) {
+      const vlinks = linksByVideo.get(v.id) || [];
+      const myVks = vksByVideo.get(v.id) || [];
+      // Build keyword labels list — one per mapped keyword, or single "last 50"
+      // when the video has no keyword mapping.
+      const kwLabels: string[] = myVks.length === 0
+        ? ["last 50"]
+        : myVks.map((vk: any) => kwById.get(vk.keyword_id) || "last 50");
+      const videoUrl = `https://www.youtube.com/watch?v=${v.video_id}`;
+      for (const kwLabel of kwLabels) {
+        if (vlinks.length === 0) {
+          parts.push(rowXml([
+            kwLabel,
+            v.title,
+            videoUrl,
+            ch.channel_name,
+            chLink,
+            totalVids,
+          ], xlsxRowIdx, SHEET4_HEADERS.length));
+          xlsxRowIdx++;
+        } else {
+          for (const link of vlinks) {
+            parts.push(rowXml([
+              kwLabel,
+              v.title,
+              link.original_url,
+              ch.channel_name,
+              chLink,
+              totalVids,
+            ], xlsxRowIdx, SHEET4_HEADERS.length));
+            xlsxRowIdx++;
+          }
+        }
+      }
     }
   }
   if (parts.length > 0) {
-    await uploadFragment(supabase, `${job.storage_prefix}/parts/s3/000001.xml`, parts.join(""));
+    const fragName = String(page + 1).padStart(6, "0") + ".xml";
+    await uploadFragment(supabase, `${job.storage_prefix}/parts/s4/${fragName}`, parts.join(""));
   }
-  return { done: true, nextStage: "s4", nextCursor: { page: 0 } };
-}
-
-async function runStageS4(supabase: any, job: JobRow): Promise<{ done: boolean; nextCursor?: any; nextStage?: string }> {
-  const startRowIdx = Number(job.cursor?.rowIdx ?? 1);
-  const last50Ids = await getLast50VideoIds(supabase, job);
-  if (last50Ids.length === 0) return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
-
-  const videos = await fetchByIds<any>(supabase, "videos", "id,video_id,title,channel_id,channel_name", "id", last50Ids);
-  const orderIdx = new Map<string, number>(last50Ids.map((id, i) => [id, i]));
-  videos.sort((a: any, b: any) => (orderIdx.get(a.id) ?? 0) - (orderIdx.get(b.id) ?? 0));
-
-  // Exact "Total Videos From Channel" for only the channels in the last-50 set.
-  const channelYtIds = [...new Set(videos.map((v: any) => v.channel_id))];
-  const channelCounts: Record<string, number> = {};
-  for (const yt of channelYtIds) {
-    const { count, error } = await supabase
-      .from("videos")
-      .select("id", { count: "exact", head: true })
-      .eq("channel_id", yt);
-    if (error) throw error;
-    channelCounts[yt] = count ?? 0;
-  }
-
-  const channels = channelYtIds.length === 0 ? [] : await fetchByIds<any>(supabase, "channels", "channel_id,channel_url", "channel_id", channelYtIds);
-  const chMap = new Map<string, string>(channels.map((c: any) => [c.channel_id, c.channel_url]));
-
-  const parts: string[] = [];
-  let xlsxRowIdx = startRowIdx;
-  for (const v of videos) {
-    parts.push(rowXml([
-      styled("Last 50 Scraped Video", STYLE_PLACEHOLDER),
-      v.title,
-      `https://www.youtube.com/watch?v=${v.video_id}`,
-      v.channel_name,
-      chMap.get(v.channel_id) || `https://www.youtube.com/channel/${v.channel_id}`,
-      channelCounts[v.channel_id] || 0,
-    ], xlsxRowIdx, SHEET4_HEADERS.length));
-    xlsxRowIdx++;
-  }
-  if (parts.length > 0) {
-    await uploadFragment(supabase, `${job.storage_prefix}/parts/s4/000001.xml`, parts.join(""));
-  }
-  return { done: true, nextStage: "s5", nextCursor: { page: 0 } };
+  const more = channels.length === CHUNK_CHANNEL_PAGE;
+  return more
+    ? { done: false, nextCursor: { page: page + 1, rowIdx: xlsxRowIdx } }
+    : { done: true, nextStage: "s5", nextCursor: { page: 0 } };
 }
 
 // Compute best video rank per channel. Cached in metadata once.
