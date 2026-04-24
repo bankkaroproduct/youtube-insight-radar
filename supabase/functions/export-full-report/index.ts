@@ -1297,7 +1297,12 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       const header = buildLocalHeader(f.name);
       await appendToTmp(fz.tmpPath, header);
       fz.totalBytes += header.length;
-      const def = deflateRaw(f.bytes, { level: 1 });
+      let def: Uint8Array;
+      try {
+        def = deflateRaw(f.bytes, { level: 1 });
+      } catch (e: any) {
+        throw new Error(`finalize/boilerplate ${f.name}: ${e?.message || e}`);
+      }
       await appendToTmp(fz.tmpPath, def);
       const crc = crc32Update(0, f.bytes);
       fz.totalBytes += def.length;
