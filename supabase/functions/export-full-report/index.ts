@@ -1236,7 +1236,12 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
       if (fz.fragIdx >= fz.fragPaths.length) {
         // Footer XML.
         const tailXml = encoder.encode(SHEET_FOOTER_XML);
-        const tailDef = deflateRaw(tailXml, { level: 1 });
+        let tailDef: Uint8Array;
+        try {
+          tailDef = deflateRaw(tailXml, { level: 1 });
+        } catch (e: any) {
+          throw new Error(`finalize/sheet-tail s${fz.sheetIdx + 1}: ${e?.message || e}`);
+        }
         await appendToTmp(fz.tmpPath, tailDef);
         fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, tailXml);
         fz.openEntry!.uncompSize += tailXml.length;
