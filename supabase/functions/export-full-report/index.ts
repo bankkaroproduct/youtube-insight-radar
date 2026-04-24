@@ -953,7 +953,7 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   for (let i = 0; i < SHEETS_IN_ORDER.length; i++) {
     const sheet = SHEETS_IN_ORDER[i];
     const head = encoder.encode(sheetHeaderXml(sheet.headers));
-    const entry = new AsyncZipDeflate(`xl/worksheets/sheet${i + 1}.xml`, { level: 1 });
+    const entry = new ZipDeflate(`xl/worksheets/sheet${i + 1}.xml`, { level: 1 });
     zip.add(entry);
     entry.push(head, false);
 
