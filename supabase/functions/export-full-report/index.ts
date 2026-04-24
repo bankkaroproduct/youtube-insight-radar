@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Zip, ZipPassThrough, ZipDeflate, strToU8 } from "https://esm.sh/fflate@0.8.2";
+import { deflateRaw, strToU8 } from "https://esm.sh/fflate@0.8.2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -992,142 +992,385 @@ async function runStageS6(supabase: any, job: JobRow): Promise<{ done: boolean; 
     : { done: true, nextStage: "finalize", nextCursor: {} };
 }
 
-// Stitch fragments + zip + upload final. Always streams compressed output to a
-// temp file on disk so we never hold the full zip in heap, and uses a real
-// Promise-based completion signal for the async fflate Zip (no busy-wait).
-async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
-  const encoder = new TextEncoder();
-  const t0 = Date.now();
-  console.log(`[finalize] start job=${job.id}`);
+// ========== Chunked, resumable finalize ==========
+//
+// We avoid fflate's stateful streaming Zip (which cannot survive across
+// invocations) and instead write a ZIP file by hand:
+//   - Each "entry" = local file header + raw DEFLATE data + data descriptor
+//   - At the end: central directory + EOCD
+// Each fragment is independently compressed with sync deflateRaw, so the only
+// per-entry state we need to carry across invocations is (crc32, uncompSize,
+// compSize, headerWritten). All persisted on cursor.fz and tiny.
 
-  // Always spill to disk — Sheet 2 alone can be 100+ MB of raw XML which OOMs
-  // a 256 MB Edge Function if buffered. The compressed xlsx is small enough
-  // to upload in one shot afterwards.
-  const tmpPath = await Deno.makeTempFile({ prefix: "xlsx_", suffix: ".zip" });
-  const tmpFile = await Deno.open(tmpPath, { write: true, create: true, truncate: true });
-  let totalBytes = 0;
+const FZ_FRAGMENTS_PER_TICK = 25;
 
-  // Serialize writes to the single file descriptor — concurrent tmpFile.write
-  // calls on the same handle can race and produce a corrupted zip.
-  let writeChain: Promise<unknown> = Promise.resolve();
+// CRC32 (polynomial 0xEDB88320) — incremental.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+function crc32Update(prev: number, buf: Uint8Array): number {
+  let c = (~prev) >>> 0;
+  for (let i = 0; i < buf.length; i++) c = (CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)) >>> 0;
+  return (~c) >>> 0;
+}
 
-  // Real completion signal: resolve when fflate emits final === true; reject
-  // immediately on error. Replaces the old bounded busy-wait that would
-  // abandon the zip after 1000 microtask ticks on big inputs.
-  let resolveDone!: () => void;
-  let rejectDone!: (e: Error) => void;
-  const donePromise = new Promise<void>((res, rej) => { resolveDone = res; rejectDone = rej; });
-  let settled = false;
+// ZIP byte writers.
+function u16(n: number): Uint8Array { return new Uint8Array([n & 0xff, (n >>> 8) & 0xff]); }
+function u32(n: number): Uint8Array { return new Uint8Array([n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff]); }
+function concatU8(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const p of parts) total += p.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
+}
 
-  const zip = new Zip((err, dat, final) => {
-    if (settled) return;
-    if (err) { settled = true; rejectDone(err as Error); return; }
-    if (dat && dat.length > 0) {
-      totalBytes += dat.length;
-      const chunk = dat;
-      writeChain = writeChain.then(() => tmpFile.write(chunk));
-    }
-    if (final) { settled = true; resolveDone(); }
-  });
+// Local file header with bit-3 flag set (sizes/crc in trailing data descriptor).
+// method=8 (deflate). version=20.
+function buildLocalHeader(name: string): Uint8Array {
+  const nameBytes = strToU8(name);
+  return concatU8([
+    u32(0x04034b50),
+    u16(20),                  // version needed
+    u16(0x0008),              // general purpose bit flag — bit 3: data descriptor
+    u16(8),                   // compression: deflate
+    u16(0), u16(0),           // mod time / date (zeros)
+    u32(0),                   // crc32 (in data descriptor)
+    u32(0),                   // compressed size (in data descriptor)
+    u32(0),                   // uncompressed size (in data descriptor)
+    u16(nameBytes.length),
+    u16(0),                   // extra len
+    nameBytes,
+  ]);
+}
 
-  const addFixedFile = (name: string, bytes: Uint8Array) => {
-    const f = new ZipPassThrough(name);
-    zip.add(f);
-    f.push(bytes, true);
+function buildDataDescriptor(crc: number, compSize: number, uncompSize: number): Uint8Array {
+  return concatU8([
+    u32(0x08074b50),
+    u32(crc >>> 0),
+    u32(compSize >>> 0),
+    u32(uncompSize >>> 0),
+  ]);
+}
+
+function buildCentralDirEntry(
+  name: string,
+  crc: number,
+  compSize: number,
+  uncompSize: number,
+  localHeaderOffset: number,
+): Uint8Array {
+  const nameBytes = strToU8(name);
+  return concatU8([
+    u32(0x02014b50),
+    u16(20),                  // version made by
+    u16(20),                  // version needed
+    u16(0x0008),              // gp bit flag — bit 3
+    u16(8),                   // method
+    u16(0), u16(0),           // mod time/date
+    u32(crc >>> 0),
+    u32(compSize >>> 0),
+    u32(uncompSize >>> 0),
+    u16(nameBytes.length),
+    u16(0),                   // extra len
+    u16(0),                   // comment len
+    u16(0),                   // disk number
+    u16(0),                   // internal attrs
+    u32(0),                   // external attrs
+    u32(localHeaderOffset >>> 0),
+    nameBytes,
+  ]);
+}
+
+function buildEOCD(numEntries: number, cdSize: number, cdOffset: number): Uint8Array {
+  return concatU8([
+    u32(0x06054b50),
+    u16(0), u16(0),           // disk numbers
+    u16(numEntries),
+    u16(numEntries),
+    u32(cdSize >>> 0),
+    u32(cdOffset >>> 0),
+    u16(0),                   // comment length
+  ]);
+}
+
+type FzEntry = { name: string; offset: number; crc: number; compSize: number; uncompSize: number };
+type FzCursor = {
+  tmpPath: string;
+  phase: "sheets" | "boilerplate" | "central_dir" | "upload" | "done";
+  sheetIdx: number;
+  fragIdx: number;
+  openEntry: { name: string; offset: number; crc: number; uncompSize: number; compSize: number; headerWritten: boolean } | null;
+  entries: FzEntry[];
+  totalBytes: number;
+  fragPaths?: string[]; // memoized listFragments result for the current sheet
+};
+
+function defaultFzCursor(jobId: string): FzCursor {
+  return {
+    tmpPath: `/tmp/export-${jobId}.xlsx`,
+    phase: "sheets",
+    sheetIdx: 0,
+    fragIdx: 0,
+    openEntry: null,
+    entries: [],
+    totalBytes: 0,
   };
+}
 
-  // Fixed workbook parts (tiny — pass-through is fine).
-  addFixedFile("[Content_Types].xml", strToU8(buildContentTypes(SHEETS_IN_ORDER.length)));
-  addFixedFile("_rels/.rels", strToU8(ROOT_RELS));
-  addFixedFile("xl/workbook.xml", strToU8(buildWorkbookXml(SHEETS_IN_ORDER.map(s => s.name))));
-  addFixedFile("xl/_rels/workbook.xml.rels", strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length)));
-  addFixedFile("xl/styles.xml", strToU8(STYLES_XML));
-
-  // Sheets: stream header -> each fragment -> footer using AsyncZipDeflate
-  // (level 1 — fast deflate) so Sheet 2's 100+ MB of raw XML compresses to
-  // ~10–20 MB on the way out instead of being stored raw.
-  const tail = encoder.encode(SHEET_FOOTER_XML);
-  for (let i = 0; i < SHEETS_IN_ORDER.length; i++) {
-    const sheet = SHEETS_IN_ORDER[i];
-    const head = encoder.encode(sheetHeaderXml(sheet.headers));
-    const entry = new ZipDeflate(`xl/worksheets/sheet${i + 1}.xml`, { level: 1 });
-    zip.add(entry);
-    entry.push(head, false);
-
-    const fragPaths = await listFragments(supabase, `${job.storage_prefix}/parts/${sheet.stage}`);
-    console.log(`[finalize] sheet=${i + 1} stage=${sheet.stage} fragments=${fragPaths.length} bytesSoFar=${totalBytes}`);
-    for (const p of fragPaths) {
-      let b: Uint8Array | null = await downloadFragment(supabase, p);
-      entry.push(b, false);
-      b = null; // drop ref so GC can reclaim before next fragment
-      // Yield so the runtime can drain queued writes and reclaim the
-      // fragment buffer before the next download.
-      await new Promise((r) => setTimeout(r, 0));
-    }
-    entry.push(tail, true);
-    await new Promise((r) => setTimeout(r, 0));
-    console.log(`[finalize] sheet=${i + 1} done bytesEmitted=${totalBytes}`);
-  }
-
-  zip.end();
-  await donePromise;
-  await writeChain;
-  try { tmpFile.close(); } catch { /* ignore */ }
-
-  const stat = await Deno.stat(tmpPath);
-  console.log(`[finalize] zip complete tmpSize=${stat.size} emittedBytes=${totalBytes} elapsedMs=${Date.now() - t0}`);
-
-  const date = new Date().toISOString().split("T")[0];
-  const finalPath = `${job.user_id}/youtube_full_report_${date}_${job.id.slice(0, 8)}.xlsx`;
-  const contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-
-  // Stream the temp file straight to storage so we never load the full
-  // workbook back into memory. Fall back to a buffered upload only if the
-  // storage client rejects the stream body AND the file is small enough to
-  // safely fit in heap (<80 MB compressed).
-  console.log(`[finalize] upload start path=${finalPath}`);
-  const fh = await Deno.open(tmpPath, { read: true });
-  let upErr: any = null;
+async function appendToTmp(tmpPath: string, bytes: Uint8Array): Promise<void> {
+  const fh = await Deno.open(tmpPath, { write: true, append: true });
   try {
-    const res = await supabase.storage.from("exports").upload(finalPath, fh.readable, {
-      contentType,
-      upsert: true,
-      duplex: "half",
-    } as any);
-    upErr = res.error;
-  } catch (e) {
-    upErr = e;
-  } finally {
-    try { fh.close(); } catch { /* may already be consumed */ }
-  }
-
-  if (upErr) {
-    console.warn(`[finalize] stream upload failed (${upErr?.message || upErr}), falling back to buffered upload`);
-    if (stat.size > 80 * 1024 * 1024) {
-      throw new Error(`Stream upload failed and file too large for buffered fallback (${stat.size} bytes): ${upErr?.message || upErr}`);
+    let off = 0;
+    while (off < bytes.length) {
+      const n = await fh.write(bytes.subarray(off));
+      off += n;
     }
-    const fileBytes = await Deno.readFile(tmpPath);
-    const uploadBody = new Blob([fileBytes], { type: contentType });
-    const { error: upErr2 } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
-      contentType,
-      upsert: true,
-    });
-    if (upErr2) throw upErr2;
+  } finally {
+    try { fh.close(); } catch { /* ignore */ }
   }
-  console.log(`[finalize] upload success path=${finalPath} size=${stat.size} totalElapsedMs=${Date.now() - t0}`);
+}
 
-  try { await Deno.remove(tmpPath); } catch { /* ignore */ }
+// One finalize tick. Reads cursor.fz, does up to FZ_FRAGMENTS_PER_TICK units of
+// work, persists cursor.fz, then either re-invokes itself or completes the job.
+async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
+  const t0 = Date.now();
+  const encoder = new TextEncoder();
 
-  await patchJob(supabase, job.id, {
-    status: "completed",
-    stage: "completed",
-    storage_path: finalPath,
-    result_path: finalPath,
-    file_size_bytes: stat.size,
-    progress_message: "Done",
-    completed_at: nowIso(),
-    lease_expires_at: null,
-  });
+  let fz: FzCursor = (job.cursor && (job.cursor as any).fz)
+    ? (job.cursor as any).fz as FzCursor
+    : defaultFzCursor(job.id);
+
+  // Initialize the temp file on first tick.
+  if (fz.phase === "sheets" && fz.sheetIdx === 0 && fz.fragIdx === 0 && !fz.openEntry && fz.entries.length === 0 && fz.totalBytes === 0) {
+    try { await Deno.remove(fz.tmpPath); } catch { /* ignore */ }
+    const fh = await Deno.open(fz.tmpPath, { create: true, write: true, truncate: true });
+    fh.close();
+    console.log(`[finalize] start job=${job.id} tmpPath=${fz.tmpPath}`);
+  }
+
+  let workUnits = 0;
+  const sheetCount = SHEETS_IN_ORDER.length;
+
+  // ---- Phase: sheets ----
+  if (fz.phase === "sheets") {
+    while (fz.sheetIdx < sheetCount && workUnits < FZ_FRAGMENTS_PER_TICK) {
+      const sheet = SHEETS_IN_ORDER[fz.sheetIdx];
+      const entryName = `xl/worksheets/sheet${fz.sheetIdx + 1}.xml`;
+
+      // Lazy: list fragments once per sheet.
+      if (!fz.fragPaths) {
+        fz.fragPaths = await listFragments(supabase, `${job.storage_prefix}/parts/${sheet.stage}`);
+        console.log(`[finalize] tick sheetIdx=${fz.sheetIdx + 1} stage=${sheet.stage} fragments=${fz.fragPaths.length} bytesSoFar=${fz.totalBytes}`);
+      }
+
+      // Open entry header on first frag of this sheet.
+      if (!fz.openEntry) {
+        const header = buildLocalHeader(entryName);
+        await appendToTmp(fz.tmpPath, header);
+        fz.openEntry = {
+          name: entryName,
+          offset: fz.totalBytes,
+          crc: 0,
+          uncompSize: 0,
+          compSize: 0,
+          headerWritten: true,
+        };
+        fz.totalBytes += header.length;
+
+        // Write the sheet header XML as the first compressed unit.
+        const headXml = encoder.encode(sheetHeaderXml(sheet.headers));
+        const headDef = deflateRaw(headXml, { level: 1 });
+        await appendToTmp(fz.tmpPath, headDef);
+        fz.openEntry.crc = crc32Update(fz.openEntry.crc, headXml);
+        fz.openEntry.uncompSize += headXml.length;
+        fz.openEntry.compSize += headDef.length;
+        fz.totalBytes += headDef.length;
+        workUnits++;
+      }
+
+      // Process up to budget fragments for this sheet.
+      while (fz.fragIdx < fz.fragPaths.length && workUnits < FZ_FRAGMENTS_PER_TICK) {
+        const path = fz.fragPaths[fz.fragIdx];
+        let buf: Uint8Array | null = await downloadFragment(supabase, path);
+        const def = deflateRaw(buf, { level: 1 });
+        await appendToTmp(fz.tmpPath, def);
+        fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, buf);
+        fz.openEntry!.uncompSize += buf.length;
+        fz.openEntry!.compSize += def.length;
+        fz.totalBytes += def.length;
+        buf = null;
+        fz.fragIdx++;
+        workUnits++;
+      }
+
+      // If we've consumed all fragments for this sheet, close the entry.
+      if (fz.fragIdx >= fz.fragPaths.length) {
+        // Footer XML.
+        const tailXml = encoder.encode(SHEET_FOOTER_XML);
+        const tailDef = deflateRaw(tailXml, { level: 1 });
+        await appendToTmp(fz.tmpPath, tailDef);
+        fz.openEntry!.crc = crc32Update(fz.openEntry!.crc, tailXml);
+        fz.openEntry!.uncompSize += tailXml.length;
+        fz.openEntry!.compSize += tailDef.length;
+        fz.totalBytes += tailDef.length;
+
+        // Data descriptor.
+        const dd = buildDataDescriptor(fz.openEntry!.crc, fz.openEntry!.compSize, fz.openEntry!.uncompSize);
+        await appendToTmp(fz.tmpPath, dd);
+        fz.totalBytes += dd.length;
+
+        fz.entries.push({
+          name: fz.openEntry!.name,
+          offset: fz.openEntry!.offset,
+          crc: fz.openEntry!.crc,
+          compSize: fz.openEntry!.compSize,
+          uncompSize: fz.openEntry!.uncompSize,
+        });
+        console.log(`[finalize] sheet=${fz.sheetIdx + 1} entry-closed compSize=${fz.openEntry!.compSize} uncompSize=${fz.openEntry!.uncompSize} crc=${fz.openEntry!.crc}`);
+        fz.openEntry = null;
+        fz.fragPaths = undefined;
+        fz.fragIdx = 0;
+        fz.sheetIdx++;
+      }
+    }
+
+    if (fz.sheetIdx >= sheetCount) {
+      fz.phase = "boilerplate";
+    }
+    // Persist + re-invoke.
+    await patchJob(supabase, job.id, {
+      cursor: { ...(job.cursor || {}), fz },
+      heartbeat_at: nowIso(),
+      progress_message: `Stitching workbook (sheet ${Math.min(fz.sheetIdx + 1, sheetCount)}/${sheetCount})...`,
+      lease_expires_at: null,
+    });
+    await selfInvoke(job.id);
+    console.log(`[finalize] tick done phase=sheets sheetIdx=${fz.sheetIdx} totalBytes=${fz.totalBytes} elapsedMs=${Date.now() - t0}`);
+    return;
+  }
+
+  // ---- Phase: boilerplate (small fixed entries, all in one tick) ----
+  if (fz.phase === "boilerplate") {
+    const fixed: { name: string; bytes: Uint8Array }[] = [
+      { name: "[Content_Types].xml", bytes: strToU8(buildContentTypes(SHEETS_IN_ORDER.length)) },
+      { name: "_rels/.rels", bytes: strToU8(ROOT_RELS) },
+      { name: "xl/workbook.xml", bytes: strToU8(buildWorkbookXml(SHEETS_IN_ORDER.map(s => s.name))) },
+      { name: "xl/_rels/workbook.xml.rels", bytes: strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length)) },
+      { name: "xl/styles.xml", bytes: strToU8(STYLES_XML) },
+    ];
+    for (const f of fixed) {
+      const offset = fz.totalBytes;
+      const header = buildLocalHeader(f.name);
+      await appendToTmp(fz.tmpPath, header);
+      fz.totalBytes += header.length;
+      const def = deflateRaw(f.bytes, { level: 1 });
+      await appendToTmp(fz.tmpPath, def);
+      const crc = crc32Update(0, f.bytes);
+      fz.totalBytes += def.length;
+      const dd = buildDataDescriptor(crc, def.length, f.bytes.length);
+      await appendToTmp(fz.tmpPath, dd);
+      fz.totalBytes += dd.length;
+      fz.entries.push({ name: f.name, offset, crc, compSize: def.length, uncompSize: f.bytes.length });
+    }
+    fz.phase = "central_dir";
+    await patchJob(supabase, job.id, {
+      cursor: { ...(job.cursor || {}), fz },
+      heartbeat_at: nowIso(),
+      progress_message: "Finalizing workbook...",
+      lease_expires_at: null,
+    });
+    await selfInvoke(job.id);
+    console.log(`[finalize] tick done phase=boilerplate entries=${fz.entries.length} totalBytes=${fz.totalBytes}`);
+    return;
+  }
+
+  // ---- Phase: central_dir + EOCD (one tick) ----
+  if (fz.phase === "central_dir") {
+    const cdOffset = fz.totalBytes;
+    const cdParts: Uint8Array[] = [];
+    for (const e of fz.entries) {
+      cdParts.push(buildCentralDirEntry(e.name, e.crc, e.compSize, e.uncompSize, e.offset));
+    }
+    const cd = concatU8(cdParts);
+    await appendToTmp(fz.tmpPath, cd);
+    fz.totalBytes += cd.length;
+    const eocd = buildEOCD(fz.entries.length, cd.length, cdOffset);
+    await appendToTmp(fz.tmpPath, eocd);
+    fz.totalBytes += eocd.length;
+    fz.phase = "upload";
+    console.log(`[finalize] tick phase=central_dir entries=${fz.entries.length} cdSize=${cd.length} totalBytes=${fz.totalBytes}`);
+    await patchJob(supabase, job.id, {
+      cursor: { ...(job.cursor || {}), fz },
+      heartbeat_at: nowIso(),
+      progress_message: "Uploading workbook...",
+      lease_expires_at: null,
+    });
+    await selfInvoke(job.id);
+    return;
+  }
+
+  // ---- Phase: upload ----
+  if (fz.phase === "upload") {
+    const stat = await Deno.stat(fz.tmpPath);
+    const date = new Date().toISOString().split("T")[0];
+    const finalPath = `${job.user_id}/youtube_full_report_${date}_${job.id.slice(0, 8)}.xlsx`;
+    const contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    console.log(`[finalize] tick phase=upload bytes=${stat.size} path=${finalPath}`);
+    const fh = await Deno.open(fz.tmpPath, { read: true });
+    let upErr: any = null;
+    try {
+      const res = await supabase.storage.from("exports").upload(finalPath, fh.readable, {
+        contentType,
+        upsert: true,
+        duplex: "half",
+      } as any);
+      upErr = res.error;
+    } catch (e) {
+      upErr = e;
+    } finally {
+      try { fh.close(); } catch { /* may already be consumed */ }
+    }
+
+    if (upErr) {
+      console.warn(`[finalize] stream upload failed (${upErr?.message || upErr}), falling back to buffered upload`);
+      if (stat.size > 80 * 1024 * 1024) {
+        throw new Error(`Stream upload failed and file too large for buffered fallback (${stat.size} bytes): ${upErr?.message || upErr}`);
+      }
+      const fileBytes = await Deno.readFile(fz.tmpPath);
+      const uploadBody = new Blob([fileBytes], { type: contentType });
+      const { error: upErr2 } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
+        contentType,
+        upsert: true,
+      });
+      if (upErr2) throw upErr2;
+    }
+    console.log(`[finalize] upload success path=${finalPath} size=${stat.size}`);
+
+    try { await Deno.remove(fz.tmpPath); } catch { /* ignore */ }
+
+    fz.phase = "done";
+    await patchJob(supabase, job.id, {
+      status: "completed",
+      stage: "completed",
+      storage_path: finalPath,
+      result_path: finalPath,
+      file_size_bytes: stat.size,
+      progress_message: "Done",
+      completed_at: nowIso(),
+      cursor: { ...(job.cursor || {}), fz },
+      lease_expires_at: null,
+    });
+    return;
+  }
 }
 
 // ========== Worker entrypoint ==========
