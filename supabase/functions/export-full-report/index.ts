@@ -900,6 +900,8 @@ async function runStageS6(supabase: any, job: JobRow): Promise<{ done: boolean; 
 // Promise-based completion signal for the async fflate Zip (no busy-wait).
 async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   const encoder = new TextEncoder();
+  const t0 = Date.now();
+  console.log(`[finalize] start job=${job.id}`);
 
   // Always spill to disk — Sheet 2 alone can be 100+ MB of raw XML which OOMs
   // a 256 MB Edge Function if buffered. The compressed xlsx is small enough
@@ -907,7 +909,10 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
   const tmpPath = await Deno.makeTempFile({ prefix: "xlsx_", suffix: ".zip" });
   const tmpFile = await Deno.open(tmpPath, { write: true, create: true, truncate: true });
   let totalBytes = 0;
-  const pendingWrites: Promise<unknown>[] = [];
+
+  // Serialize writes to the single file descriptor — concurrent tmpFile.write
+  // calls on the same handle can race and produce a corrupted zip.
+  let writeChain: Promise<unknown> = Promise.resolve();
 
   // Real completion signal: resolve when fflate emits final === true; reject
   // immediately on error. Replaces the old bounded busy-wait that would
@@ -922,7 +927,8 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
     if (err) { settled = true; rejectDone(err as Error); return; }
     if (dat && dat.length > 0) {
       totalBytes += dat.length;
-      pendingWrites.push(tmpFile.write(dat));
+      const chunk = dat;
+      writeChain = writeChain.then(() => tmpFile.write(chunk));
     }
     if (final) { settled = true; resolveDone(); }
   });
@@ -933,55 +939,85 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
     f.push(bytes, true);
   };
 
-  // Fixed workbook parts.
+  // Fixed workbook parts (tiny — pass-through is fine).
   addFixedFile("[Content_Types].xml", strToU8(buildContentTypes(SHEETS_IN_ORDER.length)));
   addFixedFile("_rels/.rels", strToU8(ROOT_RELS));
   addFixedFile("xl/workbook.xml", strToU8(buildWorkbookXml(SHEETS_IN_ORDER.map(s => s.name))));
   addFixedFile("xl/_rels/workbook.xml.rels", strToU8(buildWorkbookRels(SHEETS_IN_ORDER.length)));
   addFixedFile("xl/styles.xml", strToU8(STYLES_XML));
 
-  // Sheets: stream header -> each fragment -> footer. Drop fragment buffer
-  // refs and yield to the runtime between fragments so the previous ~17 MB
-  // chunk can be GC'd before we download the next one.
+  // Sheets: stream header -> each fragment -> footer using AsyncZipDeflate
+  // (level 1 — fast deflate) so Sheet 2's 100+ MB of raw XML compresses to
+  // ~10–20 MB on the way out instead of being stored raw.
   const tail = encoder.encode(SHEET_FOOTER_XML);
   for (let i = 0; i < SHEETS_IN_ORDER.length; i++) {
     const sheet = SHEETS_IN_ORDER[i];
     const head = encoder.encode(sheetHeaderXml(sheet.headers));
-    const entry = new ZipPassThrough(`xl/worksheets/sheet${i + 1}.xml`);
+    const entry = new AsyncZipDeflate(`xl/worksheets/sheet${i + 1}.xml`, { level: 1 });
     zip.add(entry);
     entry.push(head, false);
 
     const fragPaths = await listFragments(supabase, `${job.storage_prefix}/parts/${sheet.stage}`);
+    console.log(`[finalize] sheet=${i + 1} stage=${sheet.stage} fragments=${fragPaths.length} bytesSoFar=${totalBytes}`);
     for (const p of fragPaths) {
       let b: Uint8Array | null = await downloadFragment(supabase, p);
       entry.push(b, false);
       b = null; // drop ref so GC can reclaim before next fragment
-      // Yield so pending tmpFile.write promises can drain and the runtime
-      // can reclaim the fragment buffer before the next download.
+      // Yield so the runtime can drain queued writes and reclaim the
+      // fragment buffer before the next download.
       await new Promise((r) => setTimeout(r, 0));
     }
     entry.push(tail, true);
     await new Promise((r) => setTimeout(r, 0));
+    console.log(`[finalize] sheet=${i + 1} done bytesEmitted=${totalBytes}`);
   }
 
   zip.end();
   await donePromise;
-  await Promise.all(pendingWrites);
+  await writeChain;
   try { tmpFile.close(); } catch { /* ignore */ }
+
+  const stat = await Deno.stat(tmpPath);
+  console.log(`[finalize] zip complete tmpSize=${stat.size} emittedBytes=${totalBytes} elapsedMs=${Date.now() - t0}`);
 
   const date = new Date().toISOString().split("T")[0];
   const finalPath = `${job.user_id}/youtube_full_report_${date}_${job.id.slice(0, 8)}.xlsx`;
+  const contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-  // Read the compressed xlsx back as one buffer (compressed size is small —
-  // typically <30 MB even for 100+ MB of raw XML) and upload.
-  const fileBytes = await Deno.readFile(tmpPath);
-  const uploadBody = new Blob([fileBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  // Stream the temp file straight to storage so we never load the full
+  // workbook back into memory. Fall back to a buffered upload only if the
+  // storage client rejects the stream body AND the file is small enough to
+  // safely fit in heap (<80 MB compressed).
+  console.log(`[finalize] upload start path=${finalPath}`);
+  const fh = await Deno.open(tmpPath, { read: true });
+  let upErr: any = null;
+  try {
+    const res = await supabase.storage.from("exports").upload(finalPath, fh.readable, {
+      contentType,
+      upsert: true,
+      duplex: "half",
+    } as any);
+    upErr = res.error;
+  } catch (e) {
+    upErr = e;
+  } finally {
+    try { fh.close(); } catch { /* may already be consumed */ }
+  }
 
-  const { error: upErr } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
-    contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    upsert: true,
-  });
-  if (upErr) throw upErr;
+  if (upErr) {
+    console.warn(`[finalize] stream upload failed (${upErr?.message || upErr}), falling back to buffered upload`);
+    if (stat.size > 80 * 1024 * 1024) {
+      throw new Error(`Stream upload failed and file too large for buffered fallback (${stat.size} bytes): ${upErr?.message || upErr}`);
+    }
+    const fileBytes = await Deno.readFile(tmpPath);
+    const uploadBody = new Blob([fileBytes], { type: contentType });
+    const { error: upErr2 } = await supabase.storage.from("exports").upload(finalPath, uploadBody, {
+      contentType,
+      upsert: true,
+    });
+    if (upErr2) throw upErr2;
+  }
+  console.log(`[finalize] upload success path=${finalPath} size=${stat.size} totalElapsedMs=${Date.now() - t0}`);
 
   try { await Deno.remove(tmpPath); } catch { /* ignore */ }
 
@@ -990,7 +1026,7 @@ async function runStageFinalize(supabase: any, job: JobRow): Promise<void> {
     stage: "completed",
     storage_path: finalPath,
     result_path: finalPath,
-    file_size_bytes: totalBytes,
+    file_size_bytes: stat.size,
     progress_message: "Done",
     completed_at: nowIso(),
     lease_expires_at: null,
