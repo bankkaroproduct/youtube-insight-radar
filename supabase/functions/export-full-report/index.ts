@@ -1043,6 +1043,11 @@ async function runStageS6(supabase: any, job: JobRow): Promise<{ done: boolean; 
 // compSize, headerWritten). All persisted on cursor.fz and tiny.
 
 const FZ_FRAGMENTS_PER_TICK = 25;
+// Hard CPU-time budget per tick. Edge runtime kills us at ~10s wall, but the
+// CPU budget is much tighter. Yield aggressively so a single fat sheet (e.g.
+// the videos sheet at ~17MB/fragment × 7 = ~124MB) doesn't burn the whole
+// budget and starve subsequent sheets.
+const FZ_TICK_CPU_BUDGET_MS = 3500;
 
 // CRC32 (polynomial 0xEDB88320) — incremental.
 const CRC_TABLE = (() => {
